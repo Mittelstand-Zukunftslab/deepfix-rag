@@ -1,0 +1,42 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "deepfix_rag"
+version = "0.0.1"
+description = "Automated optimization of RAG workflow using long-running agents"
+authors = [
+  { name = "Mittelstand Zukunftslab \u0026 AI Service Center - HPI" },
+]
+license = { file = "LICENSE" }
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License"
+]
+dependencies = [
+    "loguru",
+    "mkdocs",
+    "pip",
+    "pytest",
+    "python-dotenv",
+    "ruff",
+    "tqdm",
+    "typer",
+]
+requires-python = "~=3.12.0"
+
+
+[tool.ruff]
+line-length = 99
+src = ["deepfix_rag"]
+include = ["pyproject.toml", "deepfix_rag/**/*.py"]
+
+[tool.ruff.lint]
+extend-select = ["I"]  # Add import sorting
+
+[tool.ruff.lint.isort]
+known-first-party = ["deepfix_rag"]
+force-sort-within-sections = true
+
