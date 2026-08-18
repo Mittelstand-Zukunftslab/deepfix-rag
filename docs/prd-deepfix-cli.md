@@ -184,7 +184,7 @@ DeepFix incorporates a diverse suite of text-only RAG benchmark datasets categor
 +-------------------+----------------------------+-------------------+
                     |                            |
                     v                            v
-          [pyTerrier / vLLM / Qwen]        [MLflow & DeepEval]
+      [LlamaIndex / Qdrant / pyTerrier / vLLM]    [MLflow & DeepEval]
 ```
 
 - **CLI Framework:** Built using `Typer` / `Click` with `Pydantic` for strict RAG config schema validation.
@@ -195,7 +195,11 @@ DeepFix incorporates a diverse suite of text-only RAG benchmark datasets categor
 
 ## 8. Technical Considerations
 
-- **Dependencies:** Python 3.10+, `pyterrier`, `deepeval`, `mlflow`, `typer`, `pydantic`, `rich`, `datasets` (Hugging Face).
+- **RAG & Vector Architecture:**
+  - **Vector Database:** **Qdrant** (`qdrant-client`) serving as the primary vector store, supporting high-throughput indexing, dense vector search, payload metadata filtering, and hybrid sparse/dense retrieval. Supports local in-memory/disk-based embedded instances for local testing as well as standalone server/cluster instances.
+  - **RAG Orchestration Framework:** **LlamaIndex** powering pipeline composability, customizable chunking/node parsing, hierarchical retrieval, query rewriting/transformations, and response synthesis.
+  - **Sparse & Hybrid Search Engine:** `pyterrier` interoperating with LlamaIndex and Qdrant for classical BM25 and hybrid dense-sparse scoring baselines.
+- **Core Dependencies:** Python 3.10+, `llama-index`, `qdrant-client`, `pyterrier`, `deepeval`, `mlflow`, `typer`, `pydantic`, `rich`, `datasets` (Hugging Face).
 - **Model Inference:** Inference endpoints (Qwen 3.6 27B, Qwen3-Embedding-4B) hosted via vLLM and referenced via environment variables / configuration URIs.
 - **Dataset Storage & Streaming:** Local caching of benchmark datasets under `~/.deepfix/datasets/` with automated hash verification and chunked streaming loaders for massive corpora.
 - **Benchmark Split:** Separation of dev dataset (used during autonomous agent loops) and held-out test dataset (locked for final benchmark verification).
