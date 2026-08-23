@@ -278,5 +278,3 @@ def compute_config_hash(
     digest = hashlib.sha256(canonical_json).hexdigest()
 
     return f"sha256:{digest}"
-
-config_hash = compute_config_hash(candidate_manifest)
