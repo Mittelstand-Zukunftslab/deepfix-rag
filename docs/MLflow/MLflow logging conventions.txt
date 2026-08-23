@@ -221,7 +221,7 @@ Central MLflow
         │           │   ├── candidate_id = "candidate_007" - string
         │           │   │   └── [MANUAL PROPAGATION]
         │           │   │
-        │           │   ├── corpus_id = "ev_batteries" - string
+        │           │   ├── corpus_id = "legal" - string
         │           │   │   └── [MANUAL PROPAGATION]
         │           │   │
         │           │   └── question_id = "q_017" - string
@@ -260,116 +260,129 @@ Central MLflow
         │           │       Source:
         │           │         end_time_ns - start_time_ns
         │           │
-        │           └── spans
+        │           └── rag_request - span
         │               │
-        │               ├── query_processing
-        │               │   ├── duration - integer
-        │               │   │   Unit: nanoseconds
-        │               │   │   └── [NATIVE]
-        │               │   └── input query - string
-        │               │       └── [NATIVE IF INSTRUMENTED]
+        │               ├── [MANUAL CONTRACT ROOT]
+        │               │   Source:
+        │               │     explicit span covering the complete request-specific
+        │               │     Target RAG execution
         │               │
-        │               ├── query_rewriting                 # if enabled
-        │               │   ├── duration - integer
-        │               │   │   Unit: nanoseconds
-        │               │   │   └── [NATIVE]
-        │               │   ├── input query - string
-        │               │   │   └── [NATIVE IF CAPTURED]
-        │               │   ├── rewritten query - string
-        │               │   │   └── [NATIVE IF CAPTURED]
-        │               │   └── native token usage          # if LLM-based
-        │               │       ├── input_tokens - integer
-        │               │       ├── output_tokens - integer
-        │               │       └── total_tokens - integer
+        │               ├── duration - integer
+        │               │   Unit: nanoseconds
+        │               │   └── [NATIVE]
+        │               │       Source:
+        │               │         end_time_ns - start_time_ns
         │               │
-        │               │
-        │               ├── retrieval
-        │               │   │
-        │               │   ├── duration - integer
-        │               │   │   Unit: nanoseconds
-        │               │   │   └── [NATIVE]
-        │               │   │
-        │               │   ├── retrieved chunks - array<object>
-        │               │   │   └── [NATIVE IF SPAN CAPTURES OUTPUT]
-        │               │   │
-        │               │   ├── retrieval scores - array<float>
-        │               │   │   └── [DERIVED/RAG OUTPUT]
-        │               │   │
-        │               │   └── rag.retrieved_chunk_count - integer
-        │               │       └── [DERIVED]
-        │               │           Source: len(retrieval output)
-        │               │
-        │               ├── reranking                     # if present
-        │               │   │
-        │               │   ├── duration - integer
-        │               │   │   Unit: nanoseconds
-        │               │   │   └── [NATIVE]
-        │               │   │
-        │               │   ├── reranked chunks - array<object>
-        │               │   │   └── [NATIVE IF CAPTURED]
-        │               │   │
-        │               │   ├── reranking scores - array<float>
-        │               │   │   └── [NATIVE IF CAPTURED]
-        │               │   │
-        │               │   └── rag.reranked_chunk_count - integer
-        │               │       └── [DERIVED]
-        │               │           Source: len(reranker output)
-        │               │
-        │               ├── context_assembly
-        │               │   │
-        │               │   ├── duration - integer
-        │               │   │   Unit: nanoseconds
-        │               │   │   └── [NATIVE]
-        │               │   │
-        │               │   ├── actual assembled context - string
-        │               │   │   └── [NATIVE IF CAPTURED]
-        │               │   │
-        │               │   ├── rag.context_chunk_count - integer
-        │               │   │   └── [DERIVED]
-        │               │   │       Source: chunks actually included
-        │               │   │
-        │               │   └── rag.context_tokens - integer
-        │               │       └── [DERIVED]
-        │               │           Source:
-        │               │             tokenizer(
-        │               │               actual assembled context
-        │               │             )
-        │               │
-        │               └── generation
+        │               └── child spans
         │                   │
-        │                   ├── duration - integer
-        │                   │   Unit: nanoseconds
-        │                   │   └── [NATIVE]
+        │                   ├── query_processing
+        │                   │   ├── duration - integer
+        │                   │   │   Unit: nanoseconds
+        │                   │   │   └── [NATIVE]
+        │                   │   └── input query - string
+        │                   │       └── [NATIVE IF INSTRUMENTED]
         │                   │
-        │                   ├── input - object | array | string
-        │                   │   └── [NATIVE IF MLflow integration captures it]
+        │                   ├── query_rewriting                 # if enabled
+        │                   │   ├── duration - integer
+        │                   │   │   Unit: nanoseconds
+        │                   │   │   └── [NATIVE]
+        │                   │   ├── input query - string
+        │                   │   │   └── [NATIVE IF CAPTURED]
+        │                   │   ├── rewritten query - string
+        │                   │   │   └── [NATIVE IF CAPTURED]
+        │                   │   └── native token usage          # if LLM-based
+        │                   │       ├── input_tokens - integer
+        │                   │       ├── output_tokens - integer
+        │                   │       └── total_tokens - integer
         │                   │
-        │                   ├── output - object | array | string
-        │                   │   └── [NATIVE IF MLflow integration captures it]
         │                   │
-        │                   ├── native token usage - object
+        │                   ├── retrieval
         │                   │   │
-        │                   │   ├── input_tokens - integer
-        │                   │   ├── output_tokens - integer
-        │                   │   └── total_tokens - integer
+        │                   │   ├── duration - integer
+        │                   │   │   Unit: nanoseconds
+        │                   │   │   └── [NATIVE]
+        │                   │   │
+        │                   │   ├── retrieved chunks - array<object>
+        │                   │   │   └── [NATIVE IF SPAN CAPTURES OUTPUT]
+        │                   │   │
+        │                   │   ├── retrieval scores - array<float>
+        │                   │   │   └── [DERIVED/RAG OUTPUT]
+        │                   │   │
+        │                   │   └── rag.retrieved_chunk_count - integer
+        │                   │       └── [DERIVED]
+        │                   │           Source: len(retrieval output)
         │                   │
-        │                   │       [NATIVE]
-        │                   │       Source: LLM/provider integration
+        │                   ├── reranking                     # if present
+        │                   │   │
+        │                   │   ├── duration - integer
+        │                   │   │   Unit: nanoseconds
+        │                   │   │   └── [NATIVE]
+        │                   │   │
+        │                   │   ├── reranked chunks - array<object>
+        │                   │   │   └── [NATIVE IF CAPTURED]
+        │                   │   │
+        │                   │   ├── reranking scores - array<float>
+        │                   │   │   └── [NATIVE IF CAPTURED]
+        │                   │   │
+        │                   │   └── rag.reranked_chunk_count - integer
+        │                   │       └── [DERIVED]
+        │                   │           Source: len(reranker output)
         │                   │
-        │                   ├── rag.system_tokens - integer
-        │                   │   └── [DERIVED]
-        │                   │       Source:
-        │                   │         tokenizer(resolved system prompt)
+        │                   ├── context_assembly
+        │                   │   │
+        │                   │   ├── duration - integer
+        │                   │   │   Unit: nanoseconds
+        │                   │   │   └── [NATIVE]
+        │                   │   │
+        │                   │   ├── actual assembled context - string
+        │                   │   │   └── [NATIVE IF CAPTURED]
+        │                   │   │
+        │                   │   ├── rag.context_chunk_count - integer
+        │                   │   │   └── [DERIVED]
+        │                   │   │       Source: chunks actually included
+        │                   │   │
+        │                   │   └── rag.context_tokens - integer
+        │                   │       └── [DERIVED]
+        │                   │           Source:
+        │                   │             tokenizer(
+        │                   │               actual assembled context
+        │                   │             )
         │                   │
-        │                   ├── rag.question_tokens - integer
-        │                   │   └── [DERIVED]
-        │                   │       Source:
-        │                   │         tokenizer(question sent to generator)
-        │                   │
-        │                   └── rag.context_tokens - integer
-        │                       └── [DERIVED]
-        │                           Source:
-        │                             tokenizer(context sent to generator)
+        │                   └── generation
+        │                       │
+        │                       ├── duration - integer
+        │                       │   Unit: nanoseconds
+        │                       │   └── [NATIVE]
+        │                       │
+        │                       ├── input - object | array | string
+        │                       │   └── [NATIVE IF MLflow integration captures it]
+        │                       │
+        │                       ├── output - object | array | string
+        │                       │   └── [NATIVE IF MLflow integration captures it]
+        │                       │
+        │                       ├── native token usage - object
+        │                       │   │
+        │                       │   ├── input_tokens - integer
+        │                       │   ├── output_tokens - integer
+        │                       │   └── total_tokens - integer
+        │                       │
+        │                       │       [NATIVE]
+        │                       │       Source: LLM/provider integration
+        │                       │
+        │                       ├── rag.system_tokens - integer
+        │                       │   └── [DERIVED]
+        │                       │       Source:
+        │                       │         tokenizer(resolved system prompt)
+        │                       │
+        │                       ├── rag.question_tokens - integer
+        │                       │   └── [DERIVED]
+        │                       │       Source:
+        │                       │         tokenizer(question sent to generator)
+        │                       │
+        │                       └── rag.context_tokens - integer
+        │                           └── [DERIVED]
+        │                               Source:
+        │                                 tokenizer(context sent to generator)
         │
         │
         └── Technical failures
@@ -381,3 +394,11 @@ Central MLflow
             └── exception/event information - structured object/event
                 └── [NATIVE IF EXCEPTION OCCURS INSIDE
                     INSTRUMENTED SPAN]
+
+rag_request contract:
+- `rag_request` is the mandatory semantic root span for one Target RAG request.
+- It starts before request-specific RAG processing begins and ends after the final RAG output has been produced.
+- All applicable contract stages must be descendants of `rag_request`.
+- Use the native `rag_request` span duration as the authoritative end-to-end RAG execution latency.
+- Do not add a duplicate custom total-latency field.
+- Automatic framework/provider spans may appear beneath the applicable contract stage spans, but they do not replace `rag_request` or the required semantic stage spans.
