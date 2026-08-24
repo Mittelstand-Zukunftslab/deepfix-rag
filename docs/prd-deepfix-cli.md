@@ -184,7 +184,7 @@ DeepFix incorporates a diverse suite of text-only RAG benchmark datasets categor
 +-------------------+----------------------------+-------------------+
                     |                            |
                     v                            v
-          [pyTerrier / vLLM / Qwen]        [MLflow & DeepEval]
+      [LlamaIndex / Qdrant / pyTerrier / vLLM]    [MLflow & DeepEval]
 ```
 
 - **CLI Framework:** Built using `Typer` / `Click` with `Pydantic` for strict RAG config schema validation.
@@ -195,8 +195,12 @@ DeepFix incorporates a diverse suite of text-only RAG benchmark datasets categor
 
 ## 8. Technical Considerations
 
-- **Dependencies:** Python 3.10+, `pyterrier`, `deepeval`, `mlflow`, `typer`, `pydantic`, `rich`, `datasets` (Hugging Face).
-- **Model Inference:** Inference endpoints (Qwen 3.6 27B, Qwen3-Embedding-4B) hosted via vLLM and referenced via environment variables / configuration URIs.
+- **RAG & Vector Architecture:**
+  - **Vector Database:** **Qdrant** (`qdrant-client`) serving as the primary vector store, supporting high-throughput indexing, dense vector search, payload metadata filtering, and hybrid sparse/dense retrieval. Supports local in-memory/disk-based embedded instances for local testing as well as standalone server/cluster instances.
+  - **RAG Orchestration Framework:** **LlamaIndex** powering pipeline composability, customizable chunking/node parsing, hierarchical retrieval, query rewriting/transformations, and response synthesis.
+  - **Sparse & Hybrid Search Engine:** `pyterrier` interoperating with LlamaIndex and Qdrant for classical BM25 and hybrid dense-sparse scoring baselines.
+- **Core Dependencies:** Python 3.10+, `llama-index`, `qdrant-client`, `pyterrier`, `deepeval`, `mlflow`, `typer`, `pydantic`, `rich`, `datasets` (Hugging Face).
+- **Model Inference:** Inference endpoints (Qwen 3.8 27B, Qwen3-Embedding-4B) hosted via vLLM and referenced via environment variables / configuration URIs.
 - **Dataset Storage & Streaming:** Local caching of benchmark datasets under `~/.deepfix/datasets/` with automated hash verification and chunked streaming loaders for massive corpora.
 - **Benchmark Split:** Separation of dev dataset (used during autonomous agent loops) and held-out test dataset (locked for final benchmark verification).
 - **Error Handling:** CLI must return informative error messages in JSON stderr so the agent can self-correct malformed arguments.
@@ -205,14 +209,14 @@ DeepFix incorporates a diverse suite of text-only RAG benchmark datasets categor
 
 ## 9. Success Metrics
 
-- **Skill Coverage:** $\ge 5$ distinct retrieval and grounding failure remediation skills implemented and packaged in the plugin.
-- **Autonomous Execution:** $\ge 80\%$ of multi-cycle optimization loops run by the Hermes agent complete without manual developer intervention.
+- **Skill Coverage:** = 5 distinct retrieval and grounding failure remediation skills implemented and packaged in the plugin.
+- **Autonomous Execution:** = 80% of multi-cycle optimization loops run by the Hermes agent complete without manual developer intervention.
 - **Retrieval & Grounding Performance:** Autonomous optimization achieves:
-  - **Faithfulness Score:** $\ge 0.80$ (DeepEval scale 0–1).
-  - **Contextual Precision:** $\ge 0.75$.
-  - **Answer Correctness:** $\ge 75\%$.
-  - **Deflection / Refusal Accuracy:** $\ge 80\%$ on unanswerable query subsets (specifically on GaRAGe, bLLeQA, and EnterpriseRAG-Bench).
-  - **Legal Retrieval Grounding:** $\ge 15\%$ reduction in retrieval-induced reasoning errors on **Legal RAG Bench**.
+  - **Faithfulness Score:** = 0.80 (DeepEval scale 0–1).
+  - **Contextual Precision:** = 0.75.
+  - **Answer Correctness:** = 75%.
+  - **Deflection / Refusal Accuracy:** = 80% on unanswerable query subsets (specifically on GaRAGe, bLLeQA, and EnterpriseRAG-Bench).
+  - **Legal Retrieval Grounding:** = 15% reduction in retrieval-induced reasoning errors on **Legal RAG Bench**.
 - **Benchmark Alignment:** Optimized RAG pipeline results within $10\%$ of the expert baseline on the held-out test sets across all benchmark domains.
 - **Evaluation Weighting:** All benchmarks (including multilingual bLLeQA and jurisdictional Legal RAG Bench) are reported and evaluated independently as unweighted benchmark scores.
 
