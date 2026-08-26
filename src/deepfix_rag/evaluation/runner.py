@@ -2,6 +2,7 @@
 
 import csv
 import json
+import os
 import time
 import traceback
 from pathlib import Path
@@ -9,22 +10,25 @@ from pathlib import Path
 from deepeval.metrics import ContextualPrecisionMetric, FaithfulnessMetric, GEval
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
-from deepfix_rag.evaluation.mlflow_candidate import ensure_candidate_logged_model
+from dotenv import load_dotenv
 import litellm
+import mlflow
 
 from deepfix_rag.config.schema import RAGConfig
+from deepfix_rag.evaluation.mlflow_candidate import ensure_candidate_logged_model
 from deepfix_rag.retrieval.models import GenerationClient
 from deepfix_rag.retrieval.pipeline import execute_retrieval
 
-from dotenv import load_dotenv
-import os
-import mlflow
-
 load_dotenv()
-os.environ["MLFLOW_TRACKING_USERNAME"] = os.environ["MLFLOW_RAG_USERNAME"]
-os.environ["MLFLOW_TRACKING_PASSWORD"] = os.environ["MLFLOW_RAG_PASSWORD"]
+
+if os.getenv("MLFLOW_RAG_USERNAME"):
+    os.environ["MLFLOW_TRACKING_USERNAME"] = os.environ["MLFLOW_RAG_USERNAME"]
+if os.getenv("MLFLOW_RAG_PASSWORD"):
+    os.environ["MLFLOW_TRACKING_PASSWORD"] = os.environ["MLFLOW_RAG_PASSWORD"]
 os.environ["MLFLOW_ENABLE_ASYNC_TRACE_LOGGING"] = "false"
-mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+
+if os.getenv("MLFLOW_TRACKING_URI"):
+    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
 
 import tiktoken
 
@@ -103,15 +107,15 @@ def run_evaluation(
     workspace: str = "dev",
 ) -> dict:
     workspace_env = "MLFLOW_TEST_WORKSPACE" if workspace == "test" else "MLFLOW_DEV_WORKSPACE"
-    mlflow.set_workspace(os.environ[workspace_env])
-    experiment_name = os.environ["MLFLOW_DEV_RAG_EXPERIMENT"]
+    if hasattr(mlflow, "set_workspace") and os.getenv(workspace_env):
+        mlflow.set_workspace(os.environ[workspace_env])
+    experiment_name = os.getenv("MLFLOW_DEV_RAG_EXPERIMENT", "dev_rag_experiment")
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
         raise RuntimeError(
             f"MLflow experiment '{experiment_name}' does not exist in this workspace. "
             "Refusing to auto-create per contract — check MLFLOW_DEV_RAG_EXPERIMENT."
         )
-    mlflow.set_experiment(experiment_id=experiment.experiment_id)
     mlflow.set_experiment(experiment_id=experiment.experiment_id)
 
     candidate_model_id = ensure_candidate_logged_model()
@@ -152,7 +156,7 @@ def run_evaluation(
     errors = []
 
     with mlflow.start_run(run_name="src_migration_eval_run"):
-        mlflow.log_param("retriever", "Qdrant (qwen3-embedding-4b)")
+        mlflow.log_param("retriever", "LanceDB")
         mlflow.log_param("generation_model", config.generation.model)
         mlflow.log_param("judge_model", "gpt-4.1-mini")
         mlflow.log_param("n_questions", len(qa_pairs))
@@ -161,13 +165,14 @@ def run_evaluation(
             question_id = qa.get("id", f"q_{i}")
             try:
                 with mlflow.start_span(name="rag_request", span_type="CHAIN") as parent_span:
-                    mlflow.update_current_trace(
-                        metadata={
-                            "candidate_id": os.environ["MLFLOW_CANDIDATE_ID"],
-                            "corpus_id": os.environ["MLFLOW_CORPUS_ID"],
-                            "question_id": str(question_id),
-                        }
-                    )
+                    if os.getenv("MLFLOW_CANDIDATE_ID"):
+                        mlflow.update_current_trace(
+                            metadata={
+                                "candidate_id": os.getenv("MLFLOW_CANDIDATE_ID", ""),
+                                "corpus_id": os.getenv("MLFLOW_CORPUS_ID", ""),
+                                "question_id": str(question_id),
+                            }
+                        )
                     if parent_span:
                         parent_span.set_inputs({"question": qa["question"]})
 

@@ -1,7 +1,10 @@
-"""Build a dense vector index for a corpus dataset."""
+"""Build a LanceDB vector index for a corpus dataset."""
 
 import json
 from pathlib import Path
+
+import lancedb
+import pandas as pd
 
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.retrieval.models import EmbeddingClient
@@ -51,23 +54,25 @@ def load_corpus(dataset_path: Path) -> list[dict]:
 
 
 def build_index(dataset_path: Path, config: RAGConfig, index_dir: str, force: bool = False) -> dict:
-    """Chunk, embed, and persist a corpus as a dense index at `index_dir`."""
+    """Chunk, embed, and persist a corpus as a LanceDB index at `index_dir`."""
     out_dir = Path(index_dir)
-    index_path = out_dir / "index.json"
-
-    if index_path.exists() and not force:
-        raise FileExistsError(
-            f"Index already exists at '{index_path}'. Use --force to overwrite."
-        )
-
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    db = lancedb.connect(str(out_dir))
+    tables = list(db.table_names()) if hasattr(db, "table_names") else list(db.list_tables())
+    table_name = "documents"
+
+    if table_name in tables and not force:
+        raise FileExistsError(
+            f"LanceDB table '{table_name}' already exists at '{out_dir}'. Use --force to overwrite."
+        )
 
     docs = load_corpus(dataset_path)
 
     entries = []
     for doc in docs:
         for chunk_text in _chunk_text(doc["text"], config.chunking.size, config.chunking.overlap):
-            entries.append({"doc_id": doc["doc_id"], "text": chunk_text})
+            entries.append({"id": str(doc["doc_id"]), "doc_id": str(doc["doc_id"]), "text": chunk_text})
 
     embedder = EmbeddingClient(model=config.embedding.model, provider=config.embedding.provider)
     batch_size = config.embedding.batch_size
@@ -76,9 +81,30 @@ def build_index(dataset_path: Path, config: RAGConfig, index_dir: str, force: bo
         batch = entries[start : start + batch_size]
         vectors = embedder.embed_documents([e["text"] for e in batch])
         for entry, vector in zip(batch, vectors):
-            entry["embedding"] = vector
+            entry["vector"] = vector
 
+    df = pd.DataFrame(entries)
+    table = db.create_table(table_name, data=df, mode="overwrite")
+
+    # Also build FTS index for full-text / hybrid search
+    try:
+        from lancedb.index import FTS
+        table.create_index("text", config=FTS())
+    except Exception:
+        pass
+
+    # Optional legacy fallback: save index.json as well
+    index_path = out_dir / "index.json"
+    legacy_entries = [
+        {"doc_id": e["doc_id"], "text": e["text"], "embedding": e["vector"]}
+        for e in entries
+    ]
     with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(entries, f)
+        json.dump(legacy_entries, f)
 
-    return {"documents": len(docs), "chunks": len(entries), "index_path": str(index_path)}
+    return {
+        "documents": len(docs),
+        "chunks": len(entries),
+        "table_name": table_name,
+        "index_path": str(out_dir),
+    }
