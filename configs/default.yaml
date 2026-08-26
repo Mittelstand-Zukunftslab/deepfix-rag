@@ -1,12 +1,18 @@
 ﻿embedding:
-  model: qwen/qwen3-embedding-8b
+  model: octen-embedding-8b
+  provider: aisc
+  batch_size: 32
+
+retrieval:
+  backend: hybrid
+  top_k: 10
+  hybrid_alpha: 0.5
 
 generation:
-  model: openrouter/deepseek/deepseek-chat
+  model: openai/openrouter/qwen/qwen3.6-plus
   provider: hpi
+
 rerank:
   enabled: false
   model: rerank-english-v3.0
   top_n: 5
-
-

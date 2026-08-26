@@ -10,6 +10,22 @@ from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.retrieval.models import EmbeddingClient
 
 
+def _extract_table_names(db) -> list[str]:
+    """Safely extract list of table names from LanceDB connection."""
+    try:
+        res = db.list_tables()
+        if hasattr(res, "tables"):
+            return list(res.tables)
+        if isinstance(res, list):
+            return res
+    except Exception:
+        pass
+    try:
+        return list(db.table_names())
+    except Exception:
+        return []
+
+
 def _chunk_text(text: str, size: int, overlap: int) -> list[str]:
     if size <= 0:
         return [text]
@@ -59,7 +75,7 @@ def build_index(dataset_path: Path, config: RAGConfig, index_dir: str, force: bo
     out_dir.mkdir(parents=True, exist_ok=True)
 
     db = lancedb.connect(str(out_dir))
-    tables = list(db.table_names()) if hasattr(db, "table_names") else list(db.list_tables())
+    tables = _extract_table_names(db)
     table_name = "documents"
 
     if table_name in tables and not force:

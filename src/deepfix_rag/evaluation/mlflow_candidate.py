@@ -36,8 +36,8 @@ def build_manifest() -> dict:
                 "parameters": {},
             },
             "embedding": {
-                "provider": "hpi",
-                "model": "qwen/qwen3-embedding-8b",
+                "provider": os.getenv("EMBEDDING_PROVIDER", "aisc"),
+                "model": os.getenv("EMBEDDING_MODEL", "octen-embedding-8b"),
                 "parameters": {"batch_size": 32},
             },
             "vector_store": {

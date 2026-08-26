@@ -3,6 +3,12 @@
 import csv
 import json
 import os
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import time
 import traceback
 from pathlib import Path
@@ -119,7 +125,8 @@ def run_evaluation(
     mlflow.set_experiment(experiment_id=experiment.experiment_id)
 
     candidate_model_id = ensure_candidate_logged_model()
-    mlflow.set_active_model(model_id=candidate_model_id)
+    if hasattr(mlflow, "set_active_model"):
+        mlflow.set_active_model(model_id=candidate_model_id)
 
     qa_pairs = load_qa_dataset(dataset_path)
     if limit:
@@ -157,6 +164,8 @@ def run_evaluation(
 
     with mlflow.start_run(run_name="src_migration_eval_run"):
         mlflow.log_param("retriever", "LanceDB")
+        mlflow.log_param("embedding_model", config.embedding.model)
+        mlflow.log_param("embedding_provider", config.embedding.provider)
         mlflow.log_param("generation_model", config.generation.model)
         mlflow.log_param("judge_model", "gpt-4.1-mini")
         mlflow.log_param("n_questions", len(qa_pairs))

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "candidate_id": "baseline_001",
+  "candidate_id": "octen_candidate_001",
   "rag_type": "vector_rag",
   "configuration": {
     "chunking": {
@@ -10,8 +10,8 @@
       "parameters": {}
     },
     "embedding": {
-      "provider": "hpi",
-      "model": "qwen/qwen3-embedding-8b",
+      "provider": "aisc",
+      "model": "octen-embedding-8b",
       "parameters": {
         "batch_size": 32
       }
@@ -63,5 +63,5 @@
       "query_rewrite": null
     }
   },
-  "config_hash": "sha256:83b1872ee448d416b1a0e08c66228b7e545809e6424450138707718c091fa795"
+  "config_hash": "sha256:549754cec6a6ac6b28985974bc2040784418dce60ce163a6243e776ec307214e"
 }

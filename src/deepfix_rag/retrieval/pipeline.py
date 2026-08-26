@@ -1,14 +1,18 @@
-"""RAG retrieval execution wrapper using LanceDB with fallback."""
+"""RAG retrieval execution wrapper using LanceDB (local & remote S3/RustFS) with fallback."""
 
 import json
 import math
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 import lancedb
 from pydantic import BaseModel, Field
 
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.retrieval.models import EmbeddingClient
+
+load_dotenv()
 
 
 class RetrievalResult(BaseModel):
@@ -38,13 +42,48 @@ def _load_legacy_json_index(index_dir: str) -> list[dict]:
         return json.load(f)
 
 
+def _extract_table_names(db) -> list[str]:
+    """Safely extract list of table names from LanceDB connection."""
+    try:
+        res = db.list_tables()
+        if hasattr(res, "tables"):
+            return list(res.tables)
+        if isinstance(res, list):
+            return res
+    except Exception:
+        pass
+    try:
+        return list(db.table_names())
+    except Exception:
+        return []
+
+
 def _get_lancedb_table(index_dir: str):
+    if index_dir.startswith("s3://"):
+        try:
+            storage_options = {
+                "endpoint": os.getenv("RUSTFS_ENDPOINT", "https://hpi-s3.mittelstand-zukunftslab.de"),
+                "aws_access_key_id": os.getenv("RUSTFS_ACCESS_KEY", "rustfsadmin"),
+                "aws_secret_access_key": os.getenv("RUSTFS_SECRET_KEY", ""),
+                "aws_region": "us-east-1",
+                "allow_http": "true",
+                "aws_virtual_hosted_style_request": "false",
+            }
+            db = lancedb.connect(index_dir, storage_options=storage_options)
+            tables = _extract_table_names(db)
+            if not tables:
+                return None
+            table_name = "legal_passages" if "legal_passages" in tables else ("documents" if "documents" in tables else tables[0])
+            return db.open_table(table_name)
+        except Exception:
+            return None
+
     out_dir = Path(index_dir)
     if not out_dir.exists():
         return None
     try:
         db = lancedb.connect(str(out_dir))
-        tables = list(db.table_names()) if hasattr(db, "table_names") else list(db.list_tables())
+        tables = _extract_table_names(db)
         if not tables:
             return None
         table_name = "documents" if "documents" in tables else ("legal_passages" if "legal_passages" in tables else tables[0])

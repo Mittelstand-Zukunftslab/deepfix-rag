@@ -5,7 +5,8 @@ from deepfix_rag.config.schema import RAGConfig
 def test_rag_config_defaults():
     config = RAGConfig()
     assert config.chunking.size == 512
-    assert config.embedding.model == "Qwen/Qwen3-Embedding-4B"
+    assert config.embedding.model == "octen-embedding-8b"
+    assert config.embedding.provider == "aisc"
     assert config.retrieval.top_k == 10
 
 

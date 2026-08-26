@@ -17,9 +17,9 @@ class EmbeddingConfig(BaseModel):
     """Embedding model and endpoint settings."""
 
     model: str = Field(
-        default="Qwen/Qwen3-Embedding-4B", description="Embedding model name or identifier."
+        default="octen-embedding-8b", description="Embedding model name or identifier (e.g. octen-embedding-8b, Qwen/Qwen3-Embedding-4B)."
     )
-    provider: str = Field(default="hpi", description="Inference provider: 'hpi' or 'openrouter'.")
+    provider: str = Field(default="aisc", description="Inference provider: 'aisc', 'octen', 'hpi', or 'openrouter'.")
     batch_size: int = Field(default=32, ge=1, description="Embedding batch size.")
 
 
