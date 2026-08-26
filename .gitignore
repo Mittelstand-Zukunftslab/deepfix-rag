@@ -193,3 +193,8 @@ cython_debug/
 .idea/
 .venv-wsl/
 notebooks/.deepeval/
+
+data/
+real_index/
+
+

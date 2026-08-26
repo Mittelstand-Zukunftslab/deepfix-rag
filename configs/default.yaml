@@ -1,0 +1,12 @@
+﻿embedding:
+  model: qwen/qwen3-embedding-8b
+
+generation:
+  model: openrouter/deepseek/deepseek-chat
+  provider: hpi
+rerank:
+  enabled: false
+  model: rerank-english-v3.0
+  top_n: 5
+
+
