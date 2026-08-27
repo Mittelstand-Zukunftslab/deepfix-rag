@@ -1,0 +1,49 @@
+services:
+  hermes:
+    build:
+      context: .
+      dockerfile: Dockerfile.hermes
+      args:
+        HERMES_IMAGE: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+        HERMES_OTEL_COMMIT: ${HERMES_OTEL_COMMIT:-c76bea8434e6cc8b51c835bb57c514a5eb71e857}
+
+    restart: unless-stopped
+    shm_size: "1gb"
+
+    command:
+      - python
+      - /opt/hermes-deploy/start_hermes.py
+
+    environment:
+      HERMES_HOME: /opt/data
+      HERMES_BOOTSTRAP_MODE: ${HERMES_BOOTSTRAP_MODE:-true}
+
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI}
+      MLFLOW_DEV_WORKSPACE: ${MLFLOW_DEV_WORKSPACE}
+      MLFLOW_DEV_RAG_EXPERIMENT: ${MLFLOW_DEV_RAG_EXPERIMENT}
+      MLFLOW_DEV_HERMES_EXPERIMENT: ${MLFLOW_DEV_HERMES_EXPERIMENT}
+
+      MLFLOW_HERMES_READER_USERNAME: ${MLFLOW_HERMES_READER_USERNAME}
+      MLFLOW_HERMES_READER_PASSWORD: ${MLFLOW_HERMES_READER_PASSWORD}
+
+      MLFLOW_HERMES_SERVICE_USERNAME: ${MLFLOW_HERMES_SERVICE_USERNAME}
+      MLFLOW_HERMES_SERVICE_PASSWORD: ${MLFLOW_HERMES_SERVICE_PASSWORD}
+
+      # Do not set MLFLOW_HERMES_OTLP_AUTHORIZATION in Dokploy.
+      # start_hermes.py derives it in memory.
+
+      # Optional during tracing diagnostics:
+      # HERMES_OTEL_DEBUG: "true"
+
+      # Provider / gateway secrets can either be passed here from Dokploy
+      # or configured interactively with `hermes setup` into /opt/data.
+      # OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      # TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+
+    volumes:
+      - hermes_data:/opt/data
+
+    # No public ports by default.
+
+volumes:
+  hermes_data:
