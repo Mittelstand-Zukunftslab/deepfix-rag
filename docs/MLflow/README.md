@@ -1,6 +1,6 @@
 # mlflow-deepfix
 
-Backup and reusable integration material for the HPI DeepFix pilot project's central MLflow workstream.
+Reusable integration material for the project's central MLflow workstream.
 
 ## Repository structure
 
@@ -25,8 +25,6 @@ Backup and reusable integration material for the HPI DeepFix pilot project's cen
     └── use-mlflow-api/
         └── SKILL.md
 ```
-
-All authoritative agent skills live under `skills/`. There are no compatibility wrappers or root-level skill copies.
 
 ## Security model
 
