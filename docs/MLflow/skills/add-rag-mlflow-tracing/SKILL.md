@@ -12,7 +12,7 @@ Bring the Target RAG's own MLflow integration into conformance with the reposito
 Before editing a Target RAG, read these repository files completely:
 
 1. `MLflow logging conventions.txt` — authoritative evidence structure, field placement, types, trace hierarchy, candidate manifest shape, and evaluation aggregation contract.
-2. `mlflow_helpers.py` — authoritative validation, canonicalization, and `config_hash` implementation.
+2. `mlflow_rag_helpers.py` — authoritative validation, canonicalization, and `config_hash` implementation.
 3. `.env.example` — authoritative environment-variable and central resource names.
 
 If this skill conflicts with one of those files, the contract file wins. Do not invent alternative workspace names, experiment names, service identities, candidate identifiers, metadata fields, metrics, or environment-variable names.
@@ -25,6 +25,8 @@ Allowed:
 - add/update the existing MLflow dependency through the repository's package manager;
 - instrument the real RAG request path;
 - repair incomplete or duplicated tracing;
+- resolve the current runtime prompt text to immutable versions of the pre-provisioned Target RAG Prompt Registry resources;
+- create a new version of an approved Target RAG prompt when the current runtime prompt payload is not already registered;
 - materialize and log the candidate manifest;
 - create or safely reuse the configured candidate LoggedModel;
 - associate traces and existing evaluation evidence with the candidate;
@@ -38,10 +40,12 @@ Out of scope:
 - start a local MLflow server;
 - instrument Hermes, DeepFix, or unrelated services;
 - create or redesign evaluation/scorers/benchmarks;
-- alter RAG answers, retrieval, reranking, context construction, prompts, or other behavioral semantics;
+- alter RAG answers, retrieval, reranking, context construction, prompt text, or other behavioral semantics;
+- modify unrelated Prompt Registry resources merely because the service role has wildcard prompt access;
+- create arbitrary new prompt resource names;
 - invent or auto-increment candidate IDs.
 
-If a required central resource does not exist, fail clearly rather than creating a substitute.
+Workspaces, experiments, and the approved Prompt Registry resources are centrally provisioned. If one is missing, fail clearly rather than creating a substitute. The RAG integration may create new immutable versions only inside the approved existing prompt resources.
 
 ## Required Target RAG state
 
@@ -50,22 +54,25 @@ The integration is complete only when all applicable requirements hold:
 1. One canonical MLflow initialization path exists.
 2. Required settings fail fast; there is no default workspace/experiment fallback.
 3. The Target RAG uses only `MLFLOW_RAG_USERNAME` / `MLFLOW_RAG_PASSWORD`.
-4. The current behavior is represented by a complete candidate manifest matching `mlflow_helpers.py` and the logging conventions.
-5. `config_hash` is produced by the supplied `compute_config_hash()` implementation.
-6. `MLFLOW_CANDIDATE_ID` maps to exactly one compatible LoggedModel in the configured RAG experiment.
-7. The candidate's native MLflow `model_id` is active before request traces are emitted.
-8. Every real RAG request has exactly one explicit top-level semantic span named `rag_request`.
-9. Every applicable semantic stage appears beneath `rag_request` with the exact contract name:
+4. The effective system prompt is represented by an exact immutable version of `target-rag-system-main`.
+5. When query rewriting is enabled and prompt-based, its effective prompt is represented by an exact immutable version of `target-rag-system-rewrite`; when disabled, the manifest reference is explicitly `null`.
+6. Existing prompt versions are reused when their immutable prompt payload already matches the effective runtime prompt; do not create duplicate versions unnecessarily.
+7. The current behavior is represented by a complete candidate manifest matching `mlflow_rag_helpers.py` and the logging conventions.
+8. `config_hash` is produced by the supplied `compute_config_hash()` implementation.
+9. `MLFLOW_CANDIDATE_ID` maps to exactly one compatible LoggedModel in the configured RAG experiment.
+10. The candidate's native MLflow `model_id` is active before request traces are emitted.
+11. Every real RAG request has exactly one explicit top-level semantic span named `rag_request`.
+12. Every applicable semantic stage appears beneath `rag_request` with the exact contract name:
    - `query_processing`
    - `query_rewriting` when enabled/executed
    - `retrieval`
    - `reranking` when present/executed
    - `context_assembly`
    - `generation`
-10. Runtime evidence is attached to the applicable stage exactly as defined by `MLflow logging conventions.txt`.
-11. Native MLflow trace/span duration is authoritative for latency; do not add duplicate custom latency fields.
-12. Official framework/provider tracing may remain only when it does not duplicate calls or replace the required semantic contract hierarchy.
-13. RAG behavior remains unchanged.
+13. Runtime evidence is attached to the applicable stage exactly as defined by `MLflow logging conventions.txt`.
+14. Native MLflow trace/span duration is authoritative for latency; do not add duplicate custom latency fields.
+15. Official framework/provider tracing may remain only when it does not duplicate calls or replace the required semantic contract hierarchy.
+16. RAG behavior remains unchanged.
 
 ## Environment contract
 
@@ -99,6 +106,19 @@ Use only keys defined by `.env.example`.
 | --- | --- |
 | `MLFLOW_CANDIDATE_ID` | Current immutable candidate identifier (`baseline_NNN` or `candidate_NNN`) |
 | `MLFLOW_CORPUS_ID` | Canonical corpus identifier |
+
+### Prompt Registry contract
+
+The central `dev-workspace` already contains these approved Target RAG prompt resources:
+
+| Prompt resource | Purpose |
+| --- | --- |
+| `target-rag-system-main` | Main generation system prompt |
+| `target-rag-system-rewrite` | Query-rewriting prompt when that component is enabled and prompt-based |
+
+The RAG service is assigned the `target-rag-writer` role with `prompt.all -> EDIT`. Treat that wildcard grant as an authorization mechanism, not as permission to mutate unrelated prompts. This skill may read these approved prompt resources and create new immutable versions in them when required to represent the current Target RAG behavior.
+
+Do not assume `prompt.all -> EDIT` permits creation of a brand-new prompt resource name. If either approved prompt resource is absent when required, stop and report the missing central resource. Do not compensate with workspace-wide access, a renamed prompt, a registered model, or a locally stored substitute.
 
 Never expose DeepFix or Hermes credentials to the Target RAG runtime.
 
@@ -172,9 +192,30 @@ For normal operation it must:
 
 Remove hardcoded values, local-server startup, implicit experiment creation, duplicate initializers, and default workspace/experiment fallbacks.
 
-### 4. Materialize the complete candidate manifest
+### 4. Resolve and register immutable prompt versions
 
-Represent the current effective behavior exactly as required by `mlflow_helpers.py` and the logging conventions.
+Resolve prompt versioning before computing the candidate manifest or `config_hash`, because the exact immutable prompt URI is part of the behavioral configuration.
+
+For the effective main system prompt:
+
+1. use the existing `target-rag-system-main` prompt resource;
+2. inspect its registered versions and compare their immutable prompt payload to the actual effective runtime prompt;
+3. if an exact matching version already exists, reuse that exact version;
+4. otherwise register the unchanged effective runtime prompt as a new version of `target-rag-system-main`;
+5. retain the resulting exact URI in the form `prompts:/target-rag-system-main/<version>`.
+
+For query rewriting:
+
+- when disabled, store the prompt reference as explicit `null` and do not create a prompt version;
+- when enabled and prompt-based, apply the same exact-match/reuse-or-version procedure to `target-rag-system-rewrite` and retain `prompts:/target-rag-system-rewrite/<version>`.
+
+Prompt registration is version capture, not prompt editing. Never rewrite, improve, normalize, template, or otherwise change the runtime prompt text merely to register it. Never store mutable aliases such as `@latest` in the candidate configuration.
+
+The integration must be restart-safe: rerunning initialization with unchanged prompt payloads must resolve to existing versions rather than continually creating duplicate versions.
+
+### 5. Materialize the complete candidate manifest
+
+Represent the current effective behavior exactly as required by `mlflow_rag_helpers.py` and the logging conventions.
 
 The manifest must contain:
 
@@ -200,7 +241,7 @@ Disabled optional behavior must still be represented explicitly. Prompt fields m
 
 Compute the hash by calling the supplied `compute_config_hash()`; do not reproduce or alter its algorithm.
 
-### 5. Create or reuse the candidate LoggedModel safely
+### 6. Create or reuse the candidate LoggedModel safely
 
 One candidate corresponds to one LoggedModel in `MLFLOW_DEV_RAG_EXPERIMENT`.
 
@@ -221,13 +262,13 @@ Initialization must be restart-safe:
 
 Activate the resulting native model before normal request tracing using MLflow's active-model mechanism. Do not duplicate native `model_id` into custom metadata.
 
-### 6. Reconcile automatic tracing
+### 7. Reconcile automatic tracing
 
 Prefer the highest-level official MLflow integration that matches the framework/provider actually used. Keep an existing correct integration; disable overlapping integrations that trace the same underlying call twice.
 
 Automatic tracing is supporting evidence, not a substitute for the semantic contract hierarchy.
 
-### 7. Enforce the contract trace hierarchy
+### 8. Enforce the contract trace hierarchy
 
 Every real request must contain:
 
@@ -247,7 +288,7 @@ Framework/provider spans with names such as `retrieve` or `generate` may remain 
 
 Instrument semantic operations, not every helper.
 
-### 8. Log evidence on the correct trace/span
+### 9. Log evidence on the correct trace/span
 
 Within the active request trace, propagate immutable string metadata:
 
@@ -268,7 +309,7 @@ Use the model-appropriate tokenizer for derived token counts. Capture actual run
 
 Let exceptions occur inside instrumented spans so MLflow records native error status and structured exception information. Poor answer quality is not a technical error.
 
-### 9. Preserve existing evaluation semantics
+### 10. Preserve existing evaluation semantics
 
 Do not create or redesign evaluation. If visible evaluation already exists, preserve its semantics while logging according to the contract:
 
@@ -280,7 +321,7 @@ Do not create or redesign evaluation. If visible evaluation already exists, pres
 
 Do not invent scorers, evaluator versions, quality metrics, hidden-evaluation logic, or benchmark datasets.
 
-### 10. Verify the integration
+### 11. Verify the integration
 
 Run the smallest existing path that executes one real RAG request. Use the configured development smoke experiment for integration verification and restore the normal RAG experiment afterward.
 
@@ -292,6 +333,10 @@ Verify:
 - no resource/identity values are hardcoded;
 - only RAG credentials are used;
 - workspace + pre-existing experiment selection is correct;
+- `target-rag-system-main` is resolved to an exact immutable version URI;
+- `target-rag-system-rewrite` is resolved to an exact immutable version URI when applicable and is `null` when disabled;
+- unchanged prompt payloads reuse existing versions rather than creating duplicates;
+- no prompt outside the two approved Target RAG resources is modified;
 - candidate creation/reuse behaves correctly and never changes the candidate ID;
 - `candidate_manifest.json` matches the required schema;
 - `config_hash` matches the supplied helper;
@@ -318,15 +363,16 @@ Report concisely:
 1. starting integration state;
 2. files/dependencies/configuration changed;
 3. existing MLflow code kept/repaired/consolidated/removed;
-4. candidate ID and resulting config hash;
-5. automatic tracing integration kept/enabled and duplicates removed;
-6. manual semantic spans added;
-7. completed stage-reconciliation table;
-8. required environment-variable names without secrets;
-9. smoke command executed and behavior-preservation result;
-10. candidate LoggedModel creation/reuse and native model association result;
-11. `rag_request` hierarchy and remote trace-delivery result;
-12. remaining unexplained root-timeline gap, if any;
-13. unavailable contract evidence/resources, if any.
+4. prompt resources and exact immutable version URIs used, including whether each version was reused or newly registered;
+5. candidate ID and resulting config hash;
+6. automatic tracing integration kept/enabled and duplicates removed;
+7. manual semantic spans added;
+8. completed stage-reconciliation table;
+9. required environment-variable names without secrets;
+10. smoke command executed and behavior-preservation result;
+11. candidate LoggedModel creation/reuse and native model association result;
+12. `rag_request` hierarchy and remote trace-delivery result;
+13. remaining unexplained root-timeline gap, if any;
+14. unavailable contract evidence/resources, if any.
 
 The task is complete only when the Target RAG integration conforms to the repository contract, or all RAG-side changes are complete and only unavailable external credentials/resources prevent remote verification.

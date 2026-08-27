@@ -9,7 +9,7 @@ Backup and reusable integration material for the HPI DeepFix pilot project's cen
 ├── .env.example
 ├── docker-compose.yml
 ├── MLflow logging conventions.txt
-├── mlflow_helpers.py
+├── mlflow_rag_helpers.py
 ├── pyproject.toml
 ├── deepfix_mlflow/
 │   ├── __init__.py
@@ -44,7 +44,7 @@ The Hermes tracing helper generates a deployment-time Basic Auth header for `her
 ## Contract files
 
 - `MLflow logging conventions.txt` defines the canonical evidence layout, including the mandatory `rag_request` semantic root span.
-- `mlflow_helpers.py` defines the canonical RAG configuration validation, normalization, and hash calculation.
+- `mlflow_rag_helpers.py` defines the canonical RAG configuration validation, normalization, and hash calculation.
 - `.env.example` defines the canonical central resource and credential variable names.
 
 ## Ownership boundary
