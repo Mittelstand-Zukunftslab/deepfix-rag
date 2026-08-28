@@ -15,9 +15,71 @@ console = Console()
 
 DATA_ROOT = Path("data/datasets")
 
+def _download_hf_dataset(dataset_name: str, split: str, corpus_path: Path, qa_path: Path):
+    """Download and format dataset from HuggingFace."""
+    from datasets import load_dataset
+    
+    console.print(f"Fetching [cyan]{dataset_name}[/cyan] from HuggingFace...")
+    
+    # We load the split we want (HuggingFace usually uses 'validation' for dev, and 'test' for test)
+    hf_split = "validation" if split == "dev" else "test"
+    
+    try:
+        # Load the corpus/passages
+        console.print(f"Loading corpus split: {hf_split}...")
+        corpus = load_dataset(dataset_name, "corpus", split=hf_split)
+        with open(corpus_path, "w", encoding="utf-8") as f:
+            for doc in corpus:
+                doc_dict = {
+                    "id": str(doc.get("doc_id", doc.get("id"))),
+                    "text": doc.get("text", doc.get("content", ""))
+                }
+                f.write(json.dumps(doc_dict) + "\n")
+                
+        # Load the queries/qrels
+        console.print(f"Loading queries split: {hf_split}...")
+        queries = load_dataset(dataset_name, "queries", split=hf_split)
+        
+        # We need qrels (ground truth mapping) to stitch queries to relevant docs
+        try:
+            qrels = load_dataset(dataset_name, "qrels", split=hf_split)
+            qrel_map = {}
+            for row in qrels:
+                qid = str(row["query_id"])
+                if qid not in qrel_map:
+                    qrel_map[qid] = []
+                qrel_map[qid].append(str(row["doc_id"]))
+        except Exception:
+            # Fallback if there is no explicit qrels split (some datasets structure it differently)
+            qrel_map = None
+            
+        with open(qa_path, "w", encoding="utf-8") as f:
+            for q in queries:
+                qid = str(q.get("query_id", q.get("id")))
+                
+                # Fetch relevant docs from qrel map, or directly from the query row if provided
+                rel_docs = qrel_map.get(qid, []) if qrel_map else q.get("relevant_docs", [])
+                
+                qa_dict = {
+                    "query_id": qid,
+                    "query": q.get("query", q.get("text", "")),
+                    "relevant_docs": rel_docs,
+                    "unanswerable": len(rel_docs) == 0
+                }
+                f.write(json.dumps(qa_dict) + "\n")
+                
+    except Exception as e:
+        console.print(f"[red]Failed to load dataset: {e}[/red]")
+        console.print("[yellow]Falling back to scaffolding for testing purposes.[/yellow]")
+        # Scaffold fallback
+        with open(corpus_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"id": "doc1", "text": "Sample legal text"}) + "\n")
+        with open(qa_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"query_id": "q1", "query": "What is the penalty for reckless driving?", "relevant_docs": ["doc1"], "unanswerable": False}) + "\n")
+
 @app.command("load")
 def load_dataset(
-    name: str = typer.Option(..., "--name", help="Dataset preset (e.g. legal-rag-bench, garage, blleqa, browsecomp-plus, enterpriserag-bench, mtrag) or custom path"),
+    name: str = typer.Option(..., "--name", help="Dataset preset (e.g. legal-rag-bench) or custom path"),
     split: str = typer.Option(..., "--split", help="Target split (must be 'dev' or 'test')"),
     stream: bool = typer.Option(False, "--stream", help="Enable streaming for large datasets"),
 ):
@@ -35,12 +97,7 @@ def load_dataset(
     qa_path = out_dir / "qa.jsonl"
 
     if name == "legal-rag-bench":
-        console.print("Fetching isaacus/legal-rag-bench from HuggingFace...")
-        # Scaffold formatting logic required for the benchmark pipeline
-        with open(corpus_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"id": "doc1", "text": "Sample legal text"}) + "\n")
-        with open(qa_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"query_id": "q1", "query": "What is the penalty for reckless driving?", "relevant_docs": ["doc1"], "unanswerable": False}) + "\n")
+        _download_hf_dataset("isaacus/legal-rag-bench", split, corpus_path, qa_path)
     else:
         console.print(f"Preset '{name}' scaffolded mapped to {out_dir}.")
         corpus_path.touch()
