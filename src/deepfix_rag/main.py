@@ -8,7 +8,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 import typer
 
-from deepfix_rag.cli import config, diagnostic, eval, export, index
+from deepfix_rag.cli import config, dataset, diagnostic, eval, export, index
 
 app = typer.Typer(
     name="deepfix",
@@ -17,6 +17,8 @@ app = typer.Typer(
 )
 
 # Register subcommands
+app.add_typer(dataset.app, name="dataset")
+
 app.command(
     name="eval", help="Run DeepEval evaluation on a dataset using a given RAG configuration."
 )(eval.eval_cmd)
