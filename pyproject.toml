@@ -16,12 +16,21 @@ classifiers = [
     "License :: OSI Approved :: MIT License"
 ]
 dependencies = [
+    "datasets>=2.14.0",
+    "deepeval>=1.0.0",
+    "lancedb>=0.5.0",
+    "litellm>=1.0.0",
     "loguru",
+    "mlflow>=2.15.0",
+    "pandas>=2.0.0",
     "pydantic>=2.0",
-    "pytest",
+    "pyarrow>=14.0.0",
+    "pytest>=8.0.0",
     "python-dotenv",
+    "pyyaml>=6.0",
     "rich",
     "ruff",
+    "tiktoken>=0.5.0",
     "typer>=0.9.0",
 ]
 requires-python = "~=3.12.0"
@@ -43,4 +52,3 @@ ignore = ["B008"]  # Allow function calls in argument defaults (standard for Typ
 [tool.ruff.lint.isort]
 known-first-party = ["deepfix_rag"]
 force-sort-within-sections = true
-
