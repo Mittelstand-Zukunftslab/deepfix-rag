@@ -94,11 +94,11 @@ Central MLflow
         │   │           └── prompts - JSON object
         │   │               ├── system - string
         │   │               │   └── exact Prompt Registry URI
-        │   │               │       e.g. "prompts:/target-rag-system/3"
+        │   │               │       e.g. "prompts:/target-rag-system-main/3"
         │   │               │
         │   │               └── query_rewrite - string | null
         │   │                   └── exact Prompt Registry URI when used
-        │   │                       e.g. "prompts:/target-rag-query-rewrite/2"
+        │   │                       e.g. "prompts:/target-rag-system-rewrite/2"
         │   │
         │   │           [DERIVED/MANUAL]
         │   │           Source: effective resolved Target RAG configuration

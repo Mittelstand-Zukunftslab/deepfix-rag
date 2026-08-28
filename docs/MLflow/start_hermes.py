@@ -5,13 +5,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 from deepfix_mlflow.hermes_tracing import (
     HermesMLflowTracingConfig,
     HermesMLflowTracingError,
 )
 
 
-OTEL_CONFIG_PATH = Path("/opt/data/hermes_otel.yaml")
+OTEL_CONFIG_PATH = Path(
+    os.environ.get("HERMES_OTEL_CONFIG", "/tmp/hermes_otel.yaml")
+)
+
 _TRUE = {"1", "true", "yes", "on"}
 
 
@@ -20,12 +25,23 @@ def _bootstrap_mode() -> bool:
 
 
 def _write_otel_config(config: HermesMLflowTracingConfig) -> None:
+    data = yaml.safe_load(config.hermes_otel_backend_yaml())
+
+    # hermes-otel's generic OTLP backend does not interpolate ${ENV_VAR}
+    # placeholders in arbitrary headers, so put the already-derived Basic
+    # Authorization value into this runtime-only file.
+    backend = data["backends"][0]
+    backend["headers"]["Authorization"] = config.authorization_header
+
     OTEL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = OTEL_CONFIG_PATH.with_suffix(".yaml.tmp")
-    tmp_path.write_text(config.hermes_otel_backend_yaml(), encoding="utf-8")
+
+    tmp_path = OTEL_CONFIG_PATH.with_suffix(".tmp")
+    tmp_path.write_text(
+        yaml.safe_dump(data, sort_keys=False),
+        encoding="utf-8",
+    )
     tmp_path.chmod(0o600)
     tmp_path.replace(OTEL_CONFIG_PATH)
-    os.environ["HERMES_OTEL_CONFIG"] = str(OTEL_CONFIG_PATH)
 
 
 def _enable_hermes_otel() -> None:
@@ -44,13 +60,18 @@ def main() -> int:
     try:
         tracing = HermesMLflowTracingConfig.from_env()
     except (HermesMLflowTracingError, RuntimeError) as exc:
-        print(f"[deepfix-mlflow] tracing bootstrap failed: {exc}", file=sys.stderr)
+        print(
+            f"[deepfix-mlflow] tracing bootstrap failed: {exc}",
+            file=sys.stderr,
+        )
         return 1
 
-    print(f"[deepfix-mlflow] MLflow tracing route: {tracing.redacted_summary()}")
+    print(
+        f"[deepfix-mlflow] MLflow tracing route: "
+        f"{tracing.redacted_summary()}"
+    )
 
     _write_otel_config(tracing)
-    os.environ.update(tracing.exporter_environment())
     _scrub_service_password_inputs()
 
     try:
@@ -64,24 +85,25 @@ def main() -> int:
         return exc.returncode or 1
 
     print(
-        f"[deepfix-mlflow] hermes-otel config written to {OTEL_CONFIG_PATH}; "
-        "plugin enabled"
+        f"[deepfix-mlflow] hermes-otel runtime config written to "
+        f"{OTEL_CONFIG_PATH}; plugin enabled"
     )
 
     if _bootstrap_mode():
         print(
             "[deepfix-mlflow] HERMES_BOOTSTRAP_MODE=true: "
-            "container ready for `hermes setup`. "
-            "Set HERMES_BOOTSTRAP_MODE=false and redeploy when setup is complete."
+            "container ready for `hermes setup`."
         )
         os.execvp("sleep", ["sleep", "infinity"])
 
     print("[deepfix-mlflow] starting Hermes gateway")
+
     os.execvpe(
         "hermes",
         ["hermes", "gateway", "run"],
         os.environ,
     )
+
     return 0
 
 

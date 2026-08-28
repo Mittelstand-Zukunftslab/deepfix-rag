@@ -17,6 +17,8 @@ services:
     environment:
       HERMES_HOME: /opt/data
       HERMES_BOOTSTRAP_MODE: ${HERMES_BOOTSTRAP_MODE:-true}
+      HERMES_OTEL_CONFIG: /tmp/hermes_otel.yaml
+      HERMES_OTEL_DEBUG: ${HERMES_OTEL_DEBUG:-false}
 
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI}
       MLFLOW_DEV_WORKSPACE: ${MLFLOW_DEV_WORKSPACE}
