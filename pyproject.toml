@@ -18,7 +18,7 @@ classifiers = [
 dependencies = [
     "datasets>=2.14.0",
     "deepeval>=1.0.0",
-    "lancedb>=0.5.0",
+    "lancedb>=0.37.1,<0.38.0",
     "litellm>=1.0.0",
     "loguru",
     "mlflow>=2.15.0",
