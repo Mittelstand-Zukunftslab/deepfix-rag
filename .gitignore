@@ -197,4 +197,7 @@ notebooks/.deepeval/
 data/
 real_index/
 
+# scratch reports/notebooks from the agent onboarding exercise - not project deliverables
+knowledge/
+
 
