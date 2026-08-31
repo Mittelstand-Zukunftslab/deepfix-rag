@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "candidate_id": "octen_candidate_001",
+  "rag_type": "vector_rag",
+  "configuration": {
+    "chunking": {
+      "strategy": "none",
+      "chunk_size": 0,
+      "chunk_overlap": 0,
+      "parameters": {}
+    },
+    "embedding": {
+      "provider": "aisc",
+      "model": "octen-embedding-8b",
+      "parameters": {
+        "batch_size": 32
+      }
+    },
+    "vector_store": {
+      "type": "lancedb",
+      "parameters": {
+        "table": "documents"
+      }
+    },
+    "query_rewriting": {
+      "enabled": false,
+      "strategy": null,
+      "provider": null,
+      "model": null,
+      "parameters": {}
+    },
+    "retrieval": {
+      "strategy": "hybrid",
+      "top_k": 10,
+      "parameters": {
+        "hybrid_alpha": 0.5
+      }
+    },
+    "reranking": {
+      "enabled": false,
+      "type": null,
+      "model": null,
+      "top_n": null,
+      "parameters": {}
+    },
+    "context_assembly": {
+      "strategy": "concatenation",
+      "max_chunks": 10,
+      "parameters": {
+        "separator": "\n\n"
+      }
+    },
+    "generation": {
+      "provider": "hpi",
+      "model": "openai/openrouter/qwen/qwen3.8-27b",
+      "parameters": {
+        "temperature": 0.0,
+        "max_tokens": 1024
+      }
+    },
+    "prompts": {
+      "system": "prompts:/target-rag-system-main/1",
+      "query_rewrite": null
+    }
+  },
+  "config_hash": "sha256:549754cec6a6ac6b28985974bc2040784418dce60ce163a6243e776ec307214e"
+}

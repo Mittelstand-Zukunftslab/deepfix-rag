@@ -1,0 +1,26 @@
+
+SPRINT 1 DEEPEVAL BASELINE — legal-rag-bench (100 QA pairs)
+
+Faithfulness:        0.877  (threshold 0.80)  -> PASS
+Contextual Precision: 0.710  (threshold 0.75)  -> FAIL (close)
+Answer Correctness:   0.593  (threshold 0.75)  -> FAIL
+
+Root cause investigation (36 low-scoring cases analyzed):
+- Model does NOT hallucinate; it correctly says "context does not contain
+  the answer" when retrieval fails, which is why Faithfulness stays high.
+- Root cause is retrieval precision on multi-hop / cross-domain questions:
+  the correct passage was NOT in top-20 retrieved results for several
+  failing cases (e.g. double jeopardy, s78A evidence exception, mental
+  impairment witness rule).
+- Retrieved chunks were topically adjacent but not the precise passage
+  (e.g. "Duplicity" retrieved instead of "Double Jeopardy"; bushfire
+  charge elements retrieved instead of the cross-referenced Evidence Act
+  exception embedded within a bushfire scenario).
+- This matches legal-rag-bench's stated design as a "reasoning-intensive"
+  benchmark requiring multi-hop retrieval across disconnected sections.
+
+Candidate fixes for future sprints (not implemented yet):
+- Hybrid BM25 + vector search
+- Query rewriting / decomposition for multi-hop questions
+- Reranking step after initial top-k retrieval
+- Increasing top_k (tested up to 8, only partial improvement)

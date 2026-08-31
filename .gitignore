@@ -189,3 +189,12 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+.idea/
+.venv-wsl/
+notebooks/.deepeval/
+
+data/
+real_index/
+
+

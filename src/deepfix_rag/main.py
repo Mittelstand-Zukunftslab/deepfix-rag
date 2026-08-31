@@ -1,8 +1,14 @@
 """DeepFix CLI entrypoint."""
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import typer
 
-from deepfix_rag.cli import config, diagnostic, eval, export, index
+from deepfix_rag.cli import config, dataset, diagnostic, eval, export, index
 
 app = typer.Typer(
     name="deepfix",
@@ -11,6 +17,8 @@ app = typer.Typer(
 )
 
 # Register subcommands
+app.add_typer(dataset.app, name="dataset")
+
 app.command(
     name="eval", help="Run DeepEval evaluation on a dataset using a given RAG configuration."
 )(eval.eval_cmd)

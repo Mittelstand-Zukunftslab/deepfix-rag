@@ -1,0 +1,3 @@
+system,faithfulness,contextual_precision,answer_correctness,n_questions
+Qdrant_baseline,0.877,0.71,0.593,100
+LanceDB_hybrid_v2,0.893525641025641,0.654645946712018,0.7320000000000002,100
