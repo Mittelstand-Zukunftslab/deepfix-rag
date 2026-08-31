@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import lancedb
 from pydantic import BaseModel, Field
 
-from deepfix_rag.config.schema import RAGConfig
+from deepfix_rag.config.schema import UNIMPLEMENTED_BACKENDS, RAGConfig
 from deepfix_rag.retrieval.models import EmbeddingClient
 
 load_dotenv()
@@ -98,6 +98,12 @@ def execute_retrieval(
     """Execute retrieval over a LanceDB index (or fallback JSON index) for a query."""
     if not index_dir:
         raise ValueError("index_dir is required for retrieval.")
+
+    if config.retrieval.backend in UNIMPLEMENTED_BACKENDS:
+        raise NotImplementedError(
+            f"Retrieval backend '{config.retrieval.backend}' is declared in the schema but not "
+            f"yet implemented in execute_retrieval - see issue #2."
+        )
 
     embedder = EmbeddingClient(model=config.embedding.model, provider=config.embedding.provider)
     query_vector = embedder.embed_query(query)

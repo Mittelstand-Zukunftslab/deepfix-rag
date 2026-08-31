@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from deepfix_rag.config.mutator import apply_mutation, compute_config_diff
 from deepfix_rag.config.schema import RAGConfig
 
@@ -24,3 +27,14 @@ def test_compute_config_diff():
     diffs = compute_config_diff(base, mutated)
     assert "chunking.size" in diffs
     assert diffs["chunking.size"] == (512, 1024)
+
+
+def test_retrieval_backend_rejects_invalid_value():
+    with pytest.raises(ValidationError):
+        RAGConfig.model_validate({"retrieval": {"backend": "not-a-real-backend"}})
+
+
+def test_retrieval_backend_accepts_declared_values():
+    for backend in ("pyterrier", "bm25", "dense", "hybrid", "graph", "vectorless"):
+        config = RAGConfig.model_validate({"retrieval": {"backend": backend}})
+        assert config.retrieval.backend == backend

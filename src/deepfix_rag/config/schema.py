@@ -1,6 +1,14 @@
 """Pydantic schema for RAG configuration validation."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+RetrievalBackend = Literal["pyterrier", "bm25", "dense", "hybrid", "graph", "vectorless"]
+
+# Backends declared above but not yet implemented in execute_retrieval.
+# pyterrier/bm25: never had an implementation. graph/vectorless: tracked in issue #2.
+UNIMPLEMENTED_BACKENDS = frozenset({"pyterrier", "bm25", "graph", "vectorless"})
 
 
 class ChunkingConfig(BaseModel):
@@ -26,8 +34,9 @@ class EmbeddingConfig(BaseModel):
 class RetrievalConfig(BaseModel):
     """Retrieval parameters."""
 
-    backend: str = Field(
-        default="pyterrier", description="Retrieval backend (pyterrier, bm25, dense, hybrid)."
+    backend: RetrievalBackend = Field(
+        default="hybrid",
+        description="Retrieval backend (pyterrier, bm25, dense, hybrid, graph, vectorless).",
     )
     top_k: int = Field(
         default=10, ge=1, le=100, description="Number of retrieved documents before re-ranking."
