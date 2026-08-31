@@ -69,13 +69,8 @@ def _download_hf_dataset(dataset_name: str, split: str, corpus_path: Path, qa_pa
                 f.write(json.dumps(qa_dict) + "\n")
                 
     except Exception as e:
-        console.print(f"[red]Failed to load dataset: {e}[/red]")
-        console.print("[yellow]Falling back to scaffolding for testing purposes.[/yellow]")
-        # Scaffold fallback
-        with open(corpus_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"id": "doc1", "text": "Sample legal text"}) + "\n")
-        with open(qa_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"query_id": "q1", "query": "What is the penalty for reckless driving?", "relevant_docs": ["doc1"], "unanswerable": False}) + "\n")
+        console.print(f"[red]Failed to load dataset '{dataset_name}' from HuggingFace: {e}[/red]")
+        raise typer.Exit(code=1)
 
 @app.command("load")
 def load_dataset(

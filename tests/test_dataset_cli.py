@@ -50,6 +50,24 @@ def test_dataset_list():
     assert "dev" in result.stdout
 
 
+def test_dataset_load_fails_loudly_on_hf_fetch_error(monkeypatch):
+    """A failed HuggingFace fetch must fail the command, not silently write fake data."""
+    import datasets
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("simulated network failure")
+
+    monkeypatch.setattr(datasets, "load_dataset", _raise)
+
+    result = runner.invoke(app, ["dataset", "load", "--name", "legal-rag-bench", "--split", "dev"])
+
+    assert result.exit_code != 0
+    assert "Failed to load dataset" in result.stdout
+
+    corpus_path = DATA_ROOT / "legal-rag-bench" / "dev" / "corpus.jsonl"
+    assert not corpus_path.exists() or corpus_path.stat().st_size == 0
+
+
 def test_dataset_generate_unanswerable():
     """Verify synthetic unanswerable generation respects ratios and paths."""
     out_file = Path("data/synth_out.jsonl")
