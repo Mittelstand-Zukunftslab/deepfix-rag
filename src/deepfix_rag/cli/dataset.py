@@ -15,6 +15,17 @@ console = Console()
 
 DATA_ROOT = Path("data/datasets")
 
+# Registry mapping local dataset preset names to HuggingFace repositories.
+# (Update the namespaces if any of the target datasets are hosted privately or elsewhere)
+BENCHMARK_REGISTRY = {
+    "legal-rag-bench": "isaacus/legal-rag-bench",
+    "garage": "ds-ba/GaRAGe", 
+    "blleqa": "ds-ba/bLLeQA",
+    "browsecomp-plus": "ds-ba/BrowseComp-Plus",
+    "enterpriserag-bench": "ds-ba/EnterpriseRAG-Bench",
+    "mtrag": "ds-ba/mtRAG",
+}
+
 def _download_hf_dataset(dataset_name: str, split: str, corpus_path: Path, qa_path: Path):
     """Download and format dataset from HuggingFace."""
     from datasets import load_dataset
@@ -74,7 +85,7 @@ def _download_hf_dataset(dataset_name: str, split: str, corpus_path: Path, qa_pa
 
 @app.command("load")
 def load_dataset(
-    name: str = typer.Option(..., "--name", help="Dataset preset (e.g. legal-rag-bench) or custom path"),
+    name: str = typer.Option(..., "--name", help="Dataset preset (e.g. garage, mtrag) or custom HF path"),
     split: str = typer.Option(..., "--split", help="Target split (must be 'dev' or 'test')"),
     stream: bool = typer.Option(False, "--stream", help="Enable streaming for large datasets"),
 ):
@@ -91,12 +102,10 @@ def load_dataset(
     corpus_path = out_dir / "corpus.jsonl"
     qa_path = out_dir / "qa.jsonl"
 
-    if name == "legal-rag-bench":
-        _download_hf_dataset("isaacus/legal-rag-bench", split, corpus_path, qa_path)
-    else:
-        console.print(f"Preset '{name}' scaffolded mapped to {out_dir}.")
-        corpus_path.touch()
-        qa_path.touch()
+    # Map the requested name to a known HuggingFace repository if it's a built-in preset
+    hf_repo = BENCHMARK_REGISTRY.get(name, name)
+    
+    _download_hf_dataset(hf_repo, split, corpus_path, qa_path)
 
     console.print(f"[bold green]Dataset '{name}' loaded and isolated successfully for {split}![/bold green]")
 
