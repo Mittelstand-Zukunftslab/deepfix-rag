@@ -3,6 +3,7 @@
 import os
 from dotenv import load_dotenv
 import litellm
+import requests
 
 load_dotenv()
 
@@ -28,6 +29,12 @@ def _resolve_provider_endpoints(
             "AISC_KEY",
             os.getenv("OCTEN_KEY", "sk-5lWnPeBK4omoI8l9UHOjhw"),
         )
+        return base_url, api_key
+
+    # OpenRouter native (only trigger if the provider is explicitly openrouter)
+    if provider_lower == "openrouter":
+        base_url = "https://openrouter.ai/api/v1"
+        api_key = os.getenv("OPENROUTER_KEY", os.getenv("LITELLM_KEY", ""))
         return base_url, api_key
 
     # Default to LiteLLM / HPI proxy
@@ -82,12 +89,12 @@ class EmbeddingClient:
 
 
 class RerankClient:
-    """Client for cross-encoder re-ranking via the LiteLLM proxy."""
+    """Client for cross-encoder re-ranking."""
 
     def __init__(
         self,
-        model: str = "rerank-english-v3.0",
-        provider: str = "hpi",
+        model: str = "qwen/qwen3-reranker-8b",
+        provider: str = "openrouter",
         api_base: str | None = None,
         api_key: str | None = None,
     ):
@@ -98,21 +105,37 @@ class RerankClient:
         self.api_key = api_key or resolved_key
 
     def rerank(self, query: str, documents: list[str], top_n: int = 5) -> list[int]:
-        """Re-rank candidate documents and return top_n document indices."""
+        """Re-rank candidate documents and return top_n document indices exactly matching OpenRouter's rerank payload."""
         if not documents:
             return []
-        resp = litellm.rerank(
-            model=f"openai/{self.model}",
-            query=query,
-            documents=documents,
-            top_n=min(top_n, len(documents)),
-            api_base=self.api_base,
-            api_key=self.api_key,
-            custom_llm_provider="openai",
-            timeout=90,
-        )
-        results = resp["results"] if isinstance(resp, dict) else resp.results
-        return [r["index"] if isinstance(r, dict) else r.index for r in results]
+            
+        endpoint = f"{self.api_base.rstrip('/')}/rerank"
+        if not endpoint.endswith("/v1/rerank") and "openrouter" in self.api_base:
+            endpoint = "https://openrouter.ai/api/v1/rerank"
+            
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        payload = {
+            "model": self.model,
+            "query": query,
+            "documents": documents,
+            "top_n": min(top_n, len(documents))
+        }
+
+        resp = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+        
+        if not resp.ok:
+            raise RuntimeError(f"Reranking API failed: {resp.status_code} - {resp.text}")
+            
+        data = resp.json()
+        
+        # OpenRouter returns an array of results with an "index" field mapping to the original document order
+        results = data.get("results", [])
+        
+        return [r["index"] for r in results]
 
 
 class GenerationClient:
@@ -154,7 +177,7 @@ class GenerationClient:
             timeout=90,
             max_tokens=1024,
         )
-        answer = resp.choices[0].message.content
+        answer = resp.choices[0].message.content or ""
         if not return_usage:
             return answer
         usage = getattr(resp, "usage", None)
