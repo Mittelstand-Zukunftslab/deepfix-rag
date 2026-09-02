@@ -171,6 +171,9 @@ def run_evaluation(
         mlflow.log_param("n_questions", len(qa_pairs))
 
         for i, qa in enumerate(qa_pairs):
+            query = qa.get("question") or qa.get("query", "")
+            expected_output = qa.get("answer") or qa.get("expected_output", "N/A")
+            
             question_id = qa.get("id", f"q_{i}")
             try:
                 with mlflow.start_span(name="rag_request", span_type="CHAIN") as parent_span:
@@ -183,10 +186,9 @@ def run_evaluation(
                             }
                         )
                     if parent_span:
-                        parent_span.set_inputs({"question": qa["question"]})
+                        parent_span.set_inputs({"question": query})
 
                     with mlflow.start_span(name="query_processing", span_type="PARSER") as span:
-                        query = qa["question"]
                         if span:
                             span.set_inputs({"question": query})
                             span.set_outputs({"query": query})
@@ -232,13 +234,13 @@ def run_evaluation(
                 deflections += 1
 
             tc = LLMTestCase(
-                input=qa["question"],
+                input=query,
                 actual_output=answer or "",
-                expected_output=qa["answer"],
+                expected_output=expected_output,
                 retrieval_context=context,
             )
 
-            row = {"index": i, "question": qa["question"], "answer": answer}
+            row = {"index": i, "question": query, "answer": answer}
             for key in ALL_KEYS:
                 row[f"{key}_score"] = None
                 row[f"{key}_pass"] = None

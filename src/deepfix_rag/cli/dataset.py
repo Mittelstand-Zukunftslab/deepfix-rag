@@ -32,13 +32,21 @@ def _download_hf_dataset(dataset_name: str, split: str, corpus_path: Path, qa_pa
     
     console.print(f"Fetching [cyan]{dataset_name}[/cyan] from HuggingFace...")
     
-    # We load the split we want (HuggingFace usually uses 'validation' for dev, and 'test' for test)
     hf_split = "validation" if split == "dev" else "test"
     
     try:
         # Load the corpus/passages
+        try:
+            corpus = load_dataset(dataset_name, "corpus", split=hf_split)
+        except ValueError as ve:
+            # Fallback if the requested split is missing, just try 'test' or 'train'
+            if "Unknown split" in str(ve) and hf_split == "validation":
+                hf_split = "test"
+                corpus = load_dataset(dataset_name, "corpus", split=hf_split)
+            else:
+                raise ve
+
         console.print(f"Loading corpus split: {hf_split}...")
-        corpus = load_dataset(dataset_name, "corpus", split=hf_split)
         with open(corpus_path, "w", encoding="utf-8") as f:
             for doc in corpus:
                 doc_dict = {
@@ -47,9 +55,12 @@ def _download_hf_dataset(dataset_name: str, split: str, corpus_path: Path, qa_pa
                 }
                 f.write(json.dumps(doc_dict) + "\n")
                 
-        # Load the queries/qrels
+        # Load the queries/qa
         console.print(f"Loading queries split: {hf_split}...")
-        queries = load_dataset(dataset_name, "queries", split=hf_split)
+        try:
+            queries = load_dataset(dataset_name, "queries", split=hf_split)
+        except Exception:
+            queries = load_dataset(dataset_name, "qa", split=hf_split)
         
         # We need qrels (ground truth mapping) to stitch queries to relevant docs
         try:
@@ -61,15 +72,15 @@ def _download_hf_dataset(dataset_name: str, split: str, corpus_path: Path, qa_pa
                     qrel_map[qid] = []
                 qrel_map[qid].append(str(row["doc_id"]))
         except Exception:
-            # Fallback if there is no explicit qrels split (some datasets structure it differently)
             qrel_map = None
             
         with open(qa_path, "w", encoding="utf-8") as f:
             for q in queries:
                 qid = str(q.get("query_id", q.get("id")))
                 
-                # Fetch relevant docs from qrel map, or directly from the query row if provided
                 rel_docs = qrel_map.get(qid, []) if qrel_map else q.get("relevant_docs", [])
+                if not rel_docs and q.get("doc_id"):
+                    rel_docs = [str(q["doc_id"])]
                 
                 qa_dict = {
                     "query_id": qid,
@@ -102,54 +113,7 @@ def load_dataset(
     corpus_path = out_dir / "corpus.jsonl"
     qa_path = out_dir / "qa.jsonl"
 
-    # Map the requested name to a known HuggingFace repository if it's a built-in preset
     hf_repo = BENCHMARK_REGISTRY.get(name, name)
-    
     _download_hf_dataset(hf_repo, split, corpus_path, qa_path)
 
     console.print(f"[bold green]Dataset '{name}' loaded and isolated successfully for {split}![/bold green]")
-
-
-@app.command("list")
-def list_datasets():
-    """List available cached datasets and their split status."""
-    if not DATA_ROOT.exists():
-        console.print("No datasets found in data/datasets/.")
-        return
-
-    empty = True
-    for ds_dir in DATA_ROOT.iterdir():
-        if ds_dir.is_dir():
-            empty = False
-            splits = [d.name for d in ds_dir.iterdir() if d.is_dir()]
-            split_str = ", ".join(splits) if splits else "No splits generated"
-            console.print(f"- [bold cyan]{ds_dir.name}[/bold cyan]: {split_str}")
-            
-    if empty:
-        console.print("No datasets found in data/datasets/.")
-
-
-@app.command("generate-unanswerable")
-def generate_unanswerable(
-    dataset: str = typer.Option(..., "--dataset", help="Path to loaded dataset split"),
-    ratio: float = typer.Option(0.2, "--ratio", help="Target ratio (0.0 - 1.0) of unanswerable queries to synthesize"),
-    output: str = typer.Option(..., "--output", help="Output path for the perturbed qrels/queries"),
-):
-    """Synthesize out-of-domain and unanswerable queries for deflection evaluation."""
-    if not (0.0 <= ratio <= 1.0):
-        console.print("[red]Error: Ratio must be between 0.0 and 1.0[/red]")
-        raise typer.Exit(1)
-        
-    ds_path = Path(dataset)
-    if not ds_path.exists():
-        console.print(f"[red]Error: Dataset path '{dataset}' not found.[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"[green]Generating synthetic unanswerable queries via perturbation (ratio={ratio})...[/green]")
-    console.print(f"[green]Tagging deflection ground truth constraints...[/green]")
-    
-    out_path = Path(output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.touch()
-    
-    console.print(f"[bold green]Saved augmented dataset to {output}[/bold green]")
