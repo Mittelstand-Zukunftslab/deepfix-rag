@@ -79,12 +79,20 @@ def _download_hf_dataset(dataset_name: str, split: str, corpus_path: Path, qa_pa
                 qid = str(q.get("query_id", q.get("id")))
                 
                 rel_docs = qrel_map.get(qid, []) if qrel_map else q.get("relevant_docs", [])
-                if not rel_docs and q.get("doc_id"):
-                    rel_docs = [str(q["doc_id"])]
                 
+                # Dynamic mapping for legal-rag-bench formats
+                if not rel_docs:
+                    if q.get("doc_id"):
+                        rel_docs = [str(q["doc_id"])]
+                    elif q.get("relevant_passage_id"):
+                        rel_docs = [str(q["relevant_passage_id"])]
+                
+                query_text = q.get("query") or q.get("question") or q.get("text", "")
+                answer_text = q.get("answer") or q.get("expected_output", "")
                 qa_dict = {
                     "query_id": qid,
-                    "query": q.get("query", q.get("text", "")),
+                    "query": query_text,
+                    "answer": answer_text,
                     "relevant_docs": rel_docs,
                     "unanswerable": len(rel_docs) == 0
                 }
