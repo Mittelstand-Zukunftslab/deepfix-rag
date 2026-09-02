@@ -143,7 +143,7 @@ class GenerationClient:
 
     def __init__(
         self,
-        model: str = "openai/openrouter/qwen/qwen3.6-plus",
+        model: str = "openai/openrouter/qwen/qwen3.8-27b",
         provider: str = "hpi",
         api_base: str | None = None,
         api_key: str | None = None,
