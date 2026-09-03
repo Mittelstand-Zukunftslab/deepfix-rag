@@ -21,7 +21,7 @@ rerank:
   top_n: 5
 
 generation:
-  model: openai/openrouter/qwen/qwen3.6-plus
+  model: openai/openrouter/qwen/qwen3.8-27b
   provider: hpi
   temperature: 0.0
   max_tokens: 1024

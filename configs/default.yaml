@@ -9,7 +9,7 @@ retrieval:
   hybrid_alpha: 0.5
 
 generation:
-  model: openai/openrouter/qwen/qwen3.6-plus
+  model: openai/openrouter/qwen/qwen3.8-27b
   provider: hpi
 
 rerank:

@@ -10,7 +10,7 @@ import lancedb
 from pydantic import BaseModel, Field
 
 from deepfix_rag.config.schema import UNIMPLEMENTED_BACKENDS, RAGConfig
-from deepfix_rag.retrieval.models import EmbeddingClient
+from deepfix_rag.retrieval.models import EmbeddingClient, RerankClient
 
 load_dotenv()
 
@@ -70,10 +70,10 @@ def _get_lancedb_table(index_dir: str):
                 "aws_virtual_hosted_style_request": "false",
             }
             db = lancedb.connect(index_dir, storage_options=storage_options)
-            tables = _extract_table_names(db)
-            if not tables:
+            tabs = _extract_table_names(db)
+            if not tabs:
                 return None
-            table_name = "legal_passages" if "legal_passages" in tables else ("documents" if "documents" in tables else tables[0])
+            table_name = "legal_passages" if "legal_passages" in tabs else ("documents" if "documents" in tabs else tabs[0])
             return db.open_table(table_name)
         except Exception:
             return None
@@ -83,10 +83,10 @@ def _get_lancedb_table(index_dir: str):
         return None
     try:
         db = lancedb.connect(str(out_dir))
-        tables = _extract_table_names(db)
-        if not tables:
+        tabs = _extract_table_names(db)
+        if not tabs:
             return None
-        table_name = "documents" if "documents" in tables else ("legal_passages" if "legal_passages" in tables else tables[0])
+        table_name = "documents" if "documents" in tabs else ("legal_passages" if "legal_passages" in tabs else tabs[0])
         return db.open_table(table_name)
     except Exception:
         return None
@@ -107,8 +107,13 @@ def execute_retrieval(
 
     embedder = EmbeddingClient(model=config.embedding.model, provider=config.embedding.provider)
     query_vector = embedder.embed_query(query)
+    
+    # top_k is our initial broad net size
     top_k = config.retrieval.top_k
 
+    results = []
+    
+    # 1. Broad Retrieval (LanceDB or JSON)
     table = _get_lancedb_table(index_dir)
     if table is not None:
         try:
@@ -126,30 +131,47 @@ def execute_retrieval(
             else:
                 res_df = table.search(query_vector).limit(top_k).to_pandas()
 
-            results = []
             for _, row in res_df.iterrows():
                 doc_id = str(row.get("id") or row.get("doc_id") or row.get("node_id") or "")
                 score = float(row.get("_distance", row.get("score", 1.0)))
                 text = str(row.get("text", ""))
                 results.append(RetrievalResult(doc_id=doc_id, score=score, text=text))
-            return results
         except Exception:
             pass
-
-    entries = _load_legacy_json_index(index_dir)
-    if not entries:
-        return []
-
-    scored = [
-        (
-            _cosine_similarity(query_vector, entry["embedding"]),
-            entry,
-        )
-        for entry in entries
-    ]
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-
-    return [
-        RetrievalResult(doc_id=str(entry.get("doc_id") or entry.get("id")), score=score, text=entry["text"])
-        for score, entry in scored[:top_k]
-    ]
+            
+    if not results:
+        entries = _load_legacy_json_index(index_dir)
+        if entries:
+            scored = [
+                (
+                    _cosine_similarity(query_vector, entry["embedding"]),
+                    entry,
+                )
+                for entry in entries
+            ]
+            scored.sort(key=lambda pair: pair[0], reverse=True)
+            results = [
+                RetrievalResult(doc_id=str(e.get("doc_id") or e.get("id")), score=s, text=e["text"])
+                for s, e in scored[:top_k]
+            ]
+            
+    # 2. Advanced Cross-Encoder Re-Ranking Stage
+    if results and config.rerank.enabled and getattr(config.rerank, "model", None):
+        reranker = RerankClient(model=config.rerank.model)
+        doc_texts = [r.text for r in results]
+        
+        # Ask Qwen Reranker to score our texts and give back the final top indices
+        top_indices = reranker.rerank(query, doc_texts, top_n=config.rerank.top_n)
+        
+        re_ranked = []
+        # Assign a synthesized score based on their new rank order (0=highest, N=lowest rank) 
+        # because the API returns indices grouped by highest relevance first.
+        for rank, old_index in enumerate(top_indices):
+            best_match = results[old_index]
+            # Replace the dense/vector score with its new cross-decoder rank
+            best_match.score = float(len(top_indices) - rank)  
+            re_ranked.append(best_match)
+            
+        results = re_ranked
+        
+    return results
