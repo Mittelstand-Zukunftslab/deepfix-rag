@@ -1,6 +1,7 @@
 """vLLM / Qwen / Octen embeddings, re-ranking, and generation client — via LiteLLM and OpenAI APIs."""
 
 import os
+import time
 from dotenv import load_dotenv
 import litellm
 import requests
@@ -72,16 +73,29 @@ class EmbeddingClient:
         """Generate embedding vectors for a list of document strings."""
         if not texts:
             return []
+            
         model_str = self._normalize_model_name()
-        resp = litellm.embedding(
-            model=model_str,
-            input=texts,
-            api_base=self.api_base,
-            api_key=self.api_key,
-            custom_llm_provider="openai",
-            timeout=90,
-        )
-        return [item["embedding"] for item in resp["data"]]
+        
+        last_err = None
+        # Add rate limit backoff for large indexing workloads
+        for attempt in range(5):
+            try:
+                resp = litellm.embedding(
+                    model=model_str,
+                    input=texts,
+                    api_base=self.api_base,
+                    api_key=self.api_key,
+                    custom_llm_provider="openai",
+                    timeout=90,
+                )
+                return [item["embedding"] for item in resp["data"]]
+            except Exception as e:
+                last_err = e
+                if "429" in str(e):
+                    time.sleep(2 ** attempt)
+                else:
+                    raise e
+        raise last_err
 
     def embed_query(self, text: str) -> list[float]:
         """Generate embedding vector for a single query."""
@@ -89,7 +103,7 @@ class EmbeddingClient:
 
 
 class RerankClient:
-    """Client for cross-encoder re-ranking."""
+    """Client for cross-encoder re-ranking. Direct API implementation for OpenRouter per Fadel implementation request."""
 
     def __init__(
         self,
@@ -99,19 +113,17 @@ class RerankClient:
         api_key: str | None = None,
     ):
         self.model = model
-        self.provider = os.getenv("DEEPFIX_INFERENCE_PROVIDER", provider)
-        resolved_base, resolved_key = _resolve_provider_endpoints(self.provider, self.model)
-        self.api_base = api_base or resolved_base
-        self.api_key = api_key or resolved_key
+        
+        # Override to Fadel's OpenRouter specification directly for exactly reproducible results
+        self.api_base = api_base or os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1")
+        self.api_key = api_key or os.getenv("OPENROUTER_KEY", os.getenv("LITELLM_KEY", ""))
 
     def rerank(self, query: str, documents: list[str], top_n: int = 5) -> list[int]:
-        """Re-rank candidate documents and return top_n document indices exactly matching OpenRouter's rerank payload."""
+        """Re-rank candidate documents and return top_n document indices exactly matching OpenRouter's HTTP rerank payload."""
         if not documents:
             return []
             
         endpoint = f"{self.api_base.rstrip('/')}/rerank"
-        if not endpoint.endswith("/v1/rerank") and "openrouter" in self.api_base:
-            endpoint = "https://openrouter.ai/api/v1/rerank"
             
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -125,17 +137,28 @@ class RerankClient:
             "top_n": min(top_n, len(documents))
         }
 
-        resp = requests.post(endpoint, headers=headers, json=payload, timeout=90)
+        last_resp_text = ""
+        last_status = 500
         
-        if not resp.ok:
-            raise RuntimeError(f"Reranking API failed: {resp.status_code} - {resp.text}")
+        # Add explicit backoff handler for OpenRouter rate limits (429 Too Many Requests)
+        for attempt in range(5):
+            resp = requests.post(endpoint, headers=headers, json=payload, timeout=90)
             
-        data = resp.json()
-        
-        # OpenRouter returns an array of results with an "index" field mapping to the original document order
-        results = data.get("results", [])
-        
-        return [r["index"] for r in results]
+            if resp.ok:
+                data = resp.json()
+                results = data.get("results", [])
+                return [r["index"] for r in results]
+                
+            last_resp_text = resp.text
+            last_status = resp.status_code
+            
+            if last_status == 429:
+                time.sleep(2 ** attempt + 3) # Wait longer between bursts: 4s, 5s, 7s, 11s, 19s
+                continue
+            else:
+                break
+                
+        raise RuntimeError(f"Reranking API failed: {last_status} - {last_resp_text}")
 
 
 class GenerationClient:
@@ -168,22 +191,33 @@ class GenerationClient:
         """Generate an answer for `query` grounded in `context` chunks."""
         prompt = self._build_prompt(query, context)
         model_str = self.model if self.model.startswith("openai/") else f"openai/{self.model}"
-        resp = litellm.completion(
-            model=model_str,
-            messages=[{"role": "user", "content": prompt}],
-            api_base=self.api_base,
-            api_key=self.api_key,
-            custom_llm_provider="openai",
-            timeout=90,
-            max_tokens=1024,
-        )
-        answer = resp.choices[0].message.content or ""
-        if not return_usage:
-            return answer
-        usage = getattr(resp, "usage", None)
-        usage_dict = {
-            "rag.prompt_tokens": getattr(usage, "prompt_tokens", None),
-            "rag.completion_tokens": getattr(usage, "completion_tokens", None),
-            "rag.total_tokens": getattr(usage, "total_tokens", None),
-        }
-        return answer, usage_dict
+        
+        last_err = None
+        for attempt in range(5):
+            try:
+                resp = litellm.completion(
+                    model=model_str,
+                    messages=[{"role": "user", "content": prompt}],
+                    api_base=self.api_base,
+                    api_key=self.api_key,
+                    custom_llm_provider="openai",
+                    timeout=90,
+                    max_tokens=1024,
+                )
+                answer = resp.choices[0].message.content or ""
+                if not return_usage:
+                    return answer
+                usage = getattr(resp, "usage", None)
+                usage_dict = {
+                    "rag.prompt_tokens": getattr(usage, "prompt_tokens", None),
+                    "rag.completion_tokens": getattr(usage, "completion_tokens", None),
+                    "rag.total_tokens": getattr(usage, "total_tokens", None),
+                }
+                return answer, usage_dict
+            except Exception as e:
+                last_err = e
+                if "429" in str(e):
+                    time.sleep(2 ** attempt + 3)
+                else:
+                    raise e
+        raise last_err
