@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "candidate_id": "octen_candidate_001",
+  "candidate_id": "octen_candidate_002",
   "rag_type": "vector_rag",
   "configuration": {
     "chunking": {
@@ -51,8 +51,8 @@
       }
     },
     "generation": {
-      "provider": "hpi",
-      "model": "openai/openrouter/qwen/qwen3.8-27b",
+      "provider": "aisc",
+      "model": "qwen3-8-27b",
       "parameters": {
         "temperature": 0.0,
         "max_tokens": 1024
@@ -63,5 +63,5 @@
       "query_rewrite": null
     }
   },
-  "config_hash": "sha256:549754cec6a6ac6b28985974bc2040784418dce60ce163a6243e776ec307214e"
+  "config_hash": "sha256:1039bab20093a86e23f5fc1dddda37d2b041cc6aa5cd1f788a8556f23fd00279"
 }

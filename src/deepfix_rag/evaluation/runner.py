@@ -133,10 +133,15 @@ def run_evaluation(
         qa_pairs = qa_pairs[:limit]
 
     generator = GenerationClient(model=config.generation.model)
+    
+    # Judge logic MUST use the OpenRouter proxy, not the local AISC node
+    judge_api_base = os.getenv("LITELLM_URL", "https://litellm.mittelstand-zukunftslab.de")
+    judge_api_key = os.getenv("LITELLM_KEY", "")
+    
     judge = ProxyJudgeLLM(
         model="openai/openrouter/openai/gpt-4.1-mini",
-        api_base=generator.api_base,
-        api_key=generator.api_key,
+        api_base=judge_api_base,
+        api_key=judge_api_key,
     )
 
     def make_metrics():
