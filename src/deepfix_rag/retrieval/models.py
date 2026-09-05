@@ -24,7 +24,7 @@ def _resolve_provider_endpoints(
     ):
         base_url = os.getenv(
             "AISC_URL",
-            os.getenv("OCTEN_URL", "https://api.aisc.hpi.de"),
+            os.getenv("OCTEN_URL", "https://api.aisc.hpi.de/v1"),
         )
         api_key = os.getenv(
             "AISC_KEY",
@@ -166,8 +166,8 @@ class GenerationClient:
 
     def __init__(
         self,
-        model: str = "openai/openrouter/qwen/qwen3.8-27b",
-        provider: str = "hpi",
+        model: str = "qwen3-8-27b",
+        provider: str = "aisc",
         api_base: str | None = None,
         api_key: str | None = None,
     ):

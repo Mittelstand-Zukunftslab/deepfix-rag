@@ -9,8 +9,8 @@ retrieval:
   hybrid_alpha: 0.5
 
 generation:
-  model: openai/openrouter/qwen/qwen3.8-27b
-  provider: hpi
+  model: qwen3-8-27b
+  provider: aisc
 
 rerank:
   enabled: false

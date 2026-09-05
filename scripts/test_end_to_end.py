@@ -79,7 +79,7 @@ from deepfix_rag.retrieval.pipeline import execute_retrieval
 config = RAGConfig.model_validate({
     "embedding": {"model": "octen-embedding-8b", "provider": "aisc"},
     "retrieval": {"backend": "hybrid", "top_k": 2},
-    "generation": {"model": "openai/openrouter/qwen/qwen3.8-27b", "provider": "hpi"},
+    "generation": {"model": "qwen3-8-27b", "provider": "aisc"},
 })
 
 results = execute_retrieval(sample_query, config, index_dir=str(test_index_dir))
@@ -112,7 +112,7 @@ except Exception as e:
 print("\n[Step 5/7] Testing LLM Generation via LiteLLM...")
 from deepfix_rag.retrieval.models import GenerationClient
 
-generator = GenerationClient(model="openai/openrouter/qwen/qwen3.8-27b", provider="hpi")
+generator = GenerationClient(model="qwen3-8-27b", provider="aisc")
 context_chunks = [r.text for r in results]
 answer, usage = generator.generate(sample_query, context_chunks, return_usage=True)
 print(f"  -> Generated Answer:\n     \"{answer.strip()}\"")

@@ -54,7 +54,7 @@ def test_e2e_pipeline_flow():
     assert any("reckless" in r.text.lower() for r in results)
 
     # 4. Generation
-    generator = GenerationClient(model="openai/openrouter/qwen/qwen3.8-27b", provider="hpi")
+    generator = GenerationClient(model="qwen3-8-27b", provider="aisc")
     answer, usage = generator.generate(query, [r.text for r in results], return_usage=True)
     assert len(answer) > 0
     assert "rag.total_tokens" in usage

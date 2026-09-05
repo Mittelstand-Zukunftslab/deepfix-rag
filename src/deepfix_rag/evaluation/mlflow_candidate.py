@@ -69,8 +69,8 @@ def build_manifest() -> dict:
                 "parameters": {"separator": "\n\n"},
             },
             "generation": {
-                "provider": "hpi",
-                "model": "openai/openrouter/qwen/qwen3.8-27b",
+                "provider": "aisc",
+                "model": "qwen3-8-27b",
                 "parameters": {"temperature": 0.0, "max_tokens": 1024},
             },
             "prompts": {
