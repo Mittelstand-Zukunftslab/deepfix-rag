@@ -62,8 +62,8 @@ Inspired by Andrej Karpathy's *AutoResearch* paradigm, **deepfix-rag** provides 
 |  - Dense Vector: LanceDB + Octen 8B   |     |    Correctness, Deflection, Legal)        |
 |    & qwen3-reranker-4b Cross-Encoder  |     |  - MLflow Auto-Tracing (Span Trees,       |
 |  - Hybrid: BM25 + LanceDB Fusion      |     |    Run Metrics, Parameter Diffs)          |
-|  - Vectorless: pageindex structural   |     |  - 6 Standard Text-Only Benchmarks Suites |
-|  - Graph RAG: LightRAG Server (REST)  |     |                                           |
+|  - Vectorless: pageindex structural   |     |  - 3 Core Standard Benchmark Suites       |
+|  - Graph RAG: Memgraph PropertyGraph  |     |                                           |
 +---------------------------------------+     +-------------------------------------------+
 ```
 
@@ -71,15 +71,15 @@ Inspired by Andrej Karpathy's *AutoResearch* paradigm, **deepfix-rag** provides 
 
 ## 2. Goals & Objectives
 
-1. **Deterministic Execution:** Build a production-grade Python CLI (`deepfix-rag`, aliased as `deepfix`) using Typer, Pydantic, and Pydantic-Settings with strict schema validation, strongly-typed environment variable management, and guaranteed deterministic output formatted as machine-readable JSON (`--json`).
+1. **Deterministic Execution:** Build a production-grade Python CLI (`deepfix-rag`, aliased as `deepfix`) using Typer, Pydantic, and Pydantic-Settings with strict schema validation, strongly-typed environment variable management, and functionally reproducible output within tolerance $\varepsilon$ formatted as machine-readable JSON (`--json`).
 2. **Multi-Paradigm Retrieval:** Replace legacy pyTerrier implementations with four modern, production-grade retrieval paradigms orchestrated via LlamaIndex:
    - **Dense Vector:** LanceDB + `Octen 8B` (fine-tuned from `Qwen3-Embedding-8B`) with `qwen3-reranker-4b` for candidate re-ranking.
    - **Hybrid:** BM25 lexical search + LanceDB dense vector fusion.
    - **Vectorless:** `pageindex` structural and hierarchical document retrieval.
-   - **Graph RAG:** `LightRAG Server` (prioritizing client/server REST API integration over embedding the heavy LightRAG SDK) for knowledge graph extraction and entity-relation retrieval.
-3. **Standardized Skill Library & Plugin Manifest:** Create modular failure remediation skills under `.agents/skills/<skill-name>/SKILL.md` covering $\ge 5$ discrete retrieval failure modes, packaged with declarative manifest files (`plugin.json` / `plugin.yaml` in `plugins/deepfix-rag/`) conforming to **Claude Code**, **Hermes**, and **Codex** specifications, making skills seamlessly discoverable and installable from one coding harness to another to diagnose and heal RAG regressions.
-4. **Autonomous Closed Loop:** Tune the Hermes agent harness running against self-hosted Qwen 3.8 27B on the HPI infrastructure to execute $\ge 5$ continuous optimization cycles autonomously, keeping mutations that improve DeepEval metrics and reverting degradations.
-5. **Comprehensive Benchmarking & Expert Grounding:** Ingest 6 standardized text-only benchmark suites with strict `dev`/`test` split isolation, ensuring pipeline quality meets or exceeds strict quality gates and performs within $\le 10\%$ of the German Bundestag parliamentary expert baseline.
+   - **Graph RAG:** `MemgraphPropertyGraphStore` integrated via LlamaIndex's native `PropertyGraphIndex` for high-performance in-memory knowledge graph extraction, openCypher queries, and entity-relation retrieval.
+3. **Standardized Skill Library & Plugin Manifest:** Create modular failure remediation skills under `.agents/skills/<skill-name>/SKILL.md` targeting discrete retrieval failure modes (chunking, query rewriting, reranking calibration, deflection/refusal, and legal grounding), packaged with declarative manifest files (`plugin.json` / `plugin.yaml` in `plugins/deepfix-rag/`) conforming to **Claude Code**, **Hermes**, and **Codex** specifications, making skills seamlessly discoverable and installable from one coding harness to another to diagnose and heal RAG regressions.
+4. **Autonomous Closed Loop:** Tune the Hermes agent harness running against self-hosted Qwen 3.8 27B on the HPI infrastructure to execute ≥ 5 continuous optimization cycles autonomously, keeping mutations that achieve meaningful DeepEval improvements (Δ ≥ +2.5%) and reverting degradations or noise.
+5. **Comprehensive Benchmarking & Expert Grounding:** Ingest 3 standardized text-only benchmark suites (`GaRAGe`, `bLLeQA`, and `Legal RAG Bench`) with strict `dev`/`test` split isolation, ensuring pipeline quality meets or exceeds strict quality gates and performs within ≤ 10% of the German Bundestag parliamentary expert baseline.
 6. **Full Observability:** Track every agent iteration, configuration diff, diagnostic breakdown, and DeepEval evaluation score in a centralized MLflow tracking instance with complete hierarchical span trees.
 
 ---
@@ -120,12 +120,12 @@ deepfix-rag index --dataset <path|name> --paradigm <dense|hybrid|vectorless|grap
 - **Characteristics:** Leverages document layout structure, table of contents trees, section outlines, and semantic heading hierarchies.
 - **Target Workload:** Highly structured enterprise manuals, legislative bodies of work, and long-form documents where spatial-structural location dictates relevancy.
 
-### 4.4 Graph RAG (`LightRAG Server`)
-- **Deployment Architecture:** Prioritizes interaction via the **LightRAG Server** REST API (hosted on the HPI VM or locally) rather than embedding the heavy LightRAG Python SDK into the CLI process. The CLI communicates via HTTP client endpoints (`/documents/text`, `/query`, etc.).
-- **Architecture Benefits:** Decouples graph storage, asynchronous entity extraction, and graph traversal compute from the CLI client; eliminates heavy graph library dependency conflicts and isolates long-running background extraction.
-- **Mechanism:** Dual-level knowledge graph extraction and retrieval using entity, relation, and passage graph networks.
-- **Characteristics:** Extracts low-level entities and high-level relationships, enabling global query synthesis across disconnected documents.
-- **Target Workload:** Multi-hop reasoning, thematic aggregation, and questions requiring comprehensive corpus-wide relationship traversal (EnterpriseRAG-Bench, BrowseComp-Plus).
+### 4.4 Graph RAG (`MemgraphPropertyGraphStore` via LlamaIndex)
+- **Graph Engine:** Memgraph (high-performance in-memory C++ graph database supporting openCypher, deployed via Docker container `memgraph/memgraph-mage` on `bolt://localhost:7687`).
+- **LlamaIndex Integration:** Orchestrated natively via LlamaIndex's `PropertyGraphIndex` backed by `MemgraphPropertyGraphStore` (`llama-index-graph-stores-memgraph`), bringing Graph RAG under the exact same first-class retrieval abstractions as the other three paradigms.
+- **Extraction Mechanism:** Pluggable LlamaIndex schema extractors (`SchemaLLMPathExtractor`, `SimpleLLMPathExtractor`) using `Qwen 3.8 27B` to extract structured entities, relations, and passage node properties during indexing.
+- **Retrieval & Querying:** Combines graph path traversals (1–3 hops), vector context retrieval over entity nodes, and openCypher queries with tunable fusion weights.
+- **Target Workload:** Multi-hop reasoning, thematic aggregation, and questions requiring comprehensive relationship traversal across legislative corpora, case law cross-references, and grounding evidence sets.
 
 ---
 
@@ -134,7 +134,7 @@ deepfix-rag index --dataset <path|name> --paradigm <dense|hybrid|vectorless|grap
 ### 5.1 CLI Design Principles
 - **Executable Identity:** Package name `deepfix_rag`, providing both `deepfix-rag` command and `deepfix` alias.
 - **Framework & Settings:** Typer (Click-compatible) for terminal interaction, coupled with Pydantic for rigid YAML/JSON schema validation and **Pydantic-Settings** (`pydantic-settings`) for strongly-typed environment variable management (`.env` loading, API keys, endpoint URLs, provider selection).
-- **Strict Determinism:** Identical inputs and configurations produce bit-for-bit identical index states and evaluation outputs.
+- **Functional Reproducibility & Seed Pinning:** Fixed random seeds, temperature=0 for eval/synthesis calls, and deterministic data partitioning guarantee functionally reproducible index states and evaluation metrics within tolerance $\varepsilon$ across repeated runs.
 - **Agent Interoperability:** All subcommands enforce an optional or default `--json` flag producing well-typed machine-readable JSON payloads on `stdout`. Runtime logs, debug traces, and progress bars are routed strictly to `stderr`.
 - **Exit Code Convention:**
   - `0`: Success.
@@ -144,8 +144,8 @@ deepfix-rag index --dataset <path|name> --paradigm <dense|hybrid|vectorless|grap
 ### 5.2 CLI Subcommand Specifications
 
 #### 1. `deepfix-rag dataset`
-- `deepfix-rag dataset load --name <garage|blleqa|legal-rag-bench|browsecomp-plus|enterpriserag|mtrag> --split <dev|test> [--stream] [--json]`
-  - Loads benchmark dataset splits. `--stream` enables memory-efficient batch streaming for corpora $>500\text{k}$ documents (EnterpriseRAG-Bench).
+- `deepfix-rag dataset load --name <garage|blleqa|legal-rag-bench> --split <dev|test> [--stream] [--json]`
+  - Loads benchmark dataset splits with verified schema integrity and isolated storage paths.
   - Enforces strict isolation: optimization routines fail if `--split test` is requested during an agent loop.
 - `deepfix-rag dataset generate-unanswerable --dataset <path> --ratio <0.2> --output <path> [--json]`
   - Generates synthetic out-of-domain and unanswerable queries for custom datasets to test deflection thresholds.
@@ -228,14 +228,15 @@ cli_actions:
 - **Universal Discovery:** Claude Code, Hermes, or Codex harnesses discover the plugin via the manifest and register the skills from `.agents/skills/` into their runtime tool-calling context without code changes.
 - **Uniform CLI Tooling:** The agent reads the declarative skill instructions and issues terminal tool calls against `deepfix-rag` in standard bash/zsh/powershell subprocesses.
 
-**Required Skill Library Modules ($\ge 5$ Distinct Failure Modes):**
-1. `chunking-tuning`: Tuning character/semantic splitters and chunk overlap to prevent context truncation.
-2. `query-rewriting`: Handling multi-turn context drift, pronoun resolution, and hypothetical document embeddings (HyDE), especially for `mtRAG`.
-3. `rerank-calibration`: Tuning cross-encoder re-ranking (`qwen3-reranker-4b`) top-n candidates, score thresholds, and dense/sparse balance.
+**Problem-Driven Skill Library Modules (Failure-Mode Remediations):**
+The skill library is organized strictly around concrete retrieval pathologies rather than an arbitrary count quota. Skills are created to diagnose, hypothesize, and remediate observed failure modes:
+1. `chunking-tuning`: Tuning character/semantic splitters and chunk overlap to prevent context truncation or excessive fragmentation.
+2. `query-rewriting`: Resolving domain terminology mismatch, acronym expansion, and hypothetical document embeddings (HyDE) for underspecified queries.
+3. `rerank-calibration`: Tuning cross-encoder re-ranking (`qwen3-reranker-4b`) top-n candidate pools, score thresholds, and dense/sparse balance.
 4. `embedding-selection`: Evaluating semantic density versus exact token matching across domain corpora.
-5. `deflection-and-refusal`: Calibrating confidence thresholds and system prompts to faithfully trigger "I do not have sufficient information" on unanswerable queries (`GaRAGe`, `bLLeQA`).
+5. `deflection-and-refusal`: Calibrating confidence thresholds and system prompts to faithfully trigger refusal ("I do not have sufficient information") on unanswerable queries (`GaRAGe`, `bLLeQA`).
 6. `legal-retrieval-grounding`: Optimizing hierarchical statute parsing, cross-reference expansion, and citation verification on `Legal RAG Bench`.
-7. `multi-hop-aggregation`: Tuning retrieval depth and entity synthesis across disparate documents (`EnterpriseRAG-Bench`, `BrowseComp-Plus`).
+7. `multi-hop-aggregation`: Tuning retrieval depth, graph entity synthesis, and multi-passage grounding across disparate documents.
 
 ### 5.4 Hermes Harness & Autonomous Closed Loop
 - **Host Infrastructure:** Self-hosted `Qwen 3.8 27B` served via vLLM on HPI-provided VM.
@@ -246,30 +247,27 @@ cli_actions:
   3. Hermes reads matching `SKILL.md` from `.agents/skills/` based on diagnosed failure mode.
   4. Hermes formulates an optimization hypothesis and executes `deepfix-rag mutate-config`.
   5. Hermes executes `deepfix-rag index` (if indexing parameters changed) and `deepfix-rag eval`.
-  6. **Quality Gate Decision:**
-     - If DeepEval metrics improve: Candidate config becomes the new baseline.
-     - If metrics degrade: Revert to previous baseline.
-  7. Loop repeats for $\ge 5$ iterations autonomously. Every iteration logs a span tree to MLflow.
+  6. **Quality Gate Decision & Eval Noise Safeguard:**
+     - **Acceptance Threshold:** To prevent hill-climbing on LLM-judge sampling noise, a candidate config is promoted as the new baseline *only* if the primary metric improves by a margin of $\Delta \ge +2.5\%$ without degrading secondary metrics.
+     - **Reversion:** If the metric delta is within the noise band ($|\Delta| < 2.5\%$) or degrades, the configuration is automatically rolled back to the prior champion baseline.
+  7. **Loop Resilience & Timeout:** Loop repeats for ≥ 5 iterations autonomously. Each cycle is bounded by a maximum of 15 tool execution steps and full state checkpointing to enable clean resumption in case of harness interruptions. Every iteration logs a full span tree to MLflow.
 
 ---
 
 ## 6. Benchmark Suite & Expert Baseline Matrix
 
-DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG challenges, evaluated strictly on held-out splits against established baselines:
+DeepFix focuses on 3 core standardized text-only benchmark suites covering distinct RAG challenges (grounding, multilingual legal refusal, and hierarchical legal reasoning), evaluated strictly on held-out splits against established baselines:
 
 | Benchmark Suite | Focus & Workload Characteristics | Target Optimization Challenge | Split Strategy |
 | :--- | :--- | :--- | :--- |
-| **GaRAGe** | Grounding & Factuality; ~2.3k queries with human-labeled relevant/unknown passages. | Hallucination suppression; tuning retrieval confidence thresholds for unanswerable queries. | 70% Dev (Optimization) / 30% Test (Locked) |
-| **bLLeQA** | Multilingual (French/Dutch) legal domain Q&A with strict refusal requirements. | Cross-lingual retrieval alignment, legal terminology mismatch, and jurisdiction refusal. | 70% Dev / 30% Test |
-| **Legal RAG Bench** (`isaacus/legal-rag-bench`) | Reasoning-intensive legal RAG with explicit error decomposition. | Separating retrieval misses from synthesis hallucinations; hierarchical statute chunking. | Dev / Test splits locked per benchmark spec |
-| **BrowseComp-Plus** | Deep research reasoning over ~100k complex web documents. | Multi-evidence filtering and high-precision top-k candidate re-ranking. | Dev / Test splits locked per benchmark spec |
-| **EnterpriseRAG-Bench** | Simulated enterprise knowledge base (>500k docs, low lexical overlap, multi-doc aggregation). | High-volume streaming, multi-hop document synthesis (up to 10 docs), enterprise jargon. | Dev / Test splits locked per benchmark spec |
-| **mtRAG** | Multi-turn conversational dialogue (~7.7 turns/conversation) with ambiguous pronouns. | Maintaining conversational context state, resolving co-references, rewriting queries. | Dev / Test splits locked per benchmark spec |
+| **GaRAGe** | Grounding & Factuality; 2,366 queries with human-labeled relevant/unknown passages. | Hallucination suppression; tuning retrieval confidence thresholds for unanswerable queries. | 70% Dev (~1,650 queries, Optimization) / 30% Test (~716 queries, Locked) |
+| **bLLeQA** | Multilingual (French/Dutch) legal domain Q&A with strict refusal requirements (~1,800 queries). | Cross-lingual retrieval alignment, legal terminology mismatch, and jurisdiction refusal. | 70% Dev (~1,260 queries) / 30% Test (~540 queries, Locked) |
+| **Legal RAG Bench** (`isaacus/legal-rag-bench`) | Reasoning-intensive legal RAG with explicit error decomposition. | Separating retrieval misses from synthesis hallucinations; hierarchical statute chunking. | 75% Dev (~750 queries) / 25% Test (~250 queries, Locked by statute cluster) |
 
 ### 6.1 German Bundestag Parliamentary Expert Baseline
 - **Domain Scope:** Parliamentary documentation, legislative inquiries, and committee minutes.
 - **Baseline Delivery:** Curated and signed off by domain expert **Mario Tormo Romero**.
-- **Objective:** Validate that the autonomous optimization loop achieves performance within $\le 10\%$ of human expert performance on domain-specific retrieval and grounding tasks.
+- **Objective:** Validate that the autonomous optimization loop achieves performance within ≤ 10% of human expert performance on domain-specific retrieval and grounding tasks.
 
 ### 6.2 Evaluation Governance & Split Isolation
 - **Strict Split Isolation:** The `dev` split is used exclusively during iterative agent optimization loops. The `test` split is encrypted or locked against agent read permissions and is evaluated only during final Sprint 4 verification.
@@ -289,13 +287,12 @@ DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG 
 - [ ] Standardized exit codes (`0` = success, `1` = schema/validation error, `2` = runtime exception) are returned.
 - [ ] Full automated test suite passes typecheck and lint (`ruff check src`, `pytest tests/test_cli.py`).
 
-### US-002: Benchmark Dataset Ingestion & Streaming Loaders
+### US-002: Benchmark Dataset Ingestion & Isolation
 **Ownership:** `[Pair A]`  
-**Description:** As a researcher or agent, I want standardized dataset loaders with memory-efficient streaming for large corpora, so that all 6 benchmark datasets can be ingested without out-of-memory errors.  
+**Description:** As a researcher or agent, I want standardized dataset loaders with rigid validation, so that the 3 target benchmark suites can be ingested and isolated without data contamination.  
 **Acceptance Criteria:**
-- [ ] `deepfix-rag dataset load --name <dataset> --split <dev|test>` supports `garage`, `blleqa`, `legal-rag-bench`, `browsecomp-plus`, `enterpriserag`, and `mtrag`.
+- [ ] `deepfix-rag dataset load --name <dataset> --split <dev|test>` supports `garage`, `blleqa`, and `legal-rag-bench`.
 - [ ] Ingestion of `isaacus/legal-rag-bench` integrates directly with Hugging Face datasets.
-- [ ] EnterpriseRAG-Bench (>500k documents) ingests smoothly via `--stream` in bounded memory (< 4GB RAM).
 - [ ] Dev and test splits are saved into isolated, access-controlled directory paths (`data/processed/<dataset>/<split>`).
 - [ ] Attempting to load `test` split during an active agent optimization session triggers an authorization rejection.
 
@@ -314,7 +311,7 @@ DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG 
 - [ ] `deepfix-rag index --paradigm dense` builds LanceDB vector index using `Octen 8B` (fine-tuned from `Qwen3-Embedding-8B`) with `qwen3-reranker-4b` re-ranking support.
 - [ ] `deepfix-rag index --paradigm hybrid` builds and queries LanceDB dense vectors + BM25 sparse index with tunable RRF fusion.
 - [ ] `deepfix-rag index --paradigm vectorless` builds and searches structural hierarchical trees via `pageindex`.
-- [ ] `deepfix-rag index --paradigm graph` interfaces with a running **LightRAG Server** via REST API (prioritizing the client/server model over embedded SDK execution) for entity/knowledge graph extraction and graph retrieval.
+- [ ] `deepfix-rag index --paradigm graph` builds and queries an in-memory knowledge graph using LlamaIndex's native `PropertyGraphIndex` connected to `MemgraphPropertyGraphStore` via Bolt protocol (`bolt://localhost:7687`).
 - [ ] Index build metadata (document count, chunk statistics, build duration, storage bytes) is returned in `--json` output.
 - [ ] All legacy pyTerrier dependencies and code references are completely removed.
 
@@ -337,23 +334,26 @@ DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG 
 - [ ] Invalid parameters (e.g., negative top-k, non-existent chunker algorithm) throw schema validation errors with exit code 1.
 - [ ] `deepfix-rag diff-config <config_a.yaml> <config_b.yaml> --json` produces structured parameter diffs indicating additions, modifications, and deletions.
 
-### US-007: Automated DeepEval Metric Pipeline Integration
+### US-007: Automated DeepEval Metric Pipeline & Custom Evaluators
 **Ownership:** `[Pair A]`  
-**Description:** As a developer or evaluation harness, I want to execute standardized DeepEval metrics against RAG outputs, so that quality indicators are objectively scored.  
+**Description:** As a developer or evaluation harness, I want to execute standardized DeepEval metrics and custom evaluators against RAG outputs, so that quality indicators are objectively scored per benchmark.  
 **Acceptance Criteria:**
-- [ ] `deepfix-rag eval --config <config.yaml> --dataset <dataset> --split dev` executes DeepEval metric suite.
-- [ ] Pipeline computes Faithfulness ($\ge 0.80$), Contextual Precision ($\ge 0.75$), Answer Correctness ($\ge 75\%$), Deflection Accuracy ($\ge 80\%$), and Legal Error Reduction ($\ge 15\%$).
+- [ ] `deepfix-rag eval --config <config.yaml> --dataset <dataset> --split dev` executes evaluation metric suite.
+- [ ] Native DeepEval metrics integrated: Faithfulness (≥ 0.80), Contextual Precision (≥ 0.75), Answer Correctness (≥ 75%).
+- [ ] Custom evaluators implemented on DeepEval's base metric class:
+  - **Deflection Accuracy (≥ 80%):** Evaluates appropriate refusal rate on unanswerable query subsets of `GaRAGe` and `bLLeQA`.
+  - **Legal Error Decomposition (≥ 15% reduction):** Measures reduction in retrieval-induced reasoning errors compared to the unoptimized baseline run on `Legal RAG Bench`.
 - [ ] Metric results, configuration parameters, and run metadata are automatically recorded in the central MLflow server.
 
-### US-008: Workspace Skill Library (.agents/skills/) & Plugin Manifest
+### US-008: Problem-Driven Workspace Skills (.agents/skills/) & Plugin Manifest
 **Ownership:** `[Pair B]`  
-**Description:** As an AI agent or harness engineer, I want modular `SKILL.md` files created under `.agents/skills/` and packaged under a declarative manifest (`plugin.json` / `plugin.yaml`) following Claude Code, Hermes, and Codex specifications, so that skills are directly accessible in the workspace and easily installable across coding harnesses.  
+**Description:** As an AI agent or harness engineer, I want modular `SKILL.md` files created under `.agents/skills/` targeting key retrieval pathologies and packaged under a declarative manifest (`plugin.json` / `plugin.yaml`) following Claude Code, Hermes, and Codex specifications, so that skills are directly accessible in the workspace and easily installable across coding harnesses.  
 **Acceptance Criteria:**
 - [ ] Declarative manifest file (`plugin.json` or `plugin.yaml`) authored in `plugins/deepfix-rag/` following Claude Code, Hermes, and Codex plugin schemas.
 - [ ] Plugin is verified to be cleanly installable and discoverable across multiple agent harnesses without code modifications.
-- [ ] Minimum of 5 modular skills created in `.agents/skills/<name>/SKILL.md`:
+- [ ] Modular failure-remediation skills created in `.agents/skills/<name>/SKILL.md` targeting core pathologies:
   - `chunking-tuning`
-  - `query-rewriting` (mtRAG multi-turn context resolution)
+  - `query-rewriting`
   - `rerank-calibration`
   - `embedding-selection`
   - `deflection-and-refusal`
@@ -370,13 +370,14 @@ DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG 
 - [ ] Inference endpoints for Qwen 3.8 27B, Octen 8B embeddings (fine-tuned from Qwen3-Embedding-8B), and `qwen3-reranker-4b` hosted via vLLM / LiteLLM on HPI VM are reachable and authenticated.
 - [ ] Every agent execution cycle creates an MLflow run capturing system prompts, tool call payloads, stdout/stderr, and metric deltas in a hierarchical span tree.
 
-### US-010: Closed-Loop Autonomous Optimization
+### US-010: Closed-Loop Autonomous Optimization with Noise Safeguards
 **Ownership:** `[Pair B]`  
-**Description:** As a pilot researcher, I want Hermes to execute multi-cycle optimization loops autonomously, keeping improvements and rolling back degradations, so that RAG pipelines self-heal without human intervention.  
+**Description:** As a pilot researcher, I want Hermes to execute multi-cycle optimization loops autonomously, keeping meaningful improvements and rolling back degradations or noise, so that RAG pipelines self-heal reliably without human intervention.  
 **Acceptance Criteria:**
-- [ ] Autonomous loop executes across $\ge 5$ sequential cycles on the `dev` split.
-- [ ] $\ge 80\%$ of multi-cycle runs complete end-to-end without crashing, hanging, or requiring human input.
-- [ ] Hermes successfully preserves candidate configurations when DeepEval scores increase, and restores previous configurations when scores decrease.
+- [ ] Autonomous loop executes across ≥ 5 sequential cycles on the `dev` split.
+- [ ] ≥ 80% of multi-cycle runs complete end-to-end without crashing, hanging, or requiring human input.
+- [ ] Candidate configurations are accepted only if primary metric delta satisfies Δ ≥ +2.5%; candidate mutations within noise band or degrading performance are automatically reverted.
+- [ ] Each cycle is guarded by a 15-tool-call execution timeout and state checkpointing to prevent infinite loops.
 - [ ] Final best-performing configuration is exported using `deepfix-rag export`.
 
 ### US-011: Multi-Paradigm Hyperparameter Optimization (HPO) Space
@@ -387,7 +388,7 @@ DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG 
   - Dense: chunk size (128–2048), chunk overlap (0–256), top-k (1–50), similarity metric.
   - Hybrid: BM25 $k_1$ / $b$, RRF constant $c$, dense/sparse balance weight $\alpha \in [0, 1]$.
   - Vectorless: hierarchy tree depth (1–5), section summarization flags.
-  - Graph RAG: entity extraction temperature, max hops (1–3), edge weight pruning thresholds.
+  - Graph RAG: extraction schema types, max paths per chunk (1–10), traversal hops (1–3), and sub-retriever fusion weights.
 - [ ] Invalid combinations are rejected during `mutate-config` validation.
 
 ### US-012: Evaluation Methodology Coaching & Quality Review
@@ -402,7 +403,7 @@ DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG 
 **Description:** As a domain expert (Mario Tormo Romero), I want to benchmark optimized RAG outputs against the authentic German Bundestag parliamentary baseline, so that real-world domain fidelity is empirically verified.  
 **Acceptance Criteria:**
 - [ ] Bundestag expert baseline dataset and performance benchmarks provided by Sprint 2.
-- [ ] Final Sprint 4 comparison table establishes whether `deepfix-rag` optimized pipelines perform within $\le 10\%$ of the expert baseline.
+- [ ] Final Sprint 4 comparison table establishes whether `deepfix-rag` optimized pipelines perform within ≤ 10% of the expert baseline.
 - [ ] Written review and sign-off on domain fidelity completed by Mario Tormo Romero.
 
 ---
@@ -421,14 +422,14 @@ DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG 
   - `dense`: LanceDB vector storage with `Octen 8B` (fine-tuned from `Qwen3-Embedding-8B`) and `qwen3-reranker-4b` cross-encoder re-ranking.
   - `hybrid`: Dense LanceDB vectors fused with BM25 sparse keyword retrieval.
   - `vectorless`: Structural and hierarchical tree document retrieval via `pageindex`.
-  - `graph`: Entity and relationship knowledge graph extraction and retrieval via **LightRAG Server** REST API (prioritizing server-based interaction over embedded SDK).
+  - `graph`: Entity and relationship knowledge graph extraction, openCypher querying, and sub-graph property retrieval via LlamaIndex `PropertyGraphIndex` backed by `MemgraphPropertyGraphStore` (Bolt connection to Memgraph daemon).
 - **FR-7:** All legacy references and dependencies on `pyTerrier` must be purged and replaced with the LlamaIndex multi-paradigm stack.
 - **FR-8:** The indexing subsystem (`deepfix-rag index`) must accept a configuration YAML file and document directory, generating the specified index deterministically.
 - **FR-9:** The generation layer must query self-hosted `Qwen 3.8 27B` served via vLLM, supporting grounded prompt generation and token usage telemetry.
 
 ### Benchmark Data & Split Management (Pair A)
-- **FR-10:** The dataset ingestion engine (`deepfix-rag dataset load`) must support 6 standardized benchmark suites: `garage`, `blleqa`, `legal-rag-bench`, `browsecomp-plus`, `enterpriserag`, and `mtrag`.
-- **FR-11:** The dataset loader must support a `--stream` flag for memory-bounded streaming ingestion of large-scale corpora ($>500\text{k}$ documents).
+- **FR-10:** The dataset ingestion engine (`deepfix-rag dataset load`) must support 3 standardized benchmark suites: `garage`, `blleqa`, and `legal-rag-bench`.
+- **FR-11:** The dataset loader must support memory-bounded chunked ingestion and strict cryptographic verification of dataset caches.
 - **FR-12:** The dataset subsystem must enforce strict split isolation: `dev` splits are accessible during autonomous agent optimization cycles; `test` splits are locked and access-restricted until final evaluation.
 - **FR-13:** The dataset subsystem must provide `generate-unanswerable` to synthesize out-of-domain and unanswerable queries for custom datasets to test deflection accuracy.
 
@@ -440,17 +441,17 @@ DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG 
 
 ### Skill Plugins & Agent Harness (Pair B)
 - **FR-18:** The framework must maintain modular failure remediation skills under `.agents/skills/<skill-name>/SKILL.md` with standard YAML frontmatter, packaged via a declarative manifest (`plugins/deepfix-rag/plugin.json` or `plugin.yaml`) conforming to Claude Code, Hermes, and Codex specifications to enable automated installation and skill discovery across multiple coding harnesses.
-- **FR-19:** The skill plugin must provide at least 5 distinct failure remediation skills covering: chunking strategy, query rewriting (including multi-turn dialogue), re-ranker calibration, embedding model selection, unanswerable deflection/refusal, legal retrieval grounding, and multi-hop aggregation.
+- **FR-19:** The skill plugin must provide modular failure remediation skills targeting core observed retrieval pathologies: chunking strategy, query rewriting, re-ranker calibration, embedding model selection, unanswerable deflection/refusal, legal retrieval grounding, and multi-hop aggregation.
 - **FR-20:** The Hermes agent harness must integrate terminal subprocess tool calling to execute `deepfix-rag` subcommands autonomously.
-- **FR-21:** The system must implement an autonomous closed-loop optimization cycle: evaluate baseline $\rightarrow$ run diagnostics $\rightarrow$ consult skill $\rightarrow$ mutate config $\rightarrow$ re-index/re-evaluate $\rightarrow$ keep improvement or revert degradation.
-- **FR-22:** The autonomous loop must execute for $\ge 5$ iterative cycles without requiring human intervention.
+- **FR-21:** The system must implement an autonomous closed-loop optimization cycle: evaluate baseline $\rightarrow$ run diagnostics $\rightarrow$ consult skill $\rightarrow$ mutate config $\rightarrow$ re-index/re-evaluate $\rightarrow$ keep improvement (requiring $\Delta \ge +2.5\%$ on primary metric to reject eval noise) or revert degradation.
+- **FR-22:** The autonomous loop must execute for ≥ 5 iterative cycles without requiring human intervention, protected by per-cycle execution step limits (max 15 tool calls) and state checkpointing.
 
 ### Observability & Tracing (Pair B)
 - **FR-23:** All evaluation runs, configuration mutations, diagnostic summaries, and agent reasoning steps must be logged to a central MLflow tracking server on the HPI infrastructure.
 - **FR-24:** MLflow logging must capture full hierarchical span trees for Hermes agent tool execution and link all runs to configuration artifact revisions.
 
 ### Evaluation & Expert Baseline (Pair A & Advisory)
-- **FR-25:** The evaluation subsystem (`deepfix-rag eval`) must integrate DeepEval to compute: Faithfulness, Contextual Precision, Answer Correctness, Deflection/Refusal Accuracy, and Legal Error Decomposition.
+- **FR-25:** The evaluation subsystem (`deepfix-rag eval`) must integrate DeepEval to compute: Faithfulness, Contextual Precision, and Answer Correctness, alongside custom evaluators built on DeepEval's base class for Deflection/Refusal Accuracy and Legal Error Decomposition.
 - **FR-26:** The evaluation scorecard must report benchmark scores independently without artificial metric weighting between general English, multilingual, and legal datasets.
 - **FR-27:** The system must support comparison against the German Bundestag parliamentary expert baseline provided by Mario Tormo Romero.
 
@@ -459,6 +460,7 @@ DeepFix targets 6 standardized text-only benchmark suites covering distinct RAG 
 ## 9. Non-Goals (Out of Scope)
 
 To maintain focus and adhere to the formal Pilot Project Agreement, the following areas are explicitly excluded:
+- **Massive-Scale Streaming & Web Research Corpora (`EnterpriseRAG-Bench`, `BrowseComp-Plus`, `mtRAG`):** Corpora requiring massive streaming over >500k documents (`EnterpriseRAG-Bench`), iterative multi-step agent web browsing (`BrowseComp-Plus`), or multi-turn conversational dialogue state management (`mtRAG`) are explicitly excluded from this pilot. Scoping is strictly focused on the three high-impact text-only benchmark suites (`GaRAGe`, `bLLeQA`, `Legal RAG Bench`) and the authentic German Bundestag parliamentary baseline, eliminating compute bottlenecks and graph extraction stalls.
 - **Commercial Production Systems:** The project delivers a research prototype, deterministic CLI, and agent skill plugin; it does not build proprietary SaaS commercial platforms.
 - **Multimodal RAG:** Video, audio, and image retrieval pipelines are strictly excluded; the scope is text-only RAG.
 - **Generative LLM Weight Fine-Tuning:** Direct fine-tuning (LoRA, full-parameter training) of underlying LLMs (Qwen 3.8 27B) is out of scope; optimization is confined to retrieval pipeline architecture, indexing configurations, and prompt hyperparameters.
@@ -482,7 +484,7 @@ To maintain focus and adhere to the formal Pilot Project Agreement, the followin
 | **Cross-Encoder Re-Ranker** | qwen3-reranker-4b | Self-hosted vLLM / OpenRouter / AISC | Cross-encoder re-ranking model for candidate scoring and precision filtering. |
 | **Lexical Search** | BM25 (rank-bm25 / LanceDB FTS) | Integrated | Fast, accurate sparse keyword inverted index for hybrid fusion. |
 | **Vectorless Search** | `pageindex` | Latest stable | Hierarchical, structural document indexing without dense embeddings. |
-| **Graph RAG** | `LightRAG Server` | REST API / Latest | Dedicated knowledge graph service for multi-hop entity reasoning, accessed via REST endpoints instead of embedded SDK. |
+| **Graph RAG** | Memgraph (`MemgraphPropertyGraphStore`) | `memgraph/memgraph-mage` & `llama-index-graph-stores-memgraph` | High-performance in-memory C++ graph database with openCypher, natively integrated into LlamaIndex `PropertyGraphIndex`. |
 | **Generation Model** | Qwen 3.8 27B | vLLM / LiteLLM Proxy | State-of-the-art open-weights reasoning model for agent harness and RAG synthesis. |
 | **Agent Harness** | Hermes Agent | Terminal Subprocess | Autonomous tool-calling agent executing `deepfix-rag` terminal commands. |
 | **Evaluation Suite** | DeepEval | `>=1.0.0` | Comprehensive RAG metric suite (Faithfulness, Precision, Correctness, Deflection). |
@@ -493,7 +495,7 @@ To maintain focus and adhere to the formal Pilot Project Agreement, the followin
 - **Host Infrastructure:** HPI-hosted Linux VM with GPU acceleration.
 - **Inference & Graph Servers:** 
   - vLLM / AISC instance serving `Qwen 3.8 27B` (generation/agent), `Octen 8B` (embeddings, fine-tuned from `Qwen3-Embedding-8B`), and `qwen3-reranker-4b` (re-ranking).
-  - Dedicated `LightRAG Server` process exposing REST endpoints for graph extraction, entity indexing, and multi-hop graph queries.
+  - Containerized Memgraph instance (`memgraph/memgraph-mage` on port 7687) providing sub-millisecond in-memory graph traversals.
 - **Tracking Server:** MLflow tracking instance deployed on the same HPI VM.
 - **Storage Layout:**
   - Raw/processed benchmark caches: `~/.deepfix/datasets/`
@@ -504,18 +506,18 @@ To maintain focus and adhere to the formal Pilot Project Agreement, the followin
 
 ## 11. Success Metrics & Quality Gates
 
-The project must satisfy the following verifiable quantitative targets and quality gates before pilot completion:
+The project must satisfy the following verifiable quantitative targets and quality gates before pilot completion. In accordance with §6.2, **all metric thresholds apply per-benchmark across applicable domains** (reported as an unweighted scorecard, not blended macro-averages):
 
 | Dimension | Metric / Indicator | Target Threshold | Verification Method |
 | :--- | :--- | :--- | :--- |
-| **RAG Quality** | **Faithfulness Score** | $\ge 0.80$ (scale 0.0–1.0) | DeepEval evaluation on held-out benchmark test sets. |
-| **RAG Quality** | **Contextual Precision** | $\ge 0.75$ | DeepEval metric verifying that retrieved chunks contain relevant ground-truth evidence. |
-| **RAG Quality** | **Answer Correctness** | $\ge 75\%$ | DeepEval semantic and factual similarity against ground-truth answers. |
-| **RAG Quality** | **Deflection / Refusal Accuracy** | $\ge 80\%$ | Measured on unanswerable query subsets of `GaRAGe`, `bLLeQA`, and `EnterpriseRAG-Bench`. |
-| **Domain Accuracy** | **Legal Retrieval Grounding** | $\ge 15\%$ reduction | Reduction in retrieval-induced reasoning errors on `Legal RAG Bench`. |
-| **Expert Baseline** | **Bundestag Parliamentary Benchmark** | $\le 10\%$ delta | Performance on held-out Bundestag test set within $\le 10\%$ of expert baseline signed off by Mario Tormo Romero. |
-| **Agent Skills** | **Failure Modes Remediated** | $\ge 5$ skills | Implemented modular `SKILL.md` plugins in `.agents/skills/`. |
-| **Autonomy** | **Closed-Loop Stability** | $\ge 80\%$ completion | Percentage of autonomous multi-cycle optimization loops completing $\ge 5$ cycles without human intervention. |
+| **RAG Quality** | **Faithfulness Score** | ≥ 0.80 (scale 0.0–1.0) | DeepEval evaluation on held-out benchmark test sets (`GaRAGe`, `bLLeQA`, `Legal RAG Bench`). |
+| **RAG Quality** | **Contextual Precision** | ≥ 0.75 | DeepEval metric verifying retrieved chunks contain relevant ground-truth evidence. |
+| **RAG Quality** | **Answer Correctness** | ≥ 75% | DeepEval semantic and factual similarity against ground-truth answers. |
+| **RAG Quality** | **Deflection / Refusal Accuracy** | ≥ 80% | Custom evaluator on unanswerable query subsets of `GaRAGe` and `bLLeQA`. |
+| **Domain Accuracy** | **Legal Retrieval Grounding** | ≥ 15% reduction | Custom evaluator measuring reduction in retrieval-induced reasoning errors on `Legal RAG Bench` relative to the unoptimized default zero-shot baseline run. |
+| **Expert Baseline** | **Bundestag Parliamentary Benchmark** | ≤ 10% delta | Performance on held-out Bundestag test set within ≤ 10% of expert baseline signed off by Mario Tormo Romero. |
+| **Agent Skills** | **Failure Modes Remediated** | Problem-driven coverage | Modular `SKILL.md` plugins in `.agents/skills/` remediating core observed retrieval pathologies. |
+| **Autonomy** | **Closed-Loop Stability** | ≥ 80% completion | Percentage of autonomous multi-cycle optimization loops completing ≥ 5 cycles without human intervention. |
 
 ---
 
@@ -535,22 +537,22 @@ The 9-week project execution timeline follows a strict two-week sprint cadence g
 
 ### Sprint 2: First Autonomous Solution (v1) & Multi-Paradigm Extensions (Sep 1 – Sep 12)
 - **Pair B:** Implement v1 of closed-loop autonomous optimization loop using `deepfix-rag` CLI.
-- **Pair B:** Implement `mutate-config`, `diff-config`, and `eval` subcommands.
+- **Pair B:** Implement `mutate-config`, `diff-config`, and `eval` subcommands with eval noise safeguard (Δ ≥ +2.5%).
 - **Pair B:** Configure MLflow auto-tracing for all Hermes tool-calling runs.
-- **Pair A:** Implement Vectorless (`pageindex`) and Graph RAG (`LightRAG Server` REST adapter) pipeline paradigms via LlamaIndex.
+- **Pair A:** Implement Vectorless (`pageindex`) and Graph RAG (`MemgraphPropertyGraphStore` via LlamaIndex `PropertyGraphIndex`) pipeline paradigms.
 - **Pair A:** Define hyperparameter search spaces across all 4 paradigms.
 - **Advisory:** Mario Tormo Romero provides German Bundestag expert baseline scores and evaluation alignment.
 
-### Sprint 3: Progress-Driven Skills Expansion (Sep 15 – Sep 26)
-- **Pair B:** Expand `.agents/skills/` library to cover $\ge 5$ distinct failure modes and verify plugin manifest.
+### Sprint 3: Problem-Driven Skills Refinement & Domain Tuning (Sep 15 – Sep 26)
+- **Pair B:** Refine and expand `.agents/skills/` library based on empirical diagnostic failure modes discovered during `dev` runs; verify plugin manifest across harnesses.
 - **Pair A:** Optimize cross-encoder re-ranking thresholds, multi-hop aggregation, and refusal prompts on `dev` splits.
 - **Pair B:** Refine diagnostic categorization accuracy based on empirical error logs.
 - **Advisory:** Paras Mehta conducts mid-point evaluation methodology review to prevent metric distortion.
 
 ### Sprint 4: Full Autonomous Loop & Final Benchmarking (Sep 29 – Oct 10)
-- **Pair B:** Execute full autonomous closed-loop optimization ($\ge 5$ continuous cycles) across all benchmark domains.
+- **Pair B:** Execute full autonomous closed-loop optimization (≥ 5 continuous cycles) across target benchmark domains.
 - **Pair B:** Perform complete CLI end-to-end integration testing and reproducibility checks.
-- **Pair A:** Execute final RAG evaluation on locked, held-out test splits across all 6 benchmark suites.
+- **Pair A:** Execute final RAG evaluation on locked, held-out test splits across all 3 benchmark suites (`GaRAGe`, `bLLeQA`, `Legal RAG Bench`).
 - **Advisory & Team:** Compile Bundestag expert baseline comparison table; sign-off by Mario Tormo Romero.
 - **Pair B & Advisory:** Author autonomous optimization evaluation report with exported MLflow charts.
 - **Advisory:** Final coaching review and methodology sign-off by Paras Mehta.
@@ -559,6 +561,7 @@ The 9-week project execution timeline follows a strict two-week sprint cadence g
 - Final evaluation debrief meeting with AI Service Center @ HPI.
 - Polish repository documentation, clean configuration templates, and finalize `README.md`.
 - Draft Pilot Project Report outline for submission.
+- Prepare Apache 2.0 public open-source release bundle (code, skills, harness); ensure third-party datasets (including CC-BY-NC-4.0 `GaRAGe` and Bundestag internal data) are downloaded dynamically via scripts subject to upstream licensing.
 
 ---
 
@@ -567,19 +570,22 @@ The 9-week project execution timeline follows a strict two-week sprint cadence g
 ### Key Mitigations
 1. **Scope Creep in Skill Development:**
    - *Risk:* Over-engineering dozens of niche retrieval skills delays autonomous loop completion.
-   - *Mitigation:* Enforce strict skill freeze at end of Sprint 2, prioritizing the 5 highest-impact failure modes.
+   - *Mitigation:* Focus skill authoring strictly on high-impact failure modes identified by `run-diagnostic` logs, prioritizing problem-driven remediation over arbitrary count expansion.
 2. **Benchmark Data Contamination & Overfitting:**
    - *Risk:* Agent loop optimizes against test queries, corrupting final benchmark validity.
    - *Mitigation:* Cryptographically isolate and lock `test` splits in Sprint 1; CLI rejects optimization commands targeting `test`.
 3. **VM Infrastructure & Inference Instability:**
    - *Risk:* vLLM crashes or network timeouts break multi-cycle agent runs.
    - *Mitigation:* Implement exponential backoff, retry wrappers, and health check probes in LiteLLM / Hermes tool execution.
+4. **Model Reasoning & Agent Stalls:**
+   - *Risk:* Autonomous agent loops hang, over-think, or execute redundant tool calls during multi-cycle runs.
+   - *Mitigation:* Impose a strict timeout of 15 tool execution steps per optimization cycle, serialize state checkpoints to disk before mutations, and automatically roll back to the prior baseline upon cycle failure or stall.
 
 ### Core Assumptions
 - **Model Reasoning:** `Qwen 3.8 27B` provides adequate reasoning and tool-calling fidelity to parse diagnostic JSON and follow `SKILL.md` instructions.
 - **Harness Adaptability:** Hermes agent harness supports terminal tool calling against local CLI executables without proprietary cloud dependencies.
-- **Benchmark Validity:** The 6 benchmark suites represent authentic text-only enterprise and legal retrieval challenges.
-- **CLI Determinism:** RAG indexing and DeepEval scoring produce bit-for-bit identical outputs when supplied with identical inputs and configuration YAMLs.
+- **Benchmark Validity:** The 3 target benchmark suites (`GaRAGe`, `bLLeQA`, `Legal RAG Bench`) represent authentic text-only grounding and legal retrieval challenges.
+- **Functional Reproducibility:** Fixed random seeds, temperature=0, and deterministic data loaders yield functionally reproducible index states and evaluation outputs within tolerance $\varepsilon$.
 
 ---
 
@@ -590,12 +596,14 @@ The 9-week project execution timeline follows a strict two-week sprint cadence g
 2. **Cross-Harness Plugin Standards & Canonical `.agents/skills/` Root:**
    - *Decision:* Maintain the canonical skill definitions directly under `.agents/skills/<skill-name>/SKILL.md` conforming to workspace agent standards, packaged via declarative manifest files (`plugin.json` / `plugin.yaml` in `plugins/deepfix-rag/`) conforming to Claude Code, Hermes, and Codex specifications. This guarantees native workspace discovery as well as cross-harness portability and effortless installation from one coding agent harness to another without altering skill definitions or execution semantics.
 3. **Replacement of Legacy pyTerrier & Multi-Paradigm Selection:**
-   - *Decision:* Purge all legacy pyTerrier code and dependencies in favor of LlamaIndex orchestrating 4 concrete paradigms: LanceDB Dense (Octen 8B + `qwen3-reranker-4b`), Hybrid (BM25 + LanceDB), `pageindex` Vectorless, and `LightRAG Server` Graph RAG.
-4. **LightRAG Server over Embedded SDK:**
-   - *Decision:* Deploy LightRAG as a standalone service (**LightRAG Server**) communicating via REST API endpoints rather than embedding the heavy LightRAG Python SDK directly within the `deepfix-rag` CLI. This eliminates dependency bloat/conflicts, isolates long-running asynchronous graph extraction jobs, and enables daemonized graph management on the HPI VM.
-5. **Streaming Ingestion for Massive Corpora:**
-   - *Decision:* Build first-class `--stream` chunked loading into `deepfix-rag dataset load` to handle datasets $>500\text{k}$ documents (EnterpriseRAG-Bench) in bounded memory.
+   - *Decision:* Purge all legacy pyTerrier code and dependencies in favor of LlamaIndex orchestrating 4 concrete paradigms: LanceDB Dense (Octen 8B + `qwen3-reranker-4b`), Hybrid (BM25 + LanceDB), `pageindex` Vectorless, and Memgraph Property Graph (`MemgraphPropertyGraphStore`).
+4. **Native LlamaIndex PropertyGraphIndex with Memgraph over Standalone Graph Servers:**
+   - *Decision:* Deploy Memgraph (`memgraph/memgraph-mage`) as a high-performance in-memory C++ graph database accessed via Bolt protocol using LlamaIndex's native `MemgraphPropertyGraphStore` (`PropertyGraphIndex`). This avoids heavy external Python graph servers or custom REST clients, unifies all four retrieval paradigms under standard LlamaIndex abstractions, provides openCypher querying, and delivers fast graph traversals.
+5. **Focused Benchmark Ingestion over Massive Streaming:**
+   - *Decision:* Focus the pilot on high-impact grounding and legal benchmarks (`GaRAGe`, `bLLeQA`, `Legal RAG Bench`) and place massive corpora streaming (>500k docs `EnterpriseRAG-Bench`), multi-turn dialogue (`mtRAG`), and deep web browsing (`BrowseComp-Plus`) out of scope to eliminate compute bottlenecks, protect Pair A/B's timeline, and ensure stable multi-cycle HPO.
 6. **Synthetic Deflection Generation:**
    - *Decision:* Provide `deepfix-rag dataset generate-unanswerable` directly within the CLI to enable robust refusal threshold calibration.
 7. **No Metric Weighting Across Domains:**
    - *Decision:* General English, multilingual (`bLLeQA`), and legal (`Legal RAG Bench`) benchmarks are evaluated as raw, unweighted scorecards to ensure transparency and prevent artificial smoothing of domain performance.
+8. **Open-Source Release & Dynamic Data Caching:**
+   - *Decision:* The `deepfix-rag` CLI, harness integration, and skill plugins are released publicly under Apache 2.0. Benchmark datasets (including CC-BY-NC-4.0 `GaRAGe` and internal Bundestag records) are downloaded and cached dynamically via user scripts subject to their upstream licenses, preventing any licensing or copyright infringement in the public repository.
