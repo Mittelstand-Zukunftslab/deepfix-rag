@@ -297,7 +297,7 @@ DeepFix focuses on 3 core standardized text-only benchmark suites covering disti
 - [ ] Attempting to load `test` split during an active agent optimization session triggers an authorization rejection.
 
 ### US-003: Synthetic Unanswerable Query Generation
-**Ownership:** `[Pair B]`  
+**Ownership:** `[Pair A]`  
 **Description:** As an engineer optimizing refusal calibration, I want to automatically synthesize unanswerable/out-of-domain queries for custom corpora, so that deflection accuracy can be benchmarked.  
 **Acceptance Criteria:**
 - [ ] `deepfix-rag dataset generate-unanswerable --dataset <path> --ratio <float> --output <path>` executes deterministically.
@@ -391,14 +391,7 @@ DeepFix focuses on 3 core standardized text-only benchmark suites covering disti
   - Graph RAG: extraction schema types, max paths per chunk (1–10), traversal hops (1–3), and sub-retriever fusion weights.
 - [ ] Invalid combinations are rejected during `mutate-config` validation.
 
-### US-012: Evaluation Methodology Coaching & Quality Review
-**Ownership:** `[Advisory]`  
-**Description:** As an evaluation coach (Paras Mehta), I want to conduct sprint coaching and review evaluation notebook design, so that methodological errors in RAG and agent metrics are proactively prevented.  
-**Acceptance Criteria:**
-- [ ] Eval design coaching sessions conducted during Sprints 1, 2, and 4.
-- [ ] Review and written sign-off provided on metric aggregation logic, deflection calculation formulas, and split leak prevention.
-
-### US-013: German Bundestag Expert Baseline Comparison & Sign-Off
+### US-012: German Bundestag Expert Baseline Comparison & Sign-Off
 **Ownership:** `[Advisory]`  
 **Description:** As a domain expert (Mario Tormo Romero), I want to benchmark optimized RAG outputs against the authentic German Bundestag parliamentary baseline, so that real-world domain fidelity is empirically verified.  
 **Acceptance Criteria:**
