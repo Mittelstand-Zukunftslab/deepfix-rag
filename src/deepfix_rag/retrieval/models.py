@@ -1,169 +1,223 @@
-"""vLLM / Qwen / Octen embeddings, re-ranking, and generation client — via LiteLLM and OpenAI APIs."""
+"""Wrap generation, embedding, and reranking endpoints internally using LiteLLM."""
 
+import json
+import logging
 import os
 import time
-from dotenv import load_dotenv
-import litellm
-import requests
 
+from dotenv import load_dotenv
+
+import litellm
+
+# Explicitly disable LiteLLM telemetry to avoid hangs
+os.environ["LITELLM_TELEMETRY"] = "False"
+litellm.telemetry = False
 load_dotenv()
 
 
 def _resolve_provider_endpoints(
-    provider: str, model: str
-) -> tuple[str, str]:
-    """Resolve the base URL and API key based on provider and model name."""
-    provider_lower = provider.lower() if provider else ""
-    model_lower = model.lower() if model else ""
-
-    # AISC / Octen provider or Octen model
-    if (
-        provider_lower in ("aisc", "octen")
-        or "octen" in model_lower
-        or "aisc" in model_lower
-    ):
+    provider: str,
+) -> tuple[str | None, str | None]:
+    """Resolve API base and key from environment based on the provider tag."""
+    if provider == "aisc" or provider == "hpi":
         base_url = os.getenv(
             "AISC_URL",
             os.getenv("OCTEN_URL", "https://api.aisc.hpi.de/v1"),
         )
         api_key = os.getenv(
             "AISC_KEY",
-            os.getenv("OCTEN_KEY", "sk-5lWnPeBK4omoI8l9UHOjhw"),
+            os.getenv("OCTEN_KEY", os.getenv("LITELLM_KEY")),
         )
         return base_url, api_key
-
-    # OpenRouter native (only trigger if the provider is explicitly openrouter)
-    if provider_lower == "openrouter":
-        base_url = "https://openrouter.ai/api/v1"
-        api_key = os.getenv("OPENROUTER_KEY", os.getenv("LITELLM_KEY", ""))
+    elif "proxy" in provider or "litellm" in provider:
+        base_url = os.getenv(
+            "LITELLM_URL", "https://litellm.mittelstand-zukunftslab.de"
+        )
+        api_key = os.getenv("LITELLM_KEY")
         return base_url, api_key
-
-    # Default to LiteLLM / HPI proxy
-    base_url = os.getenv("LITELLM_URL", "https://litellm.mittelstand-zukunftslab.de")
-    api_key = os.getenv("LITELLM_KEY", "")
-    return base_url, api_key
+    return None, None
 
 
-class EmbeddingClient:
-    """Client for generating embeddings (Octen-8B, Qwen3 embedding models)."""
+# ==============================================================================
+# RETRIEVAL (EMBEDDING)
+# ==============================================================================
+from llama_index.core.embeddings import BaseEmbedding
+from typing import Any, List
+import requests
 
-    def __init__(
-        self,
-        model: str = "octen-embedding-8b",
-        provider: str = "aisc",
-        api_base: str | None = None,
-        api_key: str | None = None,
-    ):
-        self.model = model
-        self.provider = os.getenv("DEEPFIX_INFERENCE_PROVIDER", provider)
-        resolved_base, resolved_key = _resolve_provider_endpoints(self.provider, self.model)
-        self.api_base = api_base or resolved_base
-        self.api_key = api_key or resolved_key
+class AISCEmbedding(BaseEmbedding):
+    """Custom LlamaIndex Embedding adapter using AISC/LiteLLM with Exponential Backoff."""
+    
+    model_name: str
+    api_base: str
+    api_key: str
+    batch_size: int = 32
+    
+    def __init__(self, model_name: str = "octen-embedding-8b", provider: str = "aisc", **kwargs: Any):
+        api_base, api_key = _resolve_provider_endpoints(provider)
+        super().__init__(
+            model_name=model_name,
+            api_base=api_base or "",
+            api_key=api_key or "",
+            **kwargs,
+        )
 
-    def _normalize_model_name(self) -> str:
-        """Format model string for litellm openai provider."""
-        model_name = self.model
-        if model_name.startswith("Octen/") or model_name.startswith("octen/"):
-            model_name = model_name.split("/")[-1]
-        if not model_name.startswith("openai/"):
-            return f"openai/{model_name}"
-        return model_name
+    @classmethod
+    def class_name(cls) -> str:
+        return "AISCEmbedding"
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Generate embedding vectors for a list of document strings."""
-        if not texts:
-            return []
-            
-        model_str = self._normalize_model_name()
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        return self._get_query_embedding(query)
+
+    async def _aget_text_embedding(self, text: str) -> List[float]:
+        return self._get_text_embedding(text)
+
+    def _get_query_embedding(self, query: str) -> List[float]:
+        return self._get_text_embeddings([query])[0]
+
+    def _get_text_embedding(self, text: str) -> List[float]:
+        return self._get_text_embeddings([text])[0]
+
+    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        retries = 5
+        base_delay = 1
         
-        last_err = None
-        # Add rate limit backoff for large indexing workloads
-        for attempt in range(5):
+        for attempt in range(retries):
             try:
-                resp = litellm.embedding(
-                    model=model_str,
+                responses = litellm.embedding(
+                    model=self.model_name,
                     input=texts,
-                    api_base=self.api_base,
                     api_key=self.api_key,
+                    api_base=self.api_base,
                     custom_llm_provider="openai",
-                    timeout=90,
+                    timeout=60,
                 )
-                return [item["embedding"] for item in resp["data"]]
+                
+                # Extract embeddings in matching order
+                embs = [None] * len(texts)
+                for datum in responses.data:
+                    embs[datum["index"]] = datum["embedding"]
+                return embs
+                
             except Exception as e:
-                last_err = e
-                if "429" in str(e):
-                    time.sleep(2 ** attempt)
-                else:
-                    raise e
-        raise last_err
+                err_str = str(e)
+                if "429" in err_str or "Too Many Requests" in err_str:
+                    logger = logging.getLogger(__name__)
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"[Embedding 429] Retrying in {delay}s... ({attempt+1}/{retries})")
+                    time.sleep(delay)
+                    continue
+                raise e
+        raise RuntimeError(f"Embedding failed after {retries} retries.")
 
-    def embed_query(self, text: str) -> list[float]:
-        """Generate embedding vector for a single query."""
-        return self.embed_documents([text])[0]
 
+# ==============================================================================
+# RERANKING
+# ==============================================================================
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
+from llama_index.core.schema import NodeWithScore, QueryBundle
+from typing import Optional
 
-class RerankClient:
-    """Client for cross-encoder re-ranking. Direct API implementation for OpenRouter per Fadel implementation request."""
+class OpenRouterReranker(BaseNodePostprocessor):
+    """Custom Cross-Encoder Reranker using direct OpenRouter HTTP POST calls (LlamaIndex wrapper)."""
+    
+    model: str = "qwen/qwen3-reranker-8b"
+    top_n: int = 5
+    api_key: str = ""
 
-    def __init__(
-        self,
-        model: str = "qwen/qwen3-reranker-8b",
-        provider: str = "openrouter",
-        api_base: str | None = None,
-        api_key: str | None = None,
-    ):
-        self.model = model
+    def __init__(self, model: str = "qwen/qwen3-reranker-8b", top_n: int = 5, api_key: Optional[str] = None):
+        super().__init__(model=model, top_n=top_n, api_key=api_key or os.getenv("OPENROUTER_KEY", ""))
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "OpenRouterReranker"
         
-        # Override to Fadel's OpenRouter specification directly for exactly reproducible results
-        self.api_base = api_base or os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1")
-        self.api_key = api_key or os.getenv("OPENROUTER_KEY", os.getenv("LITELLM_KEY", ""))
-
-    def rerank(self, query: str, documents: list[str], top_n: int = 5) -> list[int]:
-        """Re-rank candidate documents and return top_n document indices exactly matching OpenRouter's HTTP rerank payload."""
-        if not documents:
+    def _postprocess_nodes(
+        self, nodes: List[NodeWithScore], query_bundle: Optional[QueryBundle] = None
+    ) -> List[NodeWithScore]:
+        if not nodes:
             return []
             
-        endpoint = f"{self.api_base.rstrip('/')}/rerank"
-            
+        doc_texts = [node.get_content() for node in nodes]
+        query = query_bundle.query_str if query_bundle else ""
+
+        url = "https://openrouter.ai/api/v1/rerank"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/aihpi/pilotproject-deepfix",
+            "X-Title": "DeepFix RAG Testbed",
         }
-        
-        payload = {
+        data = {
             "model": self.model,
             "query": query,
-            "documents": documents,
-            "top_n": min(top_n, len(documents))
+            "documents": doc_texts,
+            "top_n": self.top_n
         }
 
-        last_resp_text = ""
-        last_status = 500
-        
-        # Add explicit backoff handler for OpenRouter rate limits (429 Too Many Requests)
-        for attempt in range(5):
-            resp = requests.post(endpoint, headers=headers, json=payload, timeout=90)
-            
-            if resp.ok:
-                data = resp.json()
-                results = data.get("results", [])
-                return [r["index"] for r in results]
-                
-            last_resp_text = resp.text
-            last_status = resp.status_code
-            
-            if last_status == 429:
-                time.sleep(2 ** attempt + 3) # Wait longer between bursts: 4s, 5s, 7s, 11s, 19s
-                continue
-            else:
-                break
-                
-        raise RuntimeError(f"Reranking API failed: {last_status} - {last_resp_text}")
+        retries = 3
+        base_delay = 1.0
 
+        for attempt in range(retries):
+            try:
+                resp = requests.post(url, headers=headers, json=data, timeout=30)
+                if resp.status_code == 429:
+                    delay = base_delay * (2 ** attempt)
+                    logging.getLogger(__name__).warning(f"[Rerank 429] Retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                resp.raise_for_status()
+                
+                resp_json = resp.json()
+                results = resp_json.get("results", [])
+                
+                # results looks like: [{"index": 4, "relevance_score": 0.99}, {"index": 0, "relevance_score": 0.85}, ...]
+                final_nodes = []
+                num_returned = len(results)
+                
+                for rank_idx, result_obj in enumerate(results):
+                    original_idx = result_obj["index"]
+                    best_node = nodes[original_idx]
+                    
+                    # Convert dense vector score to rerank score
+                    # Either use exact probability relevance_score if available, or synthesized rank
+                    rel_score = result_obj.get("relevance_score", float(num_returned - rank_idx))
+                    best_node.score = rel_score
+                    final_nodes.append(best_node)
+                    
+                return final_nodes
+                
+            except requests.exceptions.RequestException as e:
+                if attempt == retries - 1:
+                    logging.getLogger(__name__).error(f"Reranking API crashed entirely: {str(e)}")
+                    return nodes[:self.top_n]
+                time.sleep(base_delay * (2 ** attempt))
+                
+        return nodes[:self.top_n]
+
+# To maintain backwards compatibility while transitioning, export old classes to alias new ones where needed
+# (or provide simple wrappers)
+def EmbeddingClient(model: str, provider: str):
+    # Backward compatibility stub
+    emb = AISCEmbedding(model_name=model, provider=provider)
+    class Shim:
+        def embed_query(self, q): return emb._get_query_embedding(q)
+        def embed_documents(self, docs): return emb._get_text_embeddings(docs)
+    return Shim()
+
+def RerankClient(model: str):
+    reranker = OpenRouterReranker(model=model, top_n=5)
+    class Shim:
+        def rerank(self, q, docs, top_n=5):
+            from llama_index.core.schema import NodeWithScore, TextNode
+            nodes = [NodeWithScore(node=TextNode(text=t), score=1.0) for t in docs]
+            reranker.top_n = top_n
+            out_nodes = reranker._postprocess_nodes(nodes, QueryBundle(q))
+            # Just return original indices matched
+            return [docs.index(n.get_content()) for n in out_nodes]
+    return Shim()
 
 class GenerationClient:
-    """Client for answer generation via LiteLLM / OpenAI proxy."""
-
     def __init__(
         self,
         model: str = "qwen3-8-27b",
@@ -171,53 +225,52 @@ class GenerationClient:
         api_base: str | None = None,
         api_key: str | None = None,
     ):
+        base, key = _resolve_provider_endpoints(provider)
         self.model = model
-        self.provider = os.getenv("DEEPFIX_INFERENCE_PROVIDER", provider)
-        resolved_base, resolved_key = _resolve_provider_endpoints(self.provider, self.model)
-        self.api_base = api_base or resolved_base
-        self.api_key = api_key or resolved_key
-
-    def _build_prompt(self, query: str, context: list[str]) -> str:
-        context_text = "\n\n".join(context)
-        return (
-            "Answer the question using only the provided context. "
-            "If the context does not contain the answer, say so explicitly.\n\n"
-            f"Context:\n{context_text}\n\nQuestion: {query}\nAnswer:"
-        )
+        self.api_base = api_base or base
+        self.api_key = api_key or key
+        self.provider = provider
 
     def generate(
-        self, query: str, context: list[str], return_usage: bool = False
-    ) -> str | tuple[str, dict]:
-        """Generate an answer for `query` grounded in `context` chunks."""
-        prompt = self._build_prompt(query, context)
-        model_str = self.model if self.model.startswith("openai/") else f"openai/{self.model}"
-        
-        last_err = None
-        for attempt in range(5):
+        self, prompt: str, context: list[str] = None, return_usage: bool = False
+    ):
+        system_msg = (
+            "You are a highly precise legal assistant. "
+            "Use only the provided context to answer the question. "
+            "If the context does not contain the answer, explicitly say "
+            "'The provided context does not contain the answer.'"
+        )
+
+        context_str = "\\n\\n".join(context) if context else ""
+        user_msg = f"Context:\\n{context_str}\\n\\nQuestion: {prompt}\\n\\nAnswer:"
+
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ]
+
+        retries = 5
+        base_delay = 1
+        for attempt in range(retries):
             try:
-                resp = litellm.completion(
-                    model=model_str,
-                    messages=[{"role": "user", "content": prompt}],
+                r = litellm.completion(
+                    model=self.model,
+                    messages=messages,
                     api_base=self.api_base,
                     api_key=self.api_key,
                     custom_llm_provider="openai",
                     timeout=90,
-                    max_tokens=1024,
                 )
-                answer = resp.choices[0].message.content or ""
-                if not return_usage:
-                    return answer
-                usage = getattr(resp, "usage", None)
-                usage_dict = {
-                    "rag.prompt_tokens": getattr(usage, "prompt_tokens", None),
-                    "rag.completion_tokens": getattr(usage, "completion_tokens", None),
-                    "rag.total_tokens": getattr(usage, "total_tokens", None),
-                }
-                return answer, usage_dict
+                answer = r.choices[0].message.content or ""
+                usage = r.usage.model_dump() if r.usage else {}
+                break
             except Exception as e:
-                last_err = e
-                if "429" in str(e):
-                    time.sleep(2 ** attempt + 3)
-                else:
-                    raise e
-        raise last_err
+                if "429" in str(e) or "Too Many Requests" in str(e):
+                    delay = base_delay * (2**attempt)
+                    time.sleep(delay)
+                    continue
+                raise e
+        else:
+            raise RuntimeError(f"Generation failed after {retries} retries.")
+
+        return (answer, usage) if return_usage else answer

@@ -19,6 +19,11 @@ dependencies = [
     "datasets>=2.14.0",
     "deepeval>=1.0.0",
     "lancedb>=0.37.1,<0.38.0",
+    "llama-index-core>=0.11.0",
+    "llama-index-embeddings-openai>=0.2.0",
+    "llama-index-llms-litellm>=0.2.0",
+    "llama-index-vector-stores-lancedb>=0.2.0",
+
     "litellm>=1.0.0",
     "loguru",
     "mlflow>=2.15.0",
