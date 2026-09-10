@@ -1,4 +1,4 @@
-﻿"""Run DeepEval scoring over a dataset using the RAG pipeline."""
+"""Run DeepEval scoring over a dataset using the RAG pipeline."""
 
 import csv
 import json
@@ -117,7 +117,7 @@ def run_evaluation(
     if experiment is None:
         raise RuntimeError(
             f"MLflow experiment '{experiment_name}' does not exist in this workspace. "
-            "Refusing to auto-create per contract — check MLFLOW_DEV_RAG_EXPERIMENT."
+            "Refusing to auto-create per contract � check MLFLOW_DEV_RAG_EXPERIMENT."
         )
     mlflow.set_experiment(experiment_id=experiment.experiment_id)
 
@@ -136,7 +136,7 @@ def run_evaluation(
     judge_api_key = settings.LITELLM_KEY or ""
     
     judge = ProxyJudgeLLM(
-        model="openai/openrouter/openai/gpt-4.1-mini",
+        model="openai/openrouter/openai/gpt-4o",
         api_base=judge_api_base,
         api_key=judge_api_key,
     )
@@ -169,7 +169,7 @@ def run_evaluation(
         mlflow.log_param("embedding_model", config.embedding.model)
         mlflow.log_param("embedding_provider", config.embedding.provider)
         mlflow.log_param("generation_model", config.generation.model)
-        mlflow.log_param("judge_model", "gpt-4.1-mini")
+        mlflow.log_param("judge_model", "gpt-4o")
         mlflow.log_param("n_questions", len(qa_pairs))
 
         for i, qa in enumerate(qa_pairs):
