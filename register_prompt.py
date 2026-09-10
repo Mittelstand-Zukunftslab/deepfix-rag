@@ -1,8 +1,6 @@
-import os
+﻿import os
 import mlflow
-from dotenv import load_dotenv
-
-load_dotenv()
+from deepfix_rag.config.settings import settings
 
 required = [
     "MLFLOW_TRACKING_URI",
@@ -12,15 +10,15 @@ required = [
 ]
 
 for name in required:
-    if not os.getenv(name):
-        raise RuntimeError(f"Missing required environment variable: {name}")
+    if not getattr(settings, name, None):
+        raise RuntimeError(f"Missing required configuration setting matching environment variable: {name}")
 
 # Map RAG credentials to tracking credentials
-os.environ["MLFLOW_TRACKING_USERNAME"] = os.environ["MLFLOW_RAG_USERNAME"]
-os.environ["MLFLOW_TRACKING_PASSWORD"] = os.environ["MLFLOW_RAG_PASSWORD"]
+os.environ["MLFLOW_TRACKING_USERNAME"] = settings.MLFLOW_RAG_USERNAME
+os.environ["MLFLOW_TRACKING_PASSWORD"] = settings.MLFLOW_RAG_PASSWORD
 
-mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-mlflow.set_workspace(os.environ["MLFLOW_DEV_WORKSPACE"])
+mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
+mlflow.set_workspace(settings.MLFLOW_DEV_WORKSPACE)
 
 system_prompt = (
     "Answer the question using only the context provided. "
