@@ -117,7 +117,7 @@ def run_evaluation(
     if experiment is None:
         raise RuntimeError(
             f"MLflow experiment '{experiment_name}' does not exist in this workspace. "
-            "Refusing to auto-create per contract — check MLFLOW_DEV_RAG_EXPERIMENT."
+            "Refusing to auto-create per contract - check MLFLOW_DEV_RAG_EXPERIMENT."
         )
     mlflow.set_experiment(experiment_id=experiment.experiment_id)
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "candidate_id": "octen_candidate_006",
+  "candidate_id": "octen_candidate_007",
   "rag_type": "vector_rag",
   "configuration": {
     "chunking": {

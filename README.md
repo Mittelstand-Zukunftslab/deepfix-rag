@@ -1,26 +1,18 @@
 # DeepFix: Autonomous RAG Optimization Framework
-
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Package Manager: uv](https://img.shields.io/badge/package%20manager-uv-green.svg)](https://github.com/astral-sh/uv)
 [![Vector DB: LanceDB](https://img.shields.io/badge/Vector%20DB-LanceDB-orange.svg)](https://lancedb.com/)
 [![Evaluation: DeepEval](https://img.shields.io/badge/Evaluation-DeepEval-purple.svg)](https://github.com/confident-ai/deepeval)
 [![Tracking: MLflow](https://img.shields.io/badge/Tracking-MLflow-blue.svg)](https://mlflow.org/)
-
 **DeepFix** is an agentic framework engineered for autonomous diagnosis and hyperparameter optimization of Retrieval-Augmented Generation (RAG) pipelines. It decouples deterministic RAG system operations from agentic reasoning:
-
 1. **Deterministic Python CLI (`deepfix`)**: Scriptable, atomic subcommands (`dataset`, `index`, `eval`, `mutate-config`, `diff-config`, `run-diagnostic`, `export`) that execute pipeline tasks with structured JSON outputs and predictable exit codes.
 2. **Agent-Agnostic Skill Plugin**: Modular failure-remediation skills (`SKILL.md`) that guide long-running AI agents (such as Hermes, Claude, or Antigravity) to identify root causes and run remediation cycles autonomously.
 3. **MLflow Experiment Lineage**: Automatic tracking of config mutations, benchmark metrics, prompt artifacts, and evaluation deltas across optimization runs.
-
 Developed by **Mittelstand Zukunftslab & AI Service Center (AISC) — HPI**.
-
 ---
-
 ## Architecture & Decoupled Workflow
-
 DeepFix separates the optimization loop into two clear layers:
-
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      AGENTIC LAYER (Hermes / LLM)                       │
@@ -47,11 +39,8 @@ DeepFix separates the optimization loop into two clear layers:
 │  - Configuration history, prompt templates, and run lineage             │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
-
 ---
-
 ## Feature Matrix & Implementation Status
-
 | Feature / Subcommand | Status | Description |
 | :--- | :---: | :--- |
 | `deepfix dataset load` | `[Ready]` | Ingests benchmark datasets with strict `dev`/`test` split isolation and HuggingFace streaming. |
@@ -62,13 +51,9 @@ DeepFix separates the optimization loop into two clear layers:
 | `deepfix run-diagnostic` | `[In Progress]` | Categorizes failure modes (retrieval vs. ranking vs. grounding vs. entity). |
 | `deepfix export` | `[In Progress]` | Packages best configuration with evaluation lineage into standalone deployment bundles. |
 | **Autonomous Agent Loop** | `[In Progress]` | Multi-cycle closed-loop optimization executed by Hermes via `SKILL.md` plugins. |
-
 ---
-
 ## Supported Benchmark Matrix
-
 DeepFix targets complex, domain-specific, and large-scale RAG benchmarks:
-
 | Benchmark | Domain / Task | Failure Focus | Split Isolation | Source / Repository |
 | :--- | :--- | :--- | :---: | :--- |
 | **GaRAGe** | General Question Answering | Grounding, factuality & unanswerable deflection ("I don't know") | `dev` / `test` | `ds-ba/GaRAGe` |
@@ -77,49 +62,35 @@ DeepFix targets complex, domain-specific, and large-scale RAG benchmarks:
 | **BrowseComp-Plus** | Web Deep Research (~100k docs) | Multi-hop reasoning and long-tail document retrieval | `dev` / `test` | `ds-ba/BrowseComp-Plus` |
 | **EnterpriseRAG-Bench**| Enterprise Knowledge (>500k docs)| Low lexical overlap, enterprise jargon & multi-doc aggregation | `dev` / `test` | `ds-ba/EnterpriseRAG-Bench` |
 | **mtRAG** | Multi-Turn Conversational AI | Context maintenance across turns and topic shifts | `dev` / `test` | `ds-ba/mtRAG` |
-
 > [!IMPORTANT]
 > **Split Isolation Policy**: Optimization and tuning loops **only** execute against the `dev` split. The `test` split is strictly locked for final evaluation.
-
 ---
-
 ## Installation & Prerequisites
-
 ### Prerequisites
 - **Python**: `~=3.12.0`
 - **Package Manager**: [uv](https://github.com/astral-sh/uv) (recommended) or standard `pip`
-
 ### Setup
-
 ```bash
 # 1. Clone repository
 git clone https://github.com/hpi-dhc/pilotproject-deepfix.git
 cd pilotproject-deepfix
-
 # 2. Create environment & install dependencies with uv
 uv sync
-
 # 3. Activate the virtual environment
 # On Windows (PowerShell):
 .venv\Scripts\Activate.ps1
 # On Linux / macOS:
 source .venv/bin/activate
 ```
-
 Alternatively, use the provided `Makefile`:
 ```bash
 make create_environment
 make requirements
 ```
-
 ---
-
 ## Environment Configuration (`.env`)
-
 DeepFix uses a `.env` file in the project root to configure inference model backends and MLflow tracking.
-
 Create `.env` using the template below:
-
 ```dotenv
 # ==============================================================================
 # 1. Model Inference Endpoints (AISC / Octen / LiteLLM)
@@ -127,15 +98,12 @@ Create `.env` using the template below:
 # HPI AI Service Center (AISC) / Octen Inference
 AISC_URL=https://api.aisc.hpi.de/v1
 AISC_KEY=your_aisc_api_key_here
-
 # LiteLLM Proxy / OpenRouter (optional fallback)
 LITELLM_URL=https://litellm.mittelstand-zukunftslab.de
 LITELLM_KEY=your_litellm_api_key_here
 OPENROUTER_KEY=your_openrouter_api_key_here
-
 # Provider selector: 'aisc', 'octen', 'hpi', or 'openrouter'
 DEEPFIX_INFERENCE_PROVIDER=aisc
-
 # ==============================================================================
 # 2. MLflow Experiment Tracking
 # ==============================================================================
@@ -144,27 +112,21 @@ MLFLOW_RAG_USERNAME=your_username
 MLFLOW_RAG_PASSWORD=your_password
 MLFLOW_DEV_WORKSPACE=deepfix-dev
 MLFLOW_EXPERIMENT_NAME=deepfix-rag-optimization
-
 # ==============================================================================
 # 3. Local LanceDB & Data Storage
 # ==============================================================================
 LANCEDB_DATA_DIR=data/lancedb
 DATASET_CACHE_DIR=data/datasets
 ```
-
 ---
-
 ## Quickstart: Step-by-Step Optimization Walkthrough
-
 Here is an end-to-end scenario demonstrating how DeepFix loads data, indexes passages, computes baselines, mutates parameters, and compares improvements.
-
 ### 1. Ingest Benchmark Dataset
 Fetch the development split of the benchmark dataset (e.g. `garage`):
 ```bash
 deepfix dataset load --name garage --split dev
 ```
 Files are saved to `data/datasets/garage/dev/corpus.jsonl` and `qa.jsonl`.
-
 ### 2. Build LanceDB Index
 Generate embeddings and build the LanceDB hybrid table:
 ```bash
@@ -174,7 +136,6 @@ deepfix index \
   --index-dir data/indexes/garage_dev \
   --force
 ```
-
 ### 3. Run Baseline Evaluation
 Evaluate the baseline configuration using DeepEval metrics:
 ```bash
@@ -184,7 +145,6 @@ deepfix eval \
   --index-dir data/indexes/garage_dev \
   --limit 20
 ```
-
 ### 4. Mutate Hyperparameters
 Create a new candidate configuration by overriding parameters (e.g., increasing `retrieval.top_k` and tuning `retrieval.hybrid_alpha`):
 ```bash
@@ -194,12 +154,10 @@ deepfix mutate-config \
   --set retrieval.hybrid_alpha=0.7 \
   --output configs/candidate_v1.yaml
 ```
-
 Inspect the parameter diff:
 ```bash
 deepfix diff-config configs/default.yaml configs/candidate_v1.yaml
 ```
-
 ### 5. Evaluate Candidate & Compare Delta
 Run evaluation with `--compare` to get side-by-side metric deltas:
 ```bash
@@ -215,103 +173,79 @@ Output includes `candidate`, `baseline`, and `delta` for:
 - `contextual_precision_avg`
 - `answer_correctness_avg`
 - `deflection_rate`
-
 ### 6. Register Prompts in MLflow
 Register system and query prompts to MLflow:
 ```bash
 python register_prompt.py
 ```
-
 ---
-
 ## CLI Command Reference
-
 All subcommands support `--json` for headless automation by LLM agents.
-
 ### `deepfix dataset load`
 Download and format benchmark datasets into canonical JSON Lines format.
 ```bash
 deepfix dataset load --name <preset_or_hf_repo> --split <dev|test> [--stream]
 ```
-
 ### `deepfix index`
 Build dense, sparse, or hybrid LanceDB indexes from a corpus.
 ```bash
 deepfix index --dataset <path_to_corpus> --config <config.yaml> --index-dir <dir> [--force] [--json]
 ```
-
 ### `deepfix eval`
 Run DeepEval benchmark evaluation on a QA dataset.
 ```bash
 deepfix eval --dataset <path_to_qa> --config <config.yaml> [--index-dir <dir>] [--compare <base.yaml>] [--limit <N>] [--json]
 ```
-
 ### `deepfix mutate-config`
 Validate and mutate RAG pipeline hyperparameters using dot-notation keys.
 ```bash
 deepfix mutate-config --base <base.yaml> --set <key.subkey=value> --output <new_config.yaml> [--json]
 ```
-
 ### `deepfix diff-config`
 Structural diff between two RAG YAML configurations.
 ```bash
 deepfix diff-config <config_a.yaml> <config_b.yaml> [--json]
 ```
-
 ### `deepfix run-diagnostic` `[In Progress]`
 Classify low-scoring queries into specific failure modes.
 ```bash
 deepfix run-diagnostic --dataset <path> --type <retrieval|entity|ranking|grounding> [--threshold 0.7] [--json]
 ```
-
 ### `deepfix export` `[In Progress]`
 Export the best candidate configuration bundle and metadata.
 ```bash
 deepfix export --config <best_config.yaml> --output <dist_path> [--include-meta] [--json]
 ```
-
 ---
-
 ## Configuration Schema
-
 Configurations are validated against Pydantic models in `src/deepfix_rag/config/schema.py`:
-
 ```yaml
 version: "1.0"
-
 chunking:
   strategy: recursive        # recursive | fixed | semantic
   size: 512                 # 64 to 4096
   overlap: 64
-
 embedding:
   model: octen-embedding-8b # octen-embedding-8b | Qwen/Qwen3-Embedding-4B
   provider: aisc            # aisc | octen | hpi | openrouter
   batch_size: 32
-
 retrieval:
   backend: hybrid           # hybrid | dense | pyterrier | bm25
   top_k: 10                 # 1 to 100
   hybrid_alpha: 0.5         # 0.0 (lexical) to 1.0 (dense)
-
 rerank:
   enabled: false
   model: rerank-english-v3.0
   top_n: 5
-
 generation:
   model: Qwen/Qwen2.5-32B-Instruct
   provider: hpi
   temperature: 0.0
   max_tokens: 1024
 ```
-
 ---
-
 ## Autonomous Optimization Workflow (Hermes Agent)
-
 In autonomous mode, an LLM agent executes multi-cycle optimization loops guided by the DeepFix skill plugin:
-
 1. **Observe**: Agent runs `deepfix run-diagnostic` and `deepfix eval` on the `dev` split.
 2. **Match Skill**: Agent matches identified failures to modular skill instructions:
    - `skills/chunking-tuning/SKILL.md` (addressing context fragmentation)
@@ -322,11 +256,8 @@ In autonomous mode, an LLM agent executes multi-cycle optimization loops guided 
 3. **Act**: Agent mutates configuration (`deepfix mutate-config`), rebuilds index (`deepfix index` if needed), and re-evaluates (`deepfix eval --compare`).
 4. **Decide**: If metrics improve, the mutation is adopted as the new baseline; otherwise, it is reverted.
 5. **Log**: All runs, parameters, and evaluation deltas are logged to MLflow.
-
 ---
-
 ## Project Organization
-
 ```
 pilotproject-deepfix/
 ├── configs/                       <- RAG configuration YAML templates
@@ -341,11 +272,6 @@ pilotproject-deepfix/
 │   └── plan-deepfix-ux-flow.md    <- UX flow plan and architectural boundary specs
 ├── models/                        <- Local serialized models / cache
 ├── notebooks/                     <- Exploratory Jupyter notebooks
-├── scripts/                       <- Operational utilities (conversion, ingestion, testing)
-│   ├── convert_json_index_to_lancedb.py
-│   ├── ingest_lancedb.py
-│   ├── push_to_rustfs.py
-│   └── test_end_to_end.py
 ├── src/deepfix_rag/               <- Main Python package source code
 │   ├── cli/                       <- CLI subcommands (Typer)
 │   │   ├── config.py              <- mutate-config and diff-config
@@ -373,7 +299,6 @@ pilotproject-deepfix/
 │   ├── test_config_mutator.py
 │   ├── test_dataset_cli.py
 │   ├── test_embedding_client.py
-│   ├── test_end_to_end.py
 │   └── test_retrieval_pipeline.py
 ├── candidate_manifest.json        <- Example MLflow candidate artifact
 ├── Makefile                       <- Development and environment convenience tasks
@@ -381,28 +306,19 @@ pilotproject-deepfix/
 ├── register_prompt.py             <- Script to register RAG prompts with MLflow
 └── README.md                      <- Project documentation (this file)
 ```
-
 ---
-
 ## Development & Testing
-
 Run code quality checks and tests:
-
 ```bash
 # Format code with ruff
 make format
-
 # Lint code with ruff
 make lint
-
 # Run all test suites
 make test
 # or directly with pytest:
 pytest tests/
 ```
-
 ---
-
 ## License
-
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
