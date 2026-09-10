@@ -18,24 +18,20 @@ from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
 from deepfix_rag.config.settings import settings
 import os
+import os
 import litellm
 import mlflow
+from deepfix_rag.config.settings import settings
 
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.evaluation.mlflow_candidate import ensure_candidate_logged_model
 from deepfix_rag.retrieval.models import GenerationClient
 from deepfix_rag.retrieval.pipeline import execute_retrieval
 
-load_dotenv()
-
-if os.getenv("MLFLOW_RAG_USERNAME"):
-    os.environ["MLFLOW_TRACKING_USERNAME"] = os.environ["MLFLOW_RAG_USERNAME"]
-if os.getenv("MLFLOW_RAG_PASSWORD"):
-    os.environ["MLFLOW_TRACKING_PASSWORD"] = os.environ["MLFLOW_RAG_PASSWORD"]
 os.environ["MLFLOW_ENABLE_ASYNC_TRACE_LOGGING"] = "false"
 
-if os.getenv("MLFLOW_TRACKING_URI"):
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+if settings.MLFLOW_TRACKING_URI:
+    mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
 
 import tiktoken
 

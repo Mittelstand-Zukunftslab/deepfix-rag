@@ -18,23 +18,10 @@ litellm.telemetry = False
 def _resolve_provider_endpoints(
     provider: str,
 ) -> tuple[str | None, str | None]:
-    """Resolve API base and key from environment based on the provider tag."""
     if provider == "aisc" or provider == "hpi":
-        base_url = os.getenv(
-            "AISC_URL",
-            os.getenv("OCTEN_URL", "https://api.aisc.hpi.de/v1"),
-        )
-        api_key = os.getenv(
-            "AISC_KEY",
-            os.getenv("OCTEN_KEY", settings.LITELLM_KEY),
-        )
-        return base_url, api_key
+        return settings.OCTEN_URL, (settings.OCTEN_KEY or settings.LITELLM_KEY)
     elif "proxy" in provider or "litellm" in provider:
-        base_url = os.getenv(
-            "LITELLM_URL", "https://litellm.mittelstand-zukunftslab.de"
-        )
-        api_key = settings.LITELLM_KEY
-        return base_url, api_key
+        return settings.LITELLM_URL, settings.LITELLM_KEY
     return None, None
 
 
