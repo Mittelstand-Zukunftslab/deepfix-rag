@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+from deepfix_rag.config.settings import settings
 
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core import VectorStoreIndex, QueryBundle
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from deepfix_rag.config.schema import UNIMPLEMENTED_BACKENDS, RAGConfig
 from deepfix_rag.retrieval.models import AISCEmbedding, OpenRouterReranker
 
-load_dotenv()
+
 
 
 class RetrievalResult(BaseModel):

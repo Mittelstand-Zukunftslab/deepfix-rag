@@ -6,27 +6,20 @@ import json
 import os
 
 import mlflow
-from dotenv import load_dotenv
+from deepfix_rag.config.settings import settings
 
 from deepfix_rag.evaluation.mlflow_helpers import compute_config_hash
 
-load_dotenv()
-
-if os.getenv("MLFLOW_RAG_USERNAME"):
-    os.environ["MLFLOW_TRACKING_USERNAME"] = os.environ["MLFLOW_RAG_USERNAME"]
-if os.getenv("MLFLOW_RAG_PASSWORD"):
-    os.environ["MLFLOW_TRACKING_PASSWORD"] = os.environ["MLFLOW_RAG_PASSWORD"]
-
-if os.getenv("MLFLOW_TRACKING_URI"):
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-if hasattr(mlflow, "set_workspace") and os.getenv("MLFLOW_DEV_WORKSPACE"):
-    mlflow.set_workspace(os.environ["MLFLOW_DEV_WORKSPACE"])
+if settings.MLFLOW_TRACKING_URI:
+    mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
+if hasattr(mlflow, "set_workspace") and settings.MLFLOW_DEV_WORKSPACE:
+    mlflow.set_workspace(settings.MLFLOW_DEV_WORKSPACE)
 
 
 def build_manifest() -> dict:
     manifest = {
         "schema_version": 1,
-        "candidate_id": os.getenv("MLFLOW_CANDIDATE_ID", "baseline_001"),
+        "candidate_id": settings.MLFLOW_CANDIDATE_ID,
         "rag_type": "vector_rag",
         "configuration": {
             "chunking": {
@@ -36,8 +29,8 @@ def build_manifest() -> dict:
                 "parameters": {},
             },
             "embedding": {
-                "provider": os.getenv("EMBEDDING_PROVIDER", "aisc"),
-                "model": os.getenv("EMBEDDING_MODEL", "octen-embedding-8b"),
+                "provider": settings.EMBEDDING_PROVIDER,
+                "model": settings.EMBEDDING_MODEL,
                 "parameters": {"batch_size": 32},
             },
             "vector_store": {
@@ -91,12 +84,12 @@ def _get_param(model, key: str) -> str | None:
     return None
 
 def ensure_candidate_logged_model() -> str:
-    candidate_id = os.getenv("MLFLOW_CANDIDATE_ID", "baseline_001")
+    candidate_id = settings.MLFLOW_CANDIDATE_ID
     manifest = build_manifest()
     config_hash = compute_config_hash(manifest)
     manifest["config_hash"] = config_hash
 
-    experiment_name = os.getenv("MLFLOW_DEV_RAG_EXPERIMENT", "dev_rag_experiment")
+    experiment_name = settings.MLFLOW_DEV_RAG_EXPERIMENT
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
         raise RuntimeError(f"Experiment '{experiment_name}' does not exist.")

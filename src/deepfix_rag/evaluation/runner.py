@@ -16,7 +16,8 @@ from pathlib import Path
 from deepeval.metrics import ContextualPrecisionMetric, FaithfulnessMetric, GEval
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
-from dotenv import load_dotenv
+from deepfix_rag.config.settings import settings
+import os
 import litellm
 import mlflow
 
@@ -113,9 +114,9 @@ def run_evaluation(
     workspace: str = "dev",
 ) -> dict:
     workspace_env = "MLFLOW_TEST_WORKSPACE" if workspace == "test" else "MLFLOW_DEV_WORKSPACE"
-    if hasattr(mlflow, "set_workspace") and os.getenv(workspace_env):
-        mlflow.set_workspace(os.environ[workspace_env])
-    experiment_name = os.getenv("MLFLOW_DEV_RAG_EXPERIMENT", "dev_rag_experiment")
+    if hasattr(mlflow, "set_workspace") and getattr(settings, workspace_env, None):
+        mlflow.set_workspace(getattr(settings, workspace_env))
+    experiment_name = settings.MLFLOW_DEV_RAG_EXPERIMENT
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
         raise RuntimeError(
@@ -135,8 +136,8 @@ def run_evaluation(
     generator = GenerationClient(model=config.generation.model)
     
     # Judge logic MUST use the OpenRouter proxy, not the local AISC node
-    judge_api_base = os.getenv("LITELLM_URL", "https://litellm.mittelstand-zukunftslab.de")
-    judge_api_key = os.getenv("LITELLM_KEY", "")
+    judge_api_base = settings.LITELLM_URL
+    judge_api_key = settings.LITELLM_KEY or ""
     
     judge = ProxyJudgeLLM(
         model="openai/openrouter/openai/gpt-4.1-mini",
@@ -182,11 +183,11 @@ def run_evaluation(
             question_id = qa.get("id", f"q_{i}")
             try:
                 with mlflow.start_span(name="rag_request", span_type="CHAIN") as parent_span:
-                    if os.getenv("MLFLOW_CANDIDATE_ID"):
+                    if settings.MLFLOW_CANDIDATE_ID:
                         mlflow.update_current_trace(
                             metadata={
-                                "candidate_id": os.getenv("MLFLOW_CANDIDATE_ID", ""),
-                                "corpus_id": os.getenv("MLFLOW_CORPUS_ID", ""),
+                                "candidate_id": settings.MLFLOW_CANDIDATE_ID or "",
+                                "corpus_id": settings.MLFLOW_CORPUS_ID or "",
                                 "question_id": str(question_id),
                             }
                         )

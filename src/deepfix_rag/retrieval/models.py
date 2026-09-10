@@ -5,14 +5,14 @@ import logging
 import os
 import time
 
-from dotenv import load_dotenv
+from deepfix_rag.config.settings import settings
 
 import litellm
 
 # Explicitly disable LiteLLM telemetry to avoid hangs
-os.environ["LITELLM_TELEMETRY"] = "False"
+
 litellm.telemetry = False
-load_dotenv()
+
 
 
 def _resolve_provider_endpoints(
@@ -26,14 +26,14 @@ def _resolve_provider_endpoints(
         )
         api_key = os.getenv(
             "AISC_KEY",
-            os.getenv("OCTEN_KEY", os.getenv("LITELLM_KEY")),
+            os.getenv("OCTEN_KEY", settings.LITELLM_KEY),
         )
         return base_url, api_key
     elif "proxy" in provider or "litellm" in provider:
         base_url = os.getenv(
             "LITELLM_URL", "https://litellm.mittelstand-zukunftslab.de"
         )
-        api_key = os.getenv("LITELLM_KEY")
+        api_key = settings.LITELLM_KEY
         return base_url, api_key
     return None, None
 
@@ -126,7 +126,7 @@ class OpenRouterReranker(BaseNodePostprocessor):
     api_key: str = ""
 
     def __init__(self, model: str = "qwen/qwen3-reranker-8b", top_n: int = 5, api_key: Optional[str] = None):
-        super().__init__(model=model, top_n=top_n, api_key=api_key or os.getenv("OPENROUTER_KEY", ""))
+        super().__init__(model=model, top_n=top_n, api_key=api_key or settings.OPENROUTER_KEY or "")
 
     @classmethod
     def class_name(cls) -> str:
