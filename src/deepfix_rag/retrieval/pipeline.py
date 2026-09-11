@@ -11,7 +11,7 @@ from llama_index.vector_stores.lancedb import LanceDBVectorStore
 from pydantic import BaseModel, Field
 
 from deepfix_rag.config.schema import UNIMPLEMENTED_BACKENDS, RAGConfig
-from deepfix_rag.retrieval.models import AISCEmbedding, OpenRouterReranker
+from deepfix_rag.retrieval.models import AISCEmbedding, AISCReranker
 
 
 
@@ -52,7 +52,7 @@ def execute_retrieval(
 
     # 3. Node Post-Processing (Reranking)
     if initial_nodes and config.rerank.enabled and getattr(config.rerank, "model", None):
-        reranker = OpenRouterReranker(model=config.rerank.model, top_n=config.rerank.top_n)
+        reranker = AISCReranker(model=config.rerank.model, top_n=config.rerank.top_n)
         initial_nodes = reranker.postprocess_nodes(initial_nodes, query_bundle=QueryBundle(query))
 
     # 4. Standardize output for CLI / MLFlow runner

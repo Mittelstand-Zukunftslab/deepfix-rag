@@ -105,7 +105,7 @@ from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore, QueryBundle
 from typing import Optional
 
-class OpenRouterReranker(BaseNodePostprocessor):
+class AISCReranker(BaseNodePostprocessor):
     """Custom Cross-Encoder Reranker using direct OpenRouter HTTP POST calls (LlamaIndex wrapper)."""
     
     model: str = "qwen/qwen3-reranker-8b"
@@ -113,11 +113,11 @@ class OpenRouterReranker(BaseNodePostprocessor):
     api_key: str = ""
 
     def __init__(self, model: str = "qwen/qwen3-reranker-8b", top_n: int = 5, api_key: Optional[str] = None):
-        super().__init__(model=model, top_n=top_n, api_key=api_key or settings.OPENROUTER_KEY or "")
+        super().__init__(model=model, top_n=top_n, api_key=api_key or settings.OCTEN_KEY or settings.LITELLM_KEY or settings.OPENROUTER_KEY or "")
 
     @classmethod
     def class_name(cls) -> str:
-        return "OpenRouterReranker"
+        return "AISCReranker"
         
     def _postprocess_nodes(
         self, nodes: List[NodeWithScore], query_bundle: Optional[QueryBundle] = None
@@ -128,7 +128,7 @@ class OpenRouterReranker(BaseNodePostprocessor):
         doc_texts = [node.get_content() for node in nodes]
         query = query_bundle.query_str if query_bundle else ""
 
-        url = "https://openrouter.ai/api/v1/rerank"
+        url = "https://api.aisc.hpi.de/v1/rerank"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -193,7 +193,7 @@ def EmbeddingClient(model: str, provider: str):
     return Shim()
 
 def RerankClient(model: str):
-    reranker = OpenRouterReranker(model=model, top_n=5)
+    reranker = AISCReranker(model=model, top_n=5)
     class Shim:
         def rerank(self, q, docs, top_n=5):
             from llama_index.core.schema import NodeWithScore, TextNode

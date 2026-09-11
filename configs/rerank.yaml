@@ -17,7 +17,7 @@ retrieval:
 
 rerank:
   enabled: true
-  model: qwen/qwen3-reranker-8b
+  model: qwen3-reranker-4b
   top_n: 5
 
 generation:
