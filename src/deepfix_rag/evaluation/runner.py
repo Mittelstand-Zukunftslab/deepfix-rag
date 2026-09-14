@@ -26,7 +26,7 @@ from deepfix_rag.config.settings import settings
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.evaluation.mlflow_candidate import ensure_candidate_logged_model
 from deepfix_rag.retrieval.models import GenerationClient
-from deepfix_rag.retrieval.pipeline import execute_retrieval
+from deepfix_rag.pipeline import execute_retrieval
 
 os.environ["MLFLOW_ENABLE_ASYNC_TRACE_LOGGING"] = "false"
 

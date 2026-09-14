@@ -8,7 +8,7 @@ import pandas as pd
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.retrieval.models import GenerationClient, AISCEmbedding
 from deepfix_rag.evaluation.indexing import load_corpus, build_index
-from deepfix_rag.retrieval.pipeline import execute_retrieval
+from deepfix_rag.pipeline import execute_retrieval
 
 
 

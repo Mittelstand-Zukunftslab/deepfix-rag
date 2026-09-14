@@ -22,21 +22,25 @@ dependencies = [
     "llama-index-core>=0.11.0",
     "llama-index-embeddings-openai>=0.2.0",
     "llama-index-llms-litellm>=0.2.0",
+    "llama-index-postprocessor-cohere-rerank>=0.2.0",
     "llama-index-vector-stores-lancedb>=0.2.0",
-
     "litellm>=1.0.0",
     "loguru",
     "mlflow>=2.15.0",
     "pandas>=2.0.0",
-    "pydantic>=2.0", "pydantic-settings>=2.0.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0.0",
     "pyarrow>=14.0.0",
     "pytest>=8.0.0",
-    
     "pyyaml>=6.0",
     "rich",
     "ruff",
     "tiktoken>=0.5.0",
     "typer>=0.9.0",
+    "turbovec[llama-index]>=1.0.0",
+    "llama-index-llms-openai>=0.8.1",
+    "llama-index-graph-stores-falkordb>=0.7.0",
+    "llama-index-graph-stores-memgraph>=0.6.0",
 ]
 requires-python = "~=3.12.0"
 

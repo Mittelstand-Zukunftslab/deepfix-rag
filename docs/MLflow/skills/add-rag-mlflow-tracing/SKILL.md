@@ -53,7 +53,7 @@ The integration is complete only when all applicable requirements hold:
 
 1. One canonical MLflow initialization path exists.
 2. Required settings fail fast; there is no default workspace/experiment fallback.
-3. The Target RAG uses only `MLFLOW_RAG_USERNAME` / `MLFLOW_RAG_PASSWORD`.
+3. The Target RAG uses only `MLFLOW_TRACKING_USERNAME` / `MLFLOW_TRACKING_PASSWORD`.
 4. The effective system prompt is represented by an exact immutable version of `target-rag-system-main`.
 5. When query rewriting is enabled and prompt-based, its effective prompt is represented by an exact immutable version of `target-rag-system-rewrite`; when disabled, the manifest reference is explicitly `null`.
 6. Existing prompt versions are reused when their immutable prompt payload already matches the effective runtime prompt; do not create duplicate versions unnecessarily.
@@ -95,7 +95,7 @@ Use only keys defined by `.env.example`.
 
 | Variables | Purpose | Use by this skill |
 | --- | --- | --- |
-| `MLFLOW_RAG_USERNAME`, `MLFLOW_RAG_PASSWORD` | Write Target RAG and approved evaluation evidence | Required |
+| `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD` | Write Target RAG and approved evaluation evidence | Required |
 | `MLFLOW_DEEPFIX_USERNAME`, `MLFLOW_DEEPFIX_PASSWORD` | Read visible Target RAG evidence | Never |
 | `MLFLOW_HERMES_READER_USERNAME`, `MLFLOW_HERMES_READER_PASSWORD` | Read visible Target RAG evidence | Never |
 | `MLFLOW_HERMES_SERVICE_USERNAME`, `MLFLOW_HERMES_SERVICE_PASSWORD` | Write Hermes traces | Never |

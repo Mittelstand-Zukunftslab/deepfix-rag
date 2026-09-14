@@ -1,7 +1,7 @@
 import pytest
 
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.retrieval.pipeline import execute_retrieval
+from deepfix_rag.pipeline import execute_retrieval
 
 
 @pytest.mark.parametrize("backend", ["pyterrier", "bm25", "graph", "vectorless"])
