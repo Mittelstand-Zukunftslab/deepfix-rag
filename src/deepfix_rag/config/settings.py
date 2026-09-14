@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     COHERE_BASE_URL: str = "https://api.aisc.hpi.de/v1"
 
     # Memgraph
-    MEMGRAPH_URL: str = "bolt://localhost:7687"
+    MEMGRAPH_URL: str = "http://localhost:7687"
     MEMGRAPH_USERNAME: str = "neo4j"
     MEMGRAPH_PASSWORD: str = "neo4j"
 
