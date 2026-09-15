@@ -7,7 +7,9 @@ import yaml
 
 from deepfix_rag.cli.ui import print_error, print_json, print_success
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.evaluation.indexing import build_index
+import asyncio
+from deepfix_rag.pipeline import RAGWorkflow
+from deepfix_rag.data import DataLoaderConfig, DataSourceType
 
 
 def _load_rag_config(config_path: Path) -> RAGConfig:
@@ -43,23 +45,26 @@ def index_cmd(
         raise typer.Exit(code=1)
 
     try:
-        result = build_index(
-            dataset_path=dataset,
-            config=rag_config,
-            index_dir=str(index_dir),
-            force=force,
+        # Wrap the user path into our strict Pydantic scheme
+        data_config = DataLoaderConfig(
+            source_type=DataSourceType.DIRECTORY if dataset.is_dir() else DataSourceType.LOCAL_FILE,
+            path_or_repo=str(dataset),
+            text_column="text",
+            doc_id_column="id"
         )
-    except FileExistsError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1)
+        
+        # Instantiate the Workflow explicitly
+        workflow = RAGWorkflow(config=rag_config, index_dir=str(index_dir))
+        
+        # Trigger the LlamaIndex Ingest step natively!
+        print(f"Triggering asynchronous RAGWorkflow data ingestion...")
+        index = asyncio.run(workflow.run(data_config=data_config))
+        
     except Exception as e:
-        print_error(f"Indexing failed: {e}")
+        print_error(f"Workflow Indexing failed: {e}")
         raise typer.Exit(code=1)
 
     if json_output:
-        print_json(result)
+        print_json({"status": "success", "index_path": str(index_dir)})
     else:
-        print_success(
-            f"Indexed {result['documents']} documents into {result['chunks']} chunks "
-            f"at {result['index_path']}."
-        )
+        print_success(f"Indexed documents successfully via Workflow into LanceDB at {index_dir}.")

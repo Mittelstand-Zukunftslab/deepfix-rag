@@ -182,17 +182,16 @@ class RAGWorkflow(Workflow):
             
     @step
     async def ingest(self, ctx: Context, ev: StartEvent) -> StopEvent | None:
-        """Entry point to ingest documents into LanceDB index."""
-        dirname = ev.get("dirname")
-        data_file = ev.get("data_file")
-        if not dirname and not data_file:
-            return None
+        """Entry point to ingest documents into vector/graph index."""
+        data_config = ev.get("data_config")
+        if not data_config:
+            raise ValueError("You must pass a 'data_config' DataLoaderConfig to ingest.")
 
-        data_loader = DataLoader(data_file)
-        documents = data_loader.load_documents(dirname, data_file)
+        # Trigger our new world-class Factory Object directly inside the LlamaIndex Workflow graph
+        data_loader = DataLoader()
+        documents = data_loader.load_documents(data_config)
 
         index = self._build_index(documents)
-
         return StopEvent(result=index)
 
     @step
