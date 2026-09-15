@@ -9,7 +9,7 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.vector_stores.lancedb import LanceDBVectorStore
 
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.retrieval.models import AISCEmbedding
+from llama_index.embeddings.openai import OpenAIEmbedding
 
 
 def load_corpus(dataset_path: Path) -> list[Document]:
@@ -70,7 +70,7 @@ def build_index(dataset_path: Path, config: RAGConfig, index_dir: str, force: bo
     )
     
     # 2. Extract Custom Embedding Engine
-    embed_model = AISCEmbedding(model_name=config.embedding.model, provider=config.embedding.provider)
+    embed_model = OpenAIEmbedding(api_base=config.embedding.provider, model_name=config.embedding.model, provider=config.embedding.provider)
 
     # 3. Load Documents
     documents = load_corpus(dataset_path)

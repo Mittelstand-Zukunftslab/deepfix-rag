@@ -21,7 +21,7 @@ from llama_index.core.workflow import (
     Workflow,
     step,
 )
-from turbovec.llama_index import TurboQuantVectorStore
+# from turbovec.llama_index import TurboQuantVectorStore (Temporarily disabled until TurboQuant is installed)
 from llama_index.graph_stores.falkordb import FalkorDBGraphStore
 from llama_index.core import (
     SimpleDirectoryReader,
@@ -87,9 +87,9 @@ class RAGWorkflow(Workflow):
         if self.embed_model is not None:
             return self.embed_model
         return OpenAIEmbedding(
-            model_name=settings.EMBEDDING_MODEL,
-            api_base=settings.EMBEDDING_BASE_URL,
-            api_key=settings.EMBEDDING_API_KEY,
+            model_name=self.config.embedding.model,
+            api_base=settings.OCTEN_URL if self.config.embedding.provider == "aisc" else settings.LITELLM_URL,
+            api_key=settings.OCTEN_KEY or settings.LITELLM_KEY,
         )
 
     def _get_llm(self) -> BaseLLM:
@@ -114,7 +114,7 @@ class RAGWorkflow(Workflow):
             base_url=settings.COHERE_BASE_URL,
         )
     
-    def _get_vector_store(self) -> LanceDBVectorStore | TurboQuantVectorStore:
+    def _get_vector_store(self) -> LanceDBVectorStore: # Removed TurboQuantVectorStore typehint temporarily
         if self.config.retrieval.vector_store == VectorStore.LANCEDB:
             return LanceDBVectorStore(uri=self.index_dir, table_name="documents")
         elif self.config.retrieval.vector_store == VectorStore.TURBO_QUANT:
@@ -212,8 +212,17 @@ class RAGWorkflow(Workflow):
         await ctx.store.set("query", query)
         
         if index is None:
-            logger.warning("Index is not loaded. Please ingest documents first.")
-            return None
+            # Auto-load the index from the vector store if not provided dynamically
+            if self.config.retrieval.graph_store != "none":
+                index = PropertyGraphIndex.from_existing(
+                    property_graph_store=self._get_graph_store(),
+                    embed_model=self._get_embed_model()
+                )
+            else:
+                index = VectorStoreIndex.from_vector_store(
+                    vector_store=self._get_vector_store(),
+                    embed_model=self._get_embed_model()
+                )
         
         kwargs = dict()
         if isinstance(index, PropertyGraphIndex):

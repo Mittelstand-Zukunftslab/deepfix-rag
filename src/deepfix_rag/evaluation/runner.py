@@ -25,8 +25,8 @@ from deepfix_rag.config.settings import settings
 
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.evaluation.mlflow_candidate import ensure_candidate_logged_model
-from deepfix_rag.retrieval.models import GenerationClient
-from deepfix_rag.pipeline import execute_retrieval
+# from deepfix_rag.retrieval.models import GenerationClient (Removed by Fadel)
+from deepfix_rag.pipeline import RAGWorkflow
 
 os.environ["MLFLOW_ENABLE_ASYNC_TRACE_LOGGING"] = "false"
 
@@ -135,7 +135,7 @@ def run_evaluation(
     if limit:
         qa_pairs = qa_pairs[:limit]
 
-    generator = GenerationClient(model=config.generation.model)
+    
     
     # Judge logic MUST use the OpenRouter proxy, not the local AISC node
     judge_api_base = settings.OCTEN_URL
@@ -178,64 +178,34 @@ def run_evaluation(
         mlflow.log_param("judge_model", "gpt-oss-120b")
         mlflow.log_param("n_questions", len(qa_pairs))
 
+        
+        import asyncio
+        from deepfix_rag.pipeline import RAGWorkflow
+        
+        # Instantiate the workflow once
+        print(f"Instantiating LlamaIndex RAG Workflow from index: {index_dir}")
+        workflow = RAGWorkflow(config=config, index_dir=index_dir)
+
         for i, qa in enumerate(qa_pairs):
             query = qa.get("question") or qa.get("query", "")
             expected_output = qa.get("answer") or qa.get("expected_output", "N/A")
             
             question_id = qa.get("id", f"q_{i}")
+            
+            # Since LlamaIndex handles native MLflow tracing for Workflows, we can simply execute!
             try:
-                with mlflow.start_span(name="rag_request", span_type="CHAIN") as parent_span:
-                    if settings.MLFLOW_CANDIDATE_ID:
-                        mlflow.update_current_trace(
-                            metadata={
-                                "candidate_id": settings.MLFLOW_CANDIDATE_ID or "",
-                                "corpus_id": settings.MLFLOW_CORPUS_ID or "",
-                                "question_id": str(question_id),
-                            }
-                        )
-                    if parent_span:
-                        parent_span.set_inputs({"question": query})
-
-                    with mlflow.start_span(name="query_processing", span_type="PARSER") as span:
-                        if span:
-                            span.set_inputs({"question": query})
-                            span.set_outputs({"query": query})
-
-                    with mlflow.start_span(name="retrieval", span_type="RETRIEVER") as span:
-                        results = execute_retrieval(query, config, index_dir=index_dir)
-                        chunks = [r.text for r in results]
-                        if span:
-                            span.set_inputs({"question": query})
-                            span.set_outputs({"retrieved_chunks": chunks})
-                            span.set_attributes({"rag.retrieved_chunk_count": len(chunks)})
-
-                    with mlflow.start_span(name="context_assembly", span_type="CHAIN") as span:
-                        context = chunks
-                        context_text = "\n\n".join(context)
-                        context_tokens = count_tokens(context_text)
-                        if span:
-                            span.set_outputs({"assembled_context": context_text})
-                            span.set_attributes({
-                                "rag.context_chunk_count": len(context),
-                                "rag.context_tokens": context_tokens,
-                            })
-
-                    with mlflow.start_span(name="generation", span_type="LLM") as span:
-                        answer, usage = generator.generate(query, context, return_usage=True)
-                        if span:
-                            span.set_inputs({"question": query})
-                            span.set_outputs({"answer": answer})
-                            span.set_attributes({
-                                **usage,
-                                "rag.question_tokens": count_tokens(query),
-                                "rag.context_tokens": context_tokens,
-                            })
-
-                    if parent_span:
-                        parent_span.set_outputs({"answer": answer})
+                print(f"Evaluating Question {i+1}/{len(qa_pairs)}: {query[:50]}...")
+                response = asyncio.run(workflow.run(query=query))
+                
+                # Extract the final generation step
+                answer = response.response
+                
+                # Extract the retrieved nodes for the DeepEval metric grader
+                context = [n.node.get_content() for n in response.source_nodes]
+                
             except Exception as e:
                 traceback.print_exc()
-                errors.append({"index": i, "stage": "retrieval_or_generation", "error": str(e)})
+                errors.append({"index": i, "stage": "workflow_execution", "error": str(e)})
                 continue
 
             # Fallback for LLM Empty Response so eval does not crash the loop
