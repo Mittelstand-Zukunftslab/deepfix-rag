@@ -29,7 +29,7 @@ def build_manifest() -> dict:
                 "parameters": {},
             },
             "embedding": {
-                "provider": settings.EMBEDDING_PROVIDER,
+                "provider": "aisc",
                 "model": settings.EMBEDDING_MODEL,
                 "parameters": {"batch_size": 32},
             },
