@@ -9,6 +9,8 @@ from llama_index.core import (
     StorageContext,
     VectorStoreIndex,
 )
+import lancedb
+
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.graph_stores.types import GraphStore
@@ -75,7 +77,7 @@ class RAGWorkflow(Workflow):
     ):
         super().__init__(**kwargs)
         self.config = config or RAGConfig()
-        self.index_dir = index_dir
+        self.index_dir = index_dir or settings.S3_URI
         self.llm = llm
         self.embed_model = embed_model
         self.streaming = streaming
@@ -84,11 +86,9 @@ class RAGWorkflow(Workflow):
         if self.embed_model is not None:
             return self.embed_model
         return OpenAIEmbedding(
-            model_name=self.config.embedding.model,
-            api_base=settings.OCTEN_URL
-            if self.config.embedding.provider == "aisc"
-            else settings.LITELLM_URL,
-            api_key=settings.OCTEN_KEY or settings.LITELLM_KEY,
+            model_name=settings.EMBEDDING_MODEL,
+            api_base=settings.EMBEDDING_BASE_URL,
+            api_key=settings.EMBEDDING_API_KEY,
         )
 
     def _get_llm(self) -> BaseLLM:
@@ -100,7 +100,7 @@ class RAGWorkflow(Workflow):
         return LiteLLM(
             model=model_name,
             temperature=self.config.generation.temperature,
-            max_tokens=2048,
+            max_tokens=self.config.generation.max_tokens,
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
             system_prompt=self.config.generation.system_prompt,
@@ -118,7 +118,17 @@ class RAGWorkflow(Workflow):
 
     def _get_vector_store(self) -> BasePydanticVectorStore:
         if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
-            return LanceDBVectorStore(uri=self.index_dir, table_name="documents")
+            index = LanceDBVectorStore(uri=settings.S3_URI, table_name="documents")
+            index._connection = lancedb.connect(
+                uri=settings.S3_URI,
+                storage_options={
+                    "aws_access_key_id": settings.S3_ACCESS_KEY_ID,
+                    "aws_secret_access_key": settings.S3_SECRET_ACCESS_KEY,
+                    "aws_region": settings.S3_REGION,
+                },
+            )
+            return index
+                   
         elif self.config.retrieval.vector_store == VectorStoreType.TURBO_QUANT:
             return TurboQuantVectorStore.from_params(bit_width=self.config.retrieval.bit_width)
         else:

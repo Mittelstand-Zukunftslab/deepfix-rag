@@ -122,7 +122,7 @@ class GenerationConfig(BaseModel):
     """LLM generation and prompting settings."""
 
     temperature: float = Field(default=0.0, ge=0.0, le=2.0, description="Sampling temperature.")
-    max_tokens: int = Field(default=1024, ge=64, description="Max generated tokens.")
+    max_tokens: int = Field(default=8000, ge=64, description="Max generated tokens.")
     system_prompt: str | None = Field(default=None, description="Custom system prompt.")
 
 

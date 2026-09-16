@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     MEMGRAPH_USERNAME: str = "neo4j"
     MEMGRAPH_PASSWORD: str = "neo4j"
 
+    # S3-compatible storage
+    S3_ENDPOINT_URL: str = "https://hpi-s3.mittelstand-zukunftslab.de"
+    S3_URI: str = "s3://deepfix-index/dev"
+    S3_ACCESS_KEY_ID: str | None = None
+    S3_SECRET_ACCESS_KEY: str | None = None
+    S3_REGION: str = "us-east-1"
+
     # FalkorDB
     FALKORDB_HOST: str = "localhost"
     FALKORDB_PORT: int = 6379
