@@ -1,9 +1,9 @@
-from abc import ABC, abstractmethod
+﻿from abc import ABC, abstractmethod
 from enum import StrEnum
 import json
 import logging
 from pathlib import Path
-
+from datasets import load_dataset
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document
 from pydantic import BaseModel, Field
@@ -48,10 +48,6 @@ class BaseLoaderStrategy(ABC):
 
 class HuggingFaceLoader(BaseLoaderStrategy):
     def load(self, config: DataLoaderConfig) -> list[Document]:
-        try:
-            from datasets import load_dataset
-        except ImportError:
-            raise ImportError("Please install the 'datasets' library to load from HuggingFace.")
 
         logger.info(
             f"Downloading HuggingFace dataset '{config.path_or_repo}' (split: {config.split})..."
@@ -72,11 +68,7 @@ class HuggingFaceLoader(BaseLoaderStrategy):
         return docs_list
 
     def load_qa(self, config: DataLoaderConfig) -> list[dict]:
-        try:
-            from datasets import load_dataset
-        except ImportError:
-            raise ImportError("Please install the 'datasets' library to load from HuggingFace.")
-
+        
         path = str(config.path_or_repo).replace("\\", "/")
         config_name = config.config_name or "qa"
         split = config.split or "test"
@@ -102,13 +94,14 @@ class LocalFileLoader(BaseLoaderStrategy):
         with open(config.path_or_repo, "r", encoding="utf-8") as f:
             for line in f:
                 line_str = line.strip()
-                if line_str:
-                    item = json.loads(line_str)
-                    doc_id = str(item.get(config.doc_id_column, item.get("doc_id", "")))
-                    text = item.get(config.text_column, item.get("content", ""))
-                    docs_list.append(
-                        Document(text=text, id_=doc_id, metadata={"source": config.path_or_repo})
-                    )
+                if not line_str:
+                    continue
+                item = json.loads(line_str)
+                doc_id = str(item.get(config.doc_id_column, item.get("doc_id", "")))
+                text = item.get(config.text_column, item.get("content", ""))
+                docs_list.append(
+                    Document(text=text, id_=doc_id, metadata={"source": config.path_or_repo})
+                )
         return docs_list
 
     def load_qa(self, config: DataLoaderConfig) -> list[dict]:
@@ -141,7 +134,6 @@ class DirectoryLoader(BaseLoaderStrategy):
         return SimpleDirectoryReader(config.path_or_repo).load_data()
 
     def load_qa(self, config: DataLoaderConfig) -> list[dict]:
-        from pathlib import Path
 
         dir_path = Path(config.path_or_repo)
         logger.info(f"Scanning local directory '{dir_path}' for QA dataset...")

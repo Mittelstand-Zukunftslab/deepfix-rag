@@ -1,5 +1,5 @@
-"""Tests for the dataset CLI commands and dev/test split isolation rules."""
-
+﻿import pytest
+from unittest.mock import MagicMock
 import shutil
 from pathlib import Path
 from typer.testing import CliRunner
@@ -8,6 +8,33 @@ from deepfix_rag.main import app
 from deepfix_rag.cli.dataset import DATA_ROOT
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def mock_hf_dataset(monkeypatch):
+    import datasets
+
+    def fake_load_dataset(name, *args, **kwargs):
+        # Return mock records for corpus or queries
+        if len(args) > 0 and args[0] == "corpus":
+            return [
+                {"doc_id": "doc_1", "text": "Sample passage 1"},
+                {"doc_id": "doc_2", "text": "Sample passage 2"}
+            ]
+        elif len(args) > 0 and args[0] in ("queries", "qa"):
+            return [
+                {"query_id": "q_1", "query": "Sample question 1", "answer": "Sample answer 1"},
+                {"query_id": "q_2", "query": "Sample question 2", "answer": "Sample answer 2"}
+            ]
+        elif len(args) > 0 and args[0] == "qrels":
+            return [
+                {"query_id": "q_1", "doc_id": "doc_1"}
+            ]
+        return [
+            {"doc_id": "doc_1", "text": "Sample passage 1", "query": "Sample question 1", "answer": "Sample answer 1"}
+        ]
+
+    monkeypatch.setattr(datasets, "load_dataset", fake_load_dataset)
 
 
 def test_dataset_load_dev_split():
@@ -70,6 +97,9 @@ def test_dataset_load_fails_loudly_on_hf_fetch_error(monkeypatch):
 
 def test_dataset_generate_unanswerable():
     """Verify synthetic unanswerable generation respects ratios and paths."""
+    # First ensure dev dataset exists
+    runner.invoke(app, ["dataset", "load", "--name", "garage", "--split", "dev"])
+
     out_file = Path("data/synth_out.jsonl")
     result = runner.invoke(app, [
         "dataset", "generate-unanswerable", 

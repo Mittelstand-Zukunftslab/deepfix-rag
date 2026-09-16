@@ -1,4 +1,4 @@
-"""Run DeepEval scoring over a dataset using the RAG pipeline."""
+﻿"""Run DeepEval scoring over a dataset using the RAG pipeline."""
 
 import sys
 
@@ -45,9 +45,14 @@ def count_tokens(text: str) -> int:
 
 
 DEFLECTION_PHRASES = (
-    "the context does not contain the answer",
-    "context does not contain",
-    "provided context does not contain",
+    "i do not have enough information",
+    "i don't have enough information",
+    "not enough information",
+    "i cannot answer",
+    "the context does not provide",
+    "the provided text does not",
+    "not mentioned in the context",
+    "i am unable to answer",
     "does not contain the answer to this question",
 )
 

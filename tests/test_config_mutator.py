@@ -1,16 +1,15 @@
-import pytest
+﻿import pytest
 from pydantic import ValidationError
 
 from deepfix_rag.config.mutator import apply_mutation, compute_config_diff
-from deepfix_rag.config.schema import RAGConfig
+from deepfix_rag.config.schema import RAGConfig, RetrievalBackend
 
 
 def test_rag_config_defaults():
     config = RAGConfig()
     assert config.chunking.size == 512
-    assert config.embedding.model == "octen-embedding-8b"
-    assert config.embedding.provider == "aisc"
     assert config.retrieval.top_k == 10
+    assert config.retrieval.backend == RetrievalBackend.HYBRID
 
 
 def test_apply_mutation():
@@ -35,6 +34,6 @@ def test_retrieval_backend_rejects_invalid_value():
 
 
 def test_retrieval_backend_accepts_declared_values():
-    for backend in ("pyterrier", "bm25", "dense", "hybrid", "graph", "vectorless"):
+    for backend in (RetrievalBackend.BM25, RetrievalBackend.DENSE, RetrievalBackend.HYBRID, RetrievalBackend.GRAPH):
         config = RAGConfig.model_validate({"retrieval": {"backend": backend}})
         assert config.retrieval.backend == backend

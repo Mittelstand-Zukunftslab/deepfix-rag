@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from llama_index.core import (
@@ -37,27 +38,23 @@ from turbovec.llama_index import TurboQuantVectorStore
 
 from deepfix_rag.config.schema import GraphStoreType, RAGConfig, VectorStoreType
 from deepfix_rag.config.settings import settings
-
-from .data import DataLoader
+from deepfix_rag.data import DataLoader, DataLoaderConfig, DataSourceType
 
 logger = logging.getLogger(__name__)
 
 
 class RetrieverEvent(Event):
     """Result of running retrieval."""
-
     nodes: list[NodeWithScore]
 
 
 class RerankEvent(Event):
     """Result of running reranking on retrieved nodes."""
-
     nodes: list[NodeWithScore]
 
 
 class RetrievalResult(BaseModel):
     """Retrieved document candidate."""
-
     doc_id: str = Field(..., description="Unique identifier for the document")
     score: float = Field(..., description="Retrieval score")
     text: str = Field(..., description="The text of the document")
@@ -96,10 +93,13 @@ class RAGWorkflow(Workflow):
     def _get_llm(self) -> BaseLLM:
         if self.llm is not None:
             return self.llm
+        model_name = settings.LLM_MODEL
+        if not (model_name.startswith("openai/") or "/" in model_name):
+            model_name = f"openai/{model_name}"
         return LiteLLM(
-            model=settings.LLM_MODEL,
+            model=model_name,
             temperature=self.config.generation.temperature,
-            max_tokens=self.config.generation.max_tokens,
+            max_tokens=2048,
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
             system_prompt=self.config.generation.system_prompt,
@@ -143,7 +143,7 @@ class RAGWorkflow(Workflow):
     def _get_storage_context(self, persist_dir=None) -> StorageContext:
         graph_store = self._get_graph_store()
         vector_store = self._get_vector_store()
-        storage_context = StorageContext.from_defaults(
+        return StorageContext.from_defaults(
             persist_dir=persist_dir,
             graph_store=graph_store
             if self.config.retrieval.graph_store == GraphStoreType.FALKORDB
@@ -180,15 +180,12 @@ class RAGWorkflow(Workflow):
                 storage_context=storage_context,
                 embed_model=self._get_embed_model(),
             )
-
         return index
 
     @step
-    async def ingest(self, ctx: Context, ev: StartEvent) -> StopEvent | None:
-        """Entry point to ingest documents into vector/graph index."""
+    async def process_start(self, ctx: Context, ev: StartEvent) -> RetrieverEvent | StopEvent | None:
+        """Entry point for both Ingestion and Retrieval."""
         data_config = ev.get("data_config")
-        if not data_config:
-            raise ValueError("You must pass a 'data_config' DataLoaderConfig to ingest.")
 
         data_loader = DataLoader()
         documents = data_loader.load_documents(data_config)
@@ -225,9 +222,7 @@ class RAGWorkflow(Workflow):
             **kwargs,
         )
         nodes = await retriever.aretrieve(query)
-
         logger.debug(f"Retrieved {len(nodes)} nodes")
-
         return RetrieverEvent(nodes=nodes)
 
     @step
@@ -240,14 +235,11 @@ class RAGWorkflow(Workflow):
         if reranker is not None:
             try:
                 nodes = reranker.postprocess_nodes(nodes, query_str=query)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning(
                     f"CohereRerank failed: {e}. Falling back to top_n un-reranked nodes."
                 )
                 nodes = nodes[: self.config.rerank.top_n]
-
-        if self.config.retrieval_only:
-            return RerankEvent(nodes=nodes)
 
         return RerankEvent(nodes=nodes)
 
@@ -259,10 +251,8 @@ class RAGWorkflow(Workflow):
             raise ValueError("No query found. Please ingest documents first.")
 
         summarizer = CompactAndRefine(llm=self._get_llm(), streaming=False, verbose=False)
-
         response = await summarizer.asynthesize(query, nodes=ev.nodes)
         return StopEvent(result=response)
-
 
 def convert_nodes_to_results(nodes: list[NodeWithScore]) -> list[RetrievalResult]:
     """Convert a list of NodeWithScore objects to standardized RetrievalResult models."""
@@ -271,55 +261,9 @@ def convert_nodes_to_results(nodes: list[NodeWithScore]) -> list[RetrievalResult
         doc_id_val = node.node.metadata.get("doc_id", node.node.node_id)
         results.append(
             RetrievalResult(
-                doc_id=doc_id_val,
+                doc_id=str(doc_id_val),
                 score=node.score or 0.0,
                 text=node.node.get_content(),
             )
         )
     return results
-
-
-async def aexecute_retrieval(
-    query: str,
-    config: RAGConfig,
-    index_dir: str | None = None,
-    workflow: RAGWorkflow | None = None,
-) -> list[RetrievalResult]:
-    """Asynchronously execute retrieval using RAGWorkflow in retrieval_only mode."""
-
-    # override retrieval_only
-    config.retrieval_only = True
-
-    wf = workflow or RAGWorkflow(config=config, index_dir=index_dir)
-    results = await wf.run(
-        query=query,
-    )
-    return convert_nodes_to_results(results.nodes)
-
-
-def execute_retrieval(
-    query: str,
-    config: RAGConfig,
-    index_dir: str | None = None,
-    workflow: RAGWorkflow | None = None,
-) -> list[RetrievalResult]:
-    """Execute retrieval using LlamaIndex VectorStore engine via RAGWorkflow."""
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                asyncio.run,
-                aexecute_retrieval(query, config, index_dir=index_dir, workflow=workflow),
-            )
-            return future.result()
-    else:
-        return asyncio.run(
-            aexecute_retrieval(query, config, index_dir=index_dir, workflow=workflow)
-        )
