@@ -18,5 +18,5 @@ def export_cmd(
     json_output: bool = typer.Option(False, "--json", help="Output results in JSON format."),
 ) -> None:
     """Export optimized RAG configuration bundle."""
-    
+
     raise NotImplementedError("Not implemented yet")

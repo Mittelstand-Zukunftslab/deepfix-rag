@@ -1,6 +1,6 @@
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import mlflow
+
 
 class Settings(BaseSettings):
     # MLflow

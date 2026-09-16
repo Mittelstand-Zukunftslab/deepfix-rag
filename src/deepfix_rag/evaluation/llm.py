@@ -3,7 +3,15 @@ from deepeval.models.base_model import DeepEvalBaseLLM
 
 
 class ProxyJudgeLLM(DeepEvalBaseLLM):
-    def __init__(self, model: str, api_base: str, api_key: str, provider: str = "openai", max_tokens: int = 4096, timeout: int = 90):
+    def __init__(
+        self,
+        model: str,
+        api_base: str,
+        api_key: str,
+        provider: str = "openai",
+        max_tokens: int = 4096,
+        timeout: int = 90,
+    ):
         self.model = model
         self.api_base = api_base
         self.api_key = api_key
@@ -27,7 +35,8 @@ class ProxyJudgeLLM(DeepEvalBaseLLM):
         val = r.choices[0].message.content or ""
         val = val.strip()
         import re
-        match = re.search(r'\{.*\}', val, re.DOTALL)
+
+        match = re.search(r"\{.*\}", val, re.DOTALL)
         if match:
             val = match.group(0)
         return val

@@ -12,7 +12,7 @@ def run_retrieval_diagnostics(
     config: RAGConfig | None = None,
 ) -> DiagnosticReport:
     """Run retrieval diagnostics on dataset to identify queries failing recall/precision."""
-    
+
     # Stub implementation returning a report
     raise NotImplementedError("Not implemented yet")
 

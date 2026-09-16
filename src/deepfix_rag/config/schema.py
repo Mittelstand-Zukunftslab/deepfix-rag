@@ -1,6 +1,5 @@
 """Pydantic schema for RAG configuration validation."""
 
-
 from deepeval.metrics.faithfulness import faithfulness
 from enum import StrEnum
 
@@ -12,7 +11,8 @@ class RetrievalBackend(StrEnum):
     DENSE = "dense"
     HYBRID = "hybrid"
     GRAPH = "graph"
-    #VECTORLESS = "vectorless"
+    # VECTORLESS = "vectorless"
+
 
 class GenerationMetricType(StrEnum):
     FAITHFULNESS = "faithfulness"
@@ -21,26 +21,31 @@ class GenerationMetricType(StrEnum):
     ANSWER_RELEVANCY = "answer_relevancy"
     CONTEXTUAL_RELEVANCY = "contextual_relevancy"
 
+
 class RetrievalMetricType(StrEnum):
     NDCG = "ndcg"
     RECALL = "recall"
 
+
 class VectorStoreType(StrEnum):
     LANCEDB = "lancedb"
     TURBO_QUANT = "turbo-quant"
+
 
 class GraphStoreType(StrEnum):
     MEMGRAPH = "memgraph"
     FALKORDB = "falkordb"
     NONE = "none"
 
+
 class DataConfig(BaseModel):
     """Data loading hyperparameters."""
+
     dataset_name: str = Field(default="msmarco", description="Name of the dataset to use.")
-    
+
     dirname: str | None = Field(default=None, description="Directory containing the documents.")
     data_file: str | None = Field(default=None, description="Path to the data file.")
-    
+
 
 class ChunkingConfig(BaseModel):
     """Document chunking hyperparameters."""
@@ -77,17 +82,32 @@ class RetrievalConfig(BaseModel):
     hybrid_alpha: float | None = Field(
         default=0.5, ge=0.0, le=1.0, description="Dense vs lexical weight for hybrid search."
     )
-    bit_width: int = Field(
-        default=4, ge=2, le=4, description="Bit width for quantization."
-    )
+    bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")
+
 
 class EvalConfig(BaseModel):
     """Evaluation hyperparameters."""
-    retrieval_metrics: list[RetrievalMetricType] = Field(default_factory=lambda: [RetrievalMetricType.NDCG, RetrievalMetricType.RECALL], description="Retrieval metrics.")
-    generation_metrics: list[GenerationMetricType] = Field(default_factory=lambda: [GenerationMetricType.FAITHFULNESS, GenerationMetricType.CONTEXT_PRECISION,GenerationMetricType.CONTEXT_RECALL,GenerationMetricType.ANSWER_RELEVANCY,GenerationMetricType.CONTEXTUAL_RELEVANCY], description="Generation metrics.")
+
+    retrieval_metrics: list[RetrievalMetricType] = Field(
+        default_factory=lambda: [RetrievalMetricType.NDCG, RetrievalMetricType.RECALL],
+        description="Retrieval metrics.",
+    )
+    generation_metrics: list[GenerationMetricType] = Field(
+        default_factory=lambda: [
+            GenerationMetricType.FAITHFULNESS,
+            GenerationMetricType.CONTEXT_PRECISION,
+            GenerationMetricType.CONTEXT_RECALL,
+            GenerationMetricType.ANSWER_RELEVANCY,
+            GenerationMetricType.CONTEXTUAL_RELEVANCY,
+        ],
+        description="Generation metrics.",
+    )
 
     threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Metrics threshold.")
-    
+    concurrency: int = Field(
+        default=5, ge=1, le=50, description="Max parallel QA cases during evaluation."
+    )
+
 
 class RerankConfig(BaseModel):
     """Re-ranking stage settings."""

@@ -30,5 +30,4 @@ def diagnostic_cmd(
 ) -> None:
     """Run deterministic failure mode diagnostics on retrieval/grounding."""
 
-
     raise NotImplementedError("Not implemented yet")

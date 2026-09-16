@@ -62,6 +62,7 @@ class RetrievalResult(BaseModel):
     score: float = Field(..., description="Retrieval score")
     text: str = Field(..., description="The text of the document")
 
+
 class RAGWorkflow(Workflow):
     """Event-driven RAG Workflow supporting Ingestion, Retrieval, Reranking, and Synthesis."""
 
@@ -86,7 +87,9 @@ class RAGWorkflow(Workflow):
             return self.embed_model
         return OpenAIEmbedding(
             model_name=self.config.embedding.model,
-            api_base=settings.OCTEN_URL if self.config.embedding.provider == "aisc" else settings.LITELLM_URL,
+            api_base=settings.OCTEN_URL
+            if self.config.embedding.provider == "aisc"
+            else settings.LITELLM_URL,
             api_key=settings.OCTEN_KEY or settings.LITELLM_KEY,
         )
 
@@ -111,7 +114,7 @@ class RAGWorkflow(Workflow):
             api_key=settings.COHERE_API_KEY,
             base_url=settings.COHERE_BASE_URL,
         )
-    
+
     def _get_vector_store(self) -> BasePydanticVectorStore:
         if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
             return LanceDBVectorStore(uri=self.index_dir, table_name="documents")
@@ -119,7 +122,7 @@ class RAGWorkflow(Workflow):
             return TurboQuantVectorStore.from_params(bit_width=self.config.retrieval.bit_width)
         else:
             raise ValueError("Invalid vector store")
-    
+
     def _get_graph_store(self) -> GraphStore:
         if self.config.retrieval.graph_store == GraphStoreType.MEMGRAPH:
             return MemgraphPropertyGraphStore(
@@ -142,10 +145,14 @@ class RAGWorkflow(Workflow):
         vector_store = self._get_vector_store()
         storage_context = StorageContext.from_defaults(
             persist_dir=persist_dir,
-            graph_store=graph_store if self.config.retrieval.graph_store == GraphStoreType.FALKORDB else None,
+            graph_store=graph_store
+            if self.config.retrieval.graph_store == GraphStoreType.FALKORDB
+            else None,
             index_store=None,
             vector_store=vector_store,
-            property_graph_store=graph_store if self.config.retrieval.graph_store == GraphStoreType.MEMGRAPH else None,
+            property_graph_store=graph_store
+            if self.config.retrieval.graph_store == GraphStoreType.MEMGRAPH
+            else None,
             image_store=None,  # images of scanned PDFs
         )
 
@@ -173,9 +180,9 @@ class RAGWorkflow(Workflow):
                 storage_context=storage_context,
                 embed_model=self._get_embed_model(),
             )
-            
+
         return index
-    
+
     @step
     async def ingest(self, ctx: Context, ev: StartEvent) -> StopEvent | None:
         """Entry point to ingest documents into vector/graph index."""
@@ -191,30 +198,28 @@ class RAGWorkflow(Workflow):
         return StopEvent(result=index)
 
     @step
-    async def retrieve(
-        self, ctx: Context, ev: StartEvent
-    ) -> RetrieverEvent:
+    async def retrieve(self, ctx: Context, ev: StartEvent) -> RetrieverEvent:
         """Entry point for RAG, triggered by a StartEvent with `query`."""
         query = ev.get("query")
         index: PropertyGraphIndex | VectorStoreIndex = await ctx.store.get("index")
 
         if not query:
             raise ValueError("Query is empty. Please provide a query.")
-        
+
         if index is None:
             raise ValueError("No index found. Please ingest documents first.")
-        
+
         # store the query in the global context
         logger.debug(f"Query: {query}")
         await ctx.store.set("query", query)
-        
+
         kwargs = {}
         if isinstance(index, PropertyGraphIndex):
-            kwargs['response_mode'] = 'tree_summarize'
-            kwargs['embedding_mode'] = 'hybrid'
+            kwargs["response_mode"] = "tree_summarize"
+            kwargs["embedding_mode"] = "hybrid"
         elif isinstance(index, VectorStoreIndex):
-            pass            
-                
+            pass
+
         retriever = index.as_retriever(
             similarity_top_k=self.config.retrieval.top_k,
             **kwargs,
@@ -226,9 +231,7 @@ class RAGWorkflow(Workflow):
         return RetrieverEvent(nodes=nodes)
 
     @step
-    async def rerank(
-        self, ctx: Context, ev: RetrieverEvent
-    ) -> RerankEvent:
+    async def rerank(self, ctx: Context, ev: RetrieverEvent) -> RerankEvent:
         """Rerank candidate nodes using CohereRerank with custom base_url."""
         query = await ctx.store.get("query")
         nodes = ev.nodes
@@ -260,6 +263,7 @@ class RAGWorkflow(Workflow):
         response = await summarizer.asynthesize(query, nodes=ev.nodes)
         return StopEvent(result=response)
 
+
 def convert_nodes_to_results(nodes: list[NodeWithScore]) -> list[RetrievalResult]:
     """Convert a list of NodeWithScore objects to standardized RetrievalResult models."""
     results = []
@@ -274,6 +278,7 @@ def convert_nodes_to_results(nodes: list[NodeWithScore]) -> list[RetrievalResult
         )
     return results
 
+
 async def aexecute_retrieval(
     query: str,
     config: RAGConfig,
@@ -281,7 +286,7 @@ async def aexecute_retrieval(
     workflow: RAGWorkflow | None = None,
 ) -> list[RetrievalResult]:
     """Asynchronously execute retrieval using RAGWorkflow in retrieval_only mode."""
-    
+
     # override retrieval_only
     config.retrieval_only = True
 
@@ -299,7 +304,7 @@ def execute_retrieval(
     workflow: RAGWorkflow | None = None,
 ) -> list[RetrievalResult]:
     """Execute retrieval using LlamaIndex VectorStore engine via RAGWorkflow."""
-    
+
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

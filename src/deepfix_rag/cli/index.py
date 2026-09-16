@@ -47,19 +47,21 @@ def index_cmd(
     try:
         # Wrap the user path into our strict Pydantic scheme
         data_config = DataLoaderConfig(
-            source_type=DataSourceType.DIRECTORY if dataset.is_dir() else DataSourceType.LOCAL_FILE,
+            source_type=DataSourceType.DIRECTORY
+            if dataset.is_dir()
+            else DataSourceType.LOCAL_FILE,
             path_or_repo=str(dataset),
             text_column="text",
-            doc_id_column="id"
+            doc_id_column="id",
         )
-        
+
         # Instantiate the Workflow explicitly
         workflow = RAGWorkflow(config=rag_config, index_dir=str(index_dir))
-        
+
         # Trigger the LlamaIndex Ingest step natively!
         print("Triggering asynchronous RAGWorkflow data ingestion...")
         index = asyncio.run(workflow.run(data_config=data_config))
-        
+
     except Exception as e:
         print_error(f"Workflow Indexing failed: {e}")
         raise typer.Exit(code=1)

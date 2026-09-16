@@ -1,6 +1,7 @@
 """deepfix eval subcommand."""
 
 from pathlib import Path
+import asyncio
 
 import typer
 import yaml
@@ -33,6 +34,12 @@ def eval_cmd(
     limit: int | None = typer.Option(
         None, "--limit", "-n", help="Limit number of queries to evaluate."
     ),
+    concurrency: int | None = typer.Option(
+        None,
+        "--concurrency",
+        "-j",
+        help="Max parallel QA cases (overrides config). Defaults to config value.",
+    ),
 ) -> None:
     """Run DeepEval evaluation on a dataset using a given RAG configuration."""
 
@@ -46,11 +53,14 @@ def eval_cmd(
         raise typer.Exit(code=1)
 
     try:
-        candidate_summary = run_evaluation(
-            dataset_path=dataset,
-            config=rag_config,
-            index_dir=index_dir,
-            limit=limit,
+        candidate_summary = asyncio.run(
+            run_evaluation(
+                dataset_path=dataset,
+                config=rag_config,
+                index_dir=index_dir,
+                limit=limit,
+                max_concurrency=concurrency,
+            )
         )
     except RuntimeError as e:
         print_error(str(e))
@@ -79,11 +89,14 @@ def eval_cmd(
         raise typer.Exit(code=1)
 
     try:
-        baseline_summary = run_evaluation(
-            dataset_path=dataset,
-            config=baseline_config,
-            index_dir=index_dir,
-            limit=limit,
+        baseline_summary = asyncio.run(
+            run_evaluation(
+                dataset_path=dataset,
+                config=baseline_config,
+                index_dir=index_dir,
+                limit=limit,
+                max_concurrency=concurrency,
+            )
         )
     except RuntimeError as e:
         print_error(str(e))

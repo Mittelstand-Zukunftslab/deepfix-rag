@@ -1,4 +1,4 @@
-﻿from enum import StrEnum
+from enum import StrEnum
 import json
 import logging
 
@@ -12,27 +12,34 @@ logger = logging.getLogger(__name__)
 # 1. ENUMS & CONFIGURATION (Type Safety & Pydantic)
 # -------------------------------------------------------------------------
 
+
 class DataSourceType(StrEnum):
     HUGGINGFACE = "huggingface"
     LOCAL_FILE = "local_file"
     DIRECTORY = "directory"
 
+
 class DataLoaderConfig(BaseModel):
     """Pydantic model to strictly validate data loading requests."""
+
     source_type: DataSourceType
     path_or_repo: str = Field(..., description="Local path or HuggingFace repo ID.")
     split: str | None = Field("train", description="Dataset split (HF only).")
     text_column: str = Field("text", description="Which column to map to the Document body.")
     doc_id_column: str = Field("id", description="Which column to map to the Document ID.")
 
+
 # -------------------------------------------------------------------------
 # 2. THE STRATEGY PATTERN (Loaders)
 # -------------------------------------------------------------------------
 
+
 class BaseLoaderStrategy:
     """Abstract interface for all data loaders."""
+
     def load(self, config: DataLoaderConfig) -> list[Document]:
         raise NotImplementedError("Subclasses must implement load()")
+
 
 class HuggingFaceLoader(BaseLoaderStrategy):
     def load(self, config: DataLoaderConfig) -> list[Document]:
@@ -40,20 +47,25 @@ class HuggingFaceLoader(BaseLoaderStrategy):
             from datasets import load_dataset
         except ImportError:
             raise ImportError("Please install the 'datasets' library to load from HuggingFace.")
-        
-        logger.info(f"Downloading HuggingFace dataset '{config.path_or_repo}' (split: {config.split})...")
+
+        logger.info(
+            f"Downloading HuggingFace dataset '{config.path_or_repo}' (split: {config.split})..."
+        )
         hf_data = load_dataset(config.path_or_repo, split=config.split)
-        
+
         docs_list = []
         for row in hf_data:
             # Safely extract text and ID, falling back to empty string if missing
             text = row.get(config.text_column, row.get("content", ""))
             doc_id = str(row.get(config.doc_id_column, row.get("doc_id", "unnamed_node")))
-            
+
             # Map standard HF row into native LlamaIndex Document
-            docs_list.append(Document(text=text, id_=doc_id, metadata={"source": config.path_or_repo}))
-            
+            docs_list.append(
+                Document(text=text, id_=doc_id, metadata={"source": config.path_or_repo})
+            )
+
         return docs_list
+
 
 class LocalFileLoader(BaseLoaderStrategy):
     def load(self, config: DataLoaderConfig) -> list[Document]:
@@ -66,23 +78,29 @@ class LocalFileLoader(BaseLoaderStrategy):
                     item = json.loads(line_str)
                     doc_id = str(item.get(config.doc_id_column, item.get("doc_id", "")))
                     text = item.get(config.text_column, item.get("content", ""))
-                    docs_list.append(Document(text=text, id_=doc_id, metadata={"source": config.path_or_repo}))
+                    docs_list.append(
+                        Document(text=text, id_=doc_id, metadata={"source": config.path_or_repo})
+                    )
         return docs_list
+
 
 class DirectoryLoader(BaseLoaderStrategy):
     def load(self, config: DataLoaderConfig) -> list[Document]:
         logger.info(f"Scanning local directory '{config.path_or_repo}'...")
         return SimpleDirectoryReader(config.path_or_repo).load_data()
 
+
 # -------------------------------------------------------------------------
 # 3. THE FACTORY (Single point of entry)
 # -------------------------------------------------------------------------
 
+
 class DataLoader:
     """
-    Unified Data Loader Facade. 
+    Unified Data Loader Facade.
     Applies Separation of Concerns by routing to specific strategies internally.
     """
+
     def __init__(self):
         # Register our specific loading strategies
         self.strategies = {
@@ -96,7 +114,7 @@ class DataLoader:
         strategy = self.strategies.get(config.source_type)
         if not strategy:
             raise ValueError(f"Unknown source type: {config.source_type}")
-        
+
         docs = strategy.load(config)
         logger.info(f"Successfully loaded {len(docs)} documents.")
         return docs
