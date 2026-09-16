@@ -1,66 +1,45 @@
-﻿import shutil
 from pathlib import Path
-from unittest.mock import MagicMock
-import pytest
-import lancedb
 
-from llama_index.core.base.embeddings.base import BaseEmbedding
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.pipeline import RAGWorkflow, execute_retrieval
-from deepfix_rag.data import DataLoader
+from deepfix_rag.config.settings import settings
+from deepfix_rag.data import DataLoaderConfig, DataSourceType
+from deepfix_rag.pipeline import RAGWorkflow, execute_pipeline
 
 
-class MockEmbedding(BaseEmbedding):
-    def _get_text_embedding(self, text: str) -> list[float]:
-        return [0.1] * 128
+def test_e2e_pipeline_flow(tmp_path: Path):
+    """Verify full end-to-end ingestion, indexing, and retrieval using authentic benchmark data and live services."""
+    assert settings.EMBEDDING_API_KEY, (
+        "EMBEDDING_API_KEY must be configured in .env to run real end-to-end embedding tests without mocks."
+    )
 
-    def _get_query_embedding(self, query: str) -> list[float]:
-        return [0.1] * 128
+    sample_corpus_file = Path(__file__).parent / "data" / "sample_corpus.jsonl"
+    assert sample_corpus_file.exists(), f"Sample benchmark corpus not found at {sample_corpus_file}"
 
-    async def _aget_query_embedding(self, query: str) -> list[float]:
-        return [0.1] * 128
-
-    async def _aget_text_embedding(self, text: str) -> list[float]:
-        return [0.1] * 128
-
-
-def test_e2e_pipeline_flow():
-    test_dir = Path("data/test_pytest_lancedb")
-    if test_dir.exists():
-        shutil.rmtree(test_dir)
-    test_dir.mkdir(parents=True, exist_ok=True)
-
-    docs = [
-        "Reckless driving is operating a vehicle with willful or wanton disregard for safety.",
-        "Speeding alone does not always constitute reckless driving without dangerous maneuvers.",
-        "A tort is a civil wrong causing harm.",
-    ]
-    data_file = test_dir / "corpus.jsonl"
-    with open(data_file, "w", encoding="utf-8") as f:
-        for i, text in enumerate(docs):
-            f.write(f'{{"doc_id": "doc_{i}", "text": "{text}"}}\n')
+    index_dir = tmp_path / "test_lancedb_index"
 
     cfg = RAGConfig()
+    cfg.retrieval.language = "german"
+    cfg.retrieval.top_k = 3
     cfg.rerank.enabled = False
+    cfg.retrieval.lancedb_index_dir = str(index_dir)
+    cfg.data = DataLoaderConfig(
+        source_type=DataSourceType.LOCAL_FILE,
+        path_or_repo=str(sample_corpus_file),
+        doc_id_column="doc_id",
+        text_column="text",
+    )
 
-    # 1. Test DataLoader
-    loader = DataLoader()
-    loaded_docs = loader.load_documents(data_file=str(data_file))
-    assert len(loaded_docs) == 3
+    workflow = RAGWorkflow(config=cfg)    
 
-    # 2. Test Ingestion via RAGWorkflow using MockEmbedding
-    mock_embed = MockEmbedding()
-    workflow = RAGWorkflow(config=cfg, index_dir=str(test_dir), embed_model=mock_embed)
-    index = workflow._build_index(loaded_docs)
-    assert index is not None
+    # 3. Test Retrieval with real hybrid search (dense embedding + BM25 with German stemmer)
+    query = "Was regelt § 315c StGB bezüglich Trunkenheit im Straßenverkehr?"
+    results = execute_pipeline(query,workflow=workflow,ingest_data=True)
 
-    # Check LanceDB table
-    db = lancedb.connect(str(test_dir))
-    tbl = db.open_table("documents")
-    assert tbl.count_rows() == 3
+    print(results)
 
-    # 3. Test Retrieval
-    query = "What constitutes reckless driving under traffic law?"
-    results = execute_retrieval(query, cfg, index_dir=str(test_dir), workflow=workflow)
     assert len(results) > 0
-    assert any("reckless" in r.text.lower() for r in results)
+    top_result = results[0]
+    assert top_result.score is not None
+    # Relevant document about § 315c StGB must be retrieved
+    assert any("315c" in r.text for r in results)
+    assert any("alkohol" in r.text.lower() or "trunkenheit" in r.text.lower() or "straßenverkehr" in r.text.lower() for r in results)

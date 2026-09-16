@@ -260,8 +260,7 @@ DeepFix focuses on 3 core standardized text-only benchmark suites covering disti
 
 | Benchmark Suite | Focus & Workload Characteristics | Target Optimization Challenge | Split Strategy |
 | :--- | :--- | :--- | :--- |
-| **GaRAGe** | Grounding & Factuality; 2,366 queries with human-labeled relevant/unknown passages. | Hallucination suppression; tuning retrieval confidence thresholds for unanswerable queries. | 70% Dev (~1,650 queries, Optimization) / 30% Test (~716 queries, Locked) |
-| **bLLeQA** | Multilingual (French/Dutch) legal domain Q&A with strict refusal requirements (~1,800 queries). | Cross-lingual retrieval alignment, legal terminology mismatch, and jurisdiction refusal. | 70% Dev (~1,260 queries) / 30% Test (~540 queries, Locked) |
+| **bLLeQA** (`clips/bLLeQA`) | Multilingual (French/Dutch) legal domain Q&A with strict refusal requirements (~1,800 queries). | Cross-lingual retrieval alignment, legal terminology mismatch, and jurisdiction refusal. | 70% Dev (~1,260 queries) / 30% Test (~540 queries, Locked) |
 | **Legal RAG Bench** (`isaacus/legal-rag-bench`) | Reasoning-intensive legal RAG with explicit error decomposition. | Separating retrieval misses from synthesis hallucinations; hierarchical statute chunking. | 75% Dev (~750 queries) / 25% Test (~250 queries, Locked by statute cluster) |
 
 ### 6.1 German Bundestag Parliamentary Expert Baseline
@@ -476,7 +475,6 @@ To maintain focus and adhere to the formal Pilot Project Agreement, the followin
 | **Dense Embeddings** | Octen 8B (fine-tuned from Qwen3-Embedding-8B) | Self-hosted AISC / vLLM | High-fidelity dense semantic embeddings served on local HPI VM infrastructure. |
 | **Cross-Encoder Re-Ranker** | qwen3-reranker-4b | Self-hosted vLLM / OpenRouter / AISC | Cross-encoder re-ranking model for candidate scoring and precision filtering. |
 | **Lexical Search** | BM25 (rank-bm25 / LanceDB FTS) | Integrated | Fast, accurate sparse keyword inverted index for hybrid fusion. |
-| **Vectorless Search** | `pageindex` | Latest stable | Hierarchical, structural document indexing without dense embeddings. |
 | **Graph RAG** | Memgraph (`MemgraphPropertyGraphStore`) | `memgraph/memgraph-mage` & `llama-index-graph-stores-memgraph` | High-performance in-memory C++ graph database with openCypher, natively integrated into LlamaIndex `PropertyGraphIndex`. |
 | **Generation Model** | Qwen 3.8 27B | vLLM / LiteLLM Proxy | State-of-the-art open-weights reasoning model for agent harness and RAG synthesis. |
 | **Agent Harness** | Hermes Agent | Terminal Subprocess | Autonomous tool-calling agent executing `deepfix-rag` terminal commands. |

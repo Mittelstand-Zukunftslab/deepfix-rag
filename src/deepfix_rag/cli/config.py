@@ -73,7 +73,7 @@ def mutate_config_cmd(
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, "w", encoding="utf-8") as f:
-        yaml.safe_dump(mutated_config.model_dump(), f, sort_keys=False)
+        yaml.safe_dump(mutated_config.model_dump(mode="json"), f, sort_keys=False)
 
     diffs = compute_config_diff(base_config, mutated_config)
     result = {
@@ -92,21 +92,29 @@ def mutate_config_cmd(
 
 
 def diff_config_cmd(
-    config_a: Path = typer.Argument(..., help="Path to first RAG configuration YAML."),
-    config_b: Path = typer.Argument(..., help="Path to second RAG configuration YAML."),
+    config_a: Path | None = typer.Argument(None, help="Path to first RAG configuration YAML."),
+    config_b: Path | None = typer.Argument(None, help="Path to second RAG configuration YAML."),
+    base: Path | None = typer.Option(None, "--base", "-b", help="Path to base RAG configuration YAML."),
+    compare: Path | None = typer.Option(None, "--compare", "-c", help="Path to compare RAG configuration YAML."),
     json_output: bool = typer.Option(False, "--json", help="Output diff in JSON format."),
 ) -> None:
     """Compare two RAG configuration YAMLs and output structural diff."""
-    if not config_a.exists():
-        print_error(f"Config A not found: {config_a}")
+    first = config_a or base
+    second = config_b or compare
+    if not first or not second:
+        print_error("Both base and compare configs must be provided.")
+        raise typer.Exit(code=2)
+
+    if not first.exists():
+        print_error(f"Config file not found: {first}")
         raise typer.Exit(code=1)
-    if not config_b.exists():
-        print_error(f"Config B not found: {config_b}")
+    if not second.exists():
+        print_error(f"Config file not found: {second}")
         raise typer.Exit(code=1)
 
     try:
-        cfg_a = _load_rag_config(config_a)
-        cfg_b = _load_rag_config(config_b)
+        cfg_a = _load_rag_config(first)
+        cfg_b = _load_rag_config(second)
     except Exception as e:
         print_error(f"Error loading configs for comparison: {e}")
         raise typer.Exit(code=1)

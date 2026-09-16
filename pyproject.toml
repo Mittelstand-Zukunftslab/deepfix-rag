@@ -63,3 +63,8 @@ ignore = ["B008"]  # Allow function calls in argument defaults (standard for Typ
 [tool.ruff.lint.isort]
 known-first-party = ["deepfix_rag"]
 force-sort-within-sections = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+

@@ -1,5 +1,4 @@
 ﻿from abc import ABC, abstractmethod
-from enum import StrEnum
 import json
 import logging
 from pathlib import Path
@@ -7,33 +6,10 @@ from pathlib import Path
 from datasets import load_dataset
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document
-from pydantic import BaseModel, Field
+
+from .config.schema import DataLoaderConfig, DataSourceType
 
 logger = logging.getLogger(__name__)
-
-
-class DataSourceType(StrEnum):
-    HUGGINGFACE = "huggingface"
-    LOCAL_FILE = "local_file"
-    DIRECTORY = "directory"
-
-
-class DataLoaderConfig(BaseModel):
-    """Pydantic model to strictly validate data loading requests."""
-
-    source_type: DataSourceType
-    path_or_repo: str = Field(..., description="Local path or HuggingFace repo ID.")
-    split: str | None = Field("train", description="Dataset split (HF only).")
-    text_column: str = Field("text", description="Which column to map to the Document body.")
-    doc_id_column: str = Field("id", description="Which column to map to the Document ID.")
-    query_column: str = Field("question", description="Which column to map to the Question/Query.")
-    answer_column: str = Field(
-        "answer", description="Which column to map to the Ground Truth/Answer."
-    )
-    config_name: str | None = Field(
-        None, description="Dataset config or subset name (e.g. 'qa' for HF)."
-    )
-
 
 class BaseLoaderStrategy(ABC):
     """Abstract interface for all data loaders."""
@@ -162,7 +138,6 @@ class DataLoader:
     """
 
     def __init__(self):
-        # Register our specific loading strategies
         self.strategies = {
             DataSourceType.HUGGINGFACE: HuggingFaceLoader(),
             DataSourceType.LOCAL_FILE: LocalFileLoader(),
@@ -201,9 +176,9 @@ class DataLoader:
         from pathlib import Path
 
         p = Path(path_or_repo)
-        if p.is_file():
+        if p.is_file() and p.exists():
             source_type = DataSourceType.LOCAL_FILE
-        elif p.is_dir():
+        elif p.is_dir() and p.exists():
             source_type = DataSourceType.DIRECTORY
         else:
             source_type = DataSourceType.HUGGINGFACE

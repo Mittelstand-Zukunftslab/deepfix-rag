@@ -1,17 +1,18 @@
+import json
 from pathlib import Path
 
 from rich.console import Console
 import typer
 
-from deepfix_rag.data import DataLoader, DataLoaderConfig, DataSourceType
+from deepfix_rag.data import DataLoader
+from deepfix_rag.config.settings import settings
+from deepfix_rag.config.schema import DataPreset, DataLoaderConfig, DataSourceType
 
 app = typer.Typer(
     help="Manage and prepare RAG datasets with strict dev/test split isolation.",
     no_args_is_help=True,
 )
 console = Console()
-
-DATA_ROOT = Path("data/datasets")
 
 
 @app.command("load")
@@ -36,10 +37,7 @@ def load_dataset(
             split=split,
             text_column=text_column,
         )
-
-        # Instantiate the Factory Pattern Loader
-        loader = DataLoader()
-        documents = loader.load_documents(config)
+        documents = DataLoader().load_documents(config)
 
         console.print(
             f"[bold green]Successfully loaded {len(documents)} unified LlamaIndex documents![/bold green]"
@@ -62,17 +60,21 @@ def load_dataset_cmd(
 
 
 @app.command("list")
-def list_datasets_cmd():
+def list_datasets_cmd(
+    data_root: Path | None = typer.Option(None, "--data-root", help="Custom root directory for datasets"),
+):
     """List all locally downloaded datasets and available splits."""
-    if not DATA_ROOT.exists():
-        console.print("[yellow]No local datasets found in data/datasets/.[/yellow]")
+    root = data_root or Path(settings.DATA_ROOT)
+    if not root.exists():
+        console.print("[yellow]No local datasets found.[/yellow]")
         return
 
     datasets_found = []
-    for d in DATA_ROOT.iterdir():
+    for d in root.iterdir():
         if d.is_dir():
             splits = [s.name for s in d.iterdir() if s.is_dir()]
-            datasets_found.append((d.name, splits))
+            if splits:
+                datasets_found.append((d.name, splits))
 
     if not datasets_found:
         console.print("[yellow]No local datasets found.[/yellow]")

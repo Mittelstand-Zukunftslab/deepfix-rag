@@ -1,6 +1,7 @@
 import mlflow
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from pathlib import Path
+import os    
 
 class Settings(BaseSettings):
     # MLflow
@@ -13,11 +14,16 @@ class Settings(BaseSettings):
     MLFLOW_CORPUS_ID: str | None = None
     MLFLOW_ENABLE_ASYNC_TRACE_LOGGING: bool = False
 
+    DATA_ROOT : str = os.path.join(Path(__file__).parents[3],"data","raw")
+
     # LLM
     LLM_BASE_URL: str = "https://api.aisc.hpi.de/v1"
     LLM_API_KEY: str | None = None
     LLM_MODEL: str = "qwen3-8-27b"
-    LLM_JUDGE_MODEL: str = "gpt-oss-120b"
+    LLM_CONTEXT_WINDOW: int = 20000
+
+    # Judge
+    LLM_JUDGE_MODEL: str = "gpt-oss-120b"    
 
     # Embedding
     EMBEDDING_MODEL: str = "octen-embedding-8b"
