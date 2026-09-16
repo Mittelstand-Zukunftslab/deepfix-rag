@@ -106,7 +106,7 @@ def load_qa_dataset(dataset_path: Path) -> list[dict]:
             return [json.loads(line) for line in f if line.strip()]
 
     from datasets import load_dataset
-    ds = load_dataset(str(dataset_path).replace("\\\\", "/"), "qa", split="test")
+    ds = load_dataset(str(dataset_path).replace("\\", "/"), "qa", split="test")
     return [dict(row) for row in ds]
 
 
@@ -143,7 +143,7 @@ def run_evaluation(
     judge_api_key = settings.LLM_API_KEY or ""
 
     judge = ProxyJudgeLLM(
-        model="gpt-oss-120b",
+        model="openai/gpt-oss-120b",
         api_base=judge_api_base,
         api_key=judge_api_key,
     )
@@ -184,24 +184,33 @@ def run_evaluation(
         print(f"Instantiating LlamaIndex RAG Workflow from index: {index_dir}")
         workflow = RAGWorkflow(config=config, index_dir=index_dir)
 
-        for i, qa in enumerate(qa_pairs):
+        async def _run_eval_queries():
+            query_responses = []
+            for i, qa in enumerate(qa_pairs):
+                query = qa.get("question") or qa.get("query", "")
+                try:
+                    print(f"Executing RAG Workflow on Question {i+1}/{len(qa_pairs)}: {query[:50]}...")
+                    resp = await workflow.run(query=query)
+                    query_responses.append((i, qa, resp, None))
+                except Exception as e:
+                    traceback.print_exc()
+                    query_responses.append((i, qa, None, e))
+            return query_responses
+
+        eval_data = asyncio.run(_run_eval_queries())
+
+        for i, qa, response, err in eval_data:
             query = qa.get("question") or qa.get("query", "")
             expected_output = qa.get("answer") or qa.get("expected_output", "N/A")
             question_id = qa.get("id", f"q_{i}")
 
-            try:
-                print(f"Evaluating Question {i+1}/{len(qa_pairs)}: {query[:50]}...")
-                response = asyncio.run(workflow.run(query=query))
-
-                # Extract response text and source nodes
-                answer = getattr(response, "response", str(response))
-                source_nodes = getattr(response, "source_nodes", [])
-                context = [n.node.get_content() for n in source_nodes] if source_nodes else ["No context retrieved."]
-
-            except Exception as e:
-                traceback.print_exc()
-                errors.append({"index": i, "stage": "workflow_execution", "error": str(e)})
+            if err is not None or response is None:
+                errors.append({"index": i, "stage": "workflow_execution", "error": str(err)})
                 continue
+
+            answer = getattr(response, "response", str(response))
+            source_nodes = getattr(response, "source_nodes", [])
+            context = [n.node.get_content() for n in source_nodes] if source_nodes else ["No context retrieved."]
 
             if not answer or answer.strip() == "":
                 answer = "Error: The model failed to generate any output."

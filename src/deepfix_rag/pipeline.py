@@ -4,7 +4,7 @@ import logging
 import os
 from typing import Any
 
-from llama_index.core import Document, PropertyGraphIndex, SimpleDirectoryReader, StorageContext, VectorStoreIndex
+from llama_index.core import Document, PropertyGraphIndex, StorageContext, VectorStoreIndex
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
@@ -81,10 +81,13 @@ class RAGWorkflow(Workflow):
     def _get_llm(self) -> BaseLLM:
         if self.llm is not None:
             return self.llm
+        model_name = settings.LLM_MODEL
+        if not (model_name.startswith("openai/") or "/" in model_name):
+            model_name = f"openai/{model_name}"
         return LiteLLM(
-            model=settings.LLM_MODEL,
+            model=model_name,
             temperature=self.config.generation.temperature,
-            max_tokens=self.config.generation.max_tokens,
+            max_tokens=2048,
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
             system_prompt=self.config.generation.system_prompt,
@@ -159,36 +162,31 @@ class RAGWorkflow(Workflow):
         return index
 
     @step
-    async def ingest(self, ctx: Context, ev: StartEvent) -> StopEvent | None:
-        """Entry point to ingest documents into vector/graph index."""
+    async def process_start(self, ctx: Context, ev: StartEvent) -> RetrieverEvent | StopEvent | None:
+        """Entry point for both Ingestion and Retrieval."""
         dirname = ev.get("dirname")
         data_file = ev.get("data_file")
         data_config = ev.get("data_config")
 
-        loader = DataLoader()
-        if data_config:
-            documents = loader.load_documents(data_config)
-        elif dirname or data_file:
-            documents = loader.load_documents(dirname, data_file)
-        else:
-            logger.warning("No data source provided to ingest step.")
-            return None
+        # Case 1: Ingestion triggered
+        if dirname or data_file or data_config:
+            loader = DataLoader()
+            if data_config:
+                documents = loader.load_documents(data_config)
+            else:
+                documents = loader.load_documents(dirname, data_file)
+            index = self._build_index(documents)
+            return StopEvent(result=index)
 
-        index = self._build_index(documents)
-        return StopEvent(result=index)
-
-    @step
-    async def retrieve(self, ctx: Context, ev: StartEvent) -> RetrieverEvent | None:
-        """Entry point for RAG, triggered by a StartEvent with query."""
+        # Case 2: Query retrieval triggered
         query = ev.get("query")
-        index: PropertyGraphIndex | VectorStoreIndex = ev.get("index")
-
         if not query:
             logger.warning("Query is empty. Please provide a query.")
             return None
 
         await ctx.store.set("query", query)
 
+        index: PropertyGraphIndex | VectorStoreIndex = ev.get("index")
         if index is None:
             if self.config.retrieval.graph_store != GraphStore.NONE:
                 index = PropertyGraphIndex.from_existing(
@@ -234,16 +232,41 @@ class RAGWorkflow(Workflow):
 
     @step
     async def synthesize(self, ctx: Context, ev: RerankEvent) -> StopEvent:
-        """Synthesize response using CompactAndRefine."""
+        """Synthesize response using LLM with retrieved context nodes."""
         query = await ctx.store.get("query", default=None)
         
         if self.config.retrieval_only:
             return StopEvent(result=ev)
 
         llm = self._get_llm()
-        summarizer = CompactAndRefine(llm=llm, streaming=False, verbose=False)
-        response = await summarizer.asynthesize(query, nodes=ev.nodes)
-        return StopEvent(result=response)
+        context_str = "\n\n".join([f"Document [{i+1}]: {n.node.get_content()}" for i, n in enumerate(ev.nodes)])
+        prompt = (
+            f"Context information is below.\n---------------------\n{context_str}\n---------------------\n"
+            f"Given the context information and not prior knowledge, answer the query.\nQuery: {query}\nAnswer:"
+        )
+        import litellm
+        model_name = settings.LLM_MODEL
+        if not (model_name.startswith("openai/") or "/" in model_name):
+            model_name = f"openai/{model_name}"
+        
+        res = await litellm.acompletion(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            api_base=settings.LLM_BASE_URL,
+            api_key=settings.LLM_API_KEY,
+            temperature=self.config.generation.temperature,
+            max_tokens=2048,
+        )
+        answer_text = (res.choices[0].message.content or "").strip()
+        
+        class SynthesisResponse:
+            def __init__(self, response_text, source_nodes):
+                self.response = response_text
+                self.source_nodes = source_nodes
+            def __str__(self):
+                return self.response
+
+        return StopEvent(result=SynthesisResponse(answer_text, ev.nodes))
 
 
 def convert_nodes_to_results(nodes: list[NodeWithScore]) -> list[RetrievalResult]:
