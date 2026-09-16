@@ -11,6 +11,10 @@ from llama_index.core import (
     StorageContext,
     VectorStoreIndex,
 )
+from llama_index.retrievers.bm25 import BM25Retriever
+import Stemmer
+from llama_index.core.retrievers import QueryFusionRetriever
+
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.graph_stores.types import GraphStore
@@ -181,6 +185,23 @@ class RAGWorkflow(Workflow):
                 embed_model=self._get_embed_model(),
             )
         return index
+    
+    def _build_retriever(self,index:VectorStoreIndex, top_k:int=5, language:str="german"):
+        assert isinstance(index, VectorStoreIndex), f"Expected VectorStoreIndex, got {type(index)}"
+        if self.config.retrieval.hybrid:
+            retriever = QueryFusionRetriever(
+            [
+                index.as_retriever(similarity_top_k=top_k),
+                BM25Retriever.from_defaults(
+                    docstore=index.docstore, similarity_top_k=top_k,language=language
+            ),
+            ],
+            num_queries=1,
+            use_async=True,
+            )
+        else:
+            retriever = index.as_retriever(similarity_top_k=top_k)
+        return retriever
 
     @step
     async def process_start(self, ctx: Context, ev: StartEvent) -> RetrieverEvent | StopEvent | None:
@@ -210,19 +231,25 @@ class RAGWorkflow(Workflow):
         logger.debug(f"Query: {query}")
         await ctx.store.set("query", query)
 
-        kwargs = {}
+       
         if isinstance(index, PropertyGraphIndex):
+            kwargs = {}
             kwargs["response_mode"] = "tree_summarize"
             kwargs["embedding_mode"] = "hybrid"
-        elif isinstance(index, VectorStoreIndex):
-            pass
-
-        retriever = index.as_retriever(
+            retriever = index.as_rSetriever(
             similarity_top_k=self.config.retrieval.top_k,
             **kwargs,
-        )
+            )
+        elif isinstance(index, VectorStoreIndex):        
+            retriever = self._build_retriever(
+                index=index,
+                top_k=self.config.retrieval.top_k,
+                language=self.config.retrieval.language,
+            )
         nodes = await retriever.aretrieve(query)
+
         logger.debug(f"Retrieved {len(nodes)} nodes")
+        
         return RetrieverEvent(nodes=nodes)
 
     @step

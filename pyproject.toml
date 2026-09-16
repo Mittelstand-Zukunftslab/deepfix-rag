@@ -41,6 +41,7 @@ dependencies = [
     "llama-index-llms-openai>=0.8.1",
     "llama-index-graph-stores-falkordb>=0.7.0",
     "llama-index-graph-stores-memgraph>=0.6.0",
+    "llama-index-retrievers-bm25>=0.8.0",
 ]
 requires-python = "~=3.12.0"
 
