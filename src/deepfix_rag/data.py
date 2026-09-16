@@ -206,7 +206,7 @@ class DataLoader:
         logger.info(f"Collated {len(docs)} documents into {len(collated_docs)} contiguous documents.")
         return collated_docs
 
-def load_qa_from_source(
+    def load_qa_from_source(
         self,
         path_or_repo: str | Path,
         split: str = "test",

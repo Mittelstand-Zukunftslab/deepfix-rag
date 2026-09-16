@@ -83,11 +83,9 @@ class RAGWorkflow(Workflow):
         if self.embed_model is not None:
             return self.embed_model
         return OpenAIEmbedding(
-            model_name=self.config.embedding.model,
-            api_base=settings.OCTEN_URL
-            if self.config.embedding.provider == "aisc"
-            else settings.LITELLM_URL,
-            api_key=settings.OCTEN_KEY or settings.LITELLM_KEY,
+            model_name=settings.EMBEDDING_MODEL,
+            api_base=settings.EMBEDDING_BASE_URL,
+            api_key=settings.EMBEDDING_API_KEY or settings.LLM_API_KEY,
         )
 
     def _get_llm(self) -> BaseLLM:
@@ -100,6 +98,7 @@ class RAGWorkflow(Workflow):
             model=model_name,
             temperature=self.config.generation.temperature,
             max_tokens=2048,
+            context_window=32768,
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
             system_prompt=self.config.generation.system_prompt,
@@ -186,6 +185,8 @@ class RAGWorkflow(Workflow):
     async def process_start(self, ctx: Context, ev: StartEvent) -> RetrieverEvent | StopEvent | None:
         """Entry point for both Ingestion and Retrieval."""
         data_config = ev.get("data_config")
+        if not data_config:
+            return None
 
         data_loader = DataLoader()
         documents = data_loader.load_documents(data_config)
@@ -198,7 +199,24 @@ class RAGWorkflow(Workflow):
     async def retrieve(self, ctx: Context, ev: StartEvent) -> RetrieverEvent:
         """Entry point for RAG, triggered by a StartEvent with `query`."""
         query = ev.get("query")
-        index: PropertyGraphIndex | VectorStoreIndex = await ctx.store.get("index")
+        if not query:
+            return None
+        
+        try:
+            index = await ctx.store.get("index")
+        except ValueError:
+            if self.config.retrieval.graph_store.value != "none":
+                index = PropertyGraphIndex.from_existing(
+                    property_graph_store=self._get_graph_store(),
+                    embed_model=self._get_embed_model(),
+                )
+            else:
+                index = VectorStoreIndex.from_vector_store(
+                    vector_store=self._get_vector_store(),
+                    embed_model=self._get_embed_model(),
+                )
+            await ctx.store.set("index", index)
+
 
         if not query:
             raise ValueError("Query is empty. Please provide a query.")
@@ -250,10 +268,35 @@ class RAGWorkflow(Workflow):
         if query is None:
             raise ValueError("No query found. Please ingest documents first.")
 
-        summarizer = CompactAndRefine(llm=self._get_llm(), streaming=False, verbose=False)
-        response = await summarizer.asynthesize(query, nodes=ev.nodes)
-        return StopEvent(result=response)
+        import litellm
+        context_str = "\n\n".join([f"Document [{i+1}]: {n.node.get_content()}" for i, n in enumerate(ev.nodes)])
+        prompt = (
+            f"Context information is below.\n---------------------\n{context_str}\n---------------------\n"
+            f"Given the context information and not prior knowledge, answer the query.\nQuery: {query}\nAnswer:"
+        )
+        
+        model_name = settings.LLM_MODEL
+        if not (model_name.startswith("openai/") or "/" in model_name):
+            model_name = f"openai/{model_name}"
+            
+        res = await litellm.acompletion(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            api_base=settings.LLM_BASE_URL,
+            api_key=settings.LLM_API_KEY,
+            temperature=self.config.generation.temperature,
+            max_tokens=2048,
+        )
+        answer_text = (res.choices[0].message.content or "").strip()
+        
+        class SynthesisResponse:
+            def __init__(self, response_text, source_nodes):
+                self.response = response_text
+                self.source_nodes = source_nodes
+            def __str__(self):
+                return self.response
 
+        return StopEvent(result=SynthesisResponse(answer_text, ev.nodes))
 def convert_nodes_to_results(nodes: list[NodeWithScore]) -> list[RetrievalResult]:
     """Convert a list of NodeWithScore objects to standardized RetrievalResult models."""
     results = []
