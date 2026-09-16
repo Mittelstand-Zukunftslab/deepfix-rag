@@ -188,7 +188,25 @@ class DataLoader:
         logger.info(f"Successfully loaded {len(qa_pairs)} QA pairs.")
         return qa_pairs
 
-    def load_qa_from_source(
+    
+    def collate_documents(self, docs: list[Document], join_str: str = "\n\n") -> list[Document]:
+        """
+        Collates (groups and concatenates) documents possessing the same ID.
+        This provides contiguous text blobs optimal for testing various chunking techniques.
+        """
+        collated_map = {}
+        for doc in docs:
+            doc_id = doc.id_
+            if doc_id not in collated_map:
+                collated_map[doc_id] = doc
+            else:
+                collated_map[doc_id].text += join_str + doc.text
+        
+        collated_docs = list(collated_map.values())
+        logger.info(f"Collated {len(docs)} documents into {len(collated_docs)} contiguous documents.")
+        return collated_docs
+
+def load_qa_from_source(
         self,
         path_or_repo: str | Path,
         split: str = "test",
