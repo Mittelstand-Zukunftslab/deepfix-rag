@@ -1,4 +1,4 @@
-﻿"""Run DeepEval scoring over a dataset using the RAG pipeline."""
+"""Run DeepEval scoring over a dataset using the RAG pipeline."""
 
 import sys
 
@@ -92,7 +92,7 @@ def make_metrics(
     metrics_map = {
         GenerationMetricType.FAITHFULNESS: FaithfulnessMetric,
         GenerationMetricType.CONTEXT_PRECISION: ContextualPrecisionMetric,
-        GenerationMetricType.CONTEXT_RELEVANCY: ContextualRelevancyMetric,
+        GenerationMetricType.CONTEXTUAL_RELEVANCY: ContextualRelevancyMetric,
         GenerationMetricType.CONTEXT_RECALL: ContextualRecallMetric,
         GenerationMetricType.ANSWER_RELEVANCY: AnswerRelevancyMetric,
     }
@@ -106,7 +106,10 @@ def make_metrics(
 async def _measure_one_metric(metric_type: str, metric: BaseMetric, tc: LLMTestCase) -> dict:
     """Evaluate a single metric against a test case, returning partial row data."""
     try:
-        score, reason, success = await metric.a_measure(tc)
+        res = await metric.a_measure(tc)
+        score = getattr(metric, "score", 0.0)
+        reason = getattr(metric, "reason", "No reason provided")
+        success = metric.is_successful() if hasattr(metric, "is_successful") else bool(score >= getattr(metric, "threshold", 0.5))
         return {
             f"{metric_type}_score": score,
             f"{metric_type}_pass": success,
@@ -136,7 +139,7 @@ async def _run_one_case(
     try:
         logger.info(f"Evaluating Question {i + 1}/{num_qa_pairs}: {query[:50]}...")
         response = await workflow.run(query=query)
-        answer = response.result
+        answer = getattr(response, "response", getattr(response, "result", str(response)))
         context = [n.node.get_content() for n in response.source_nodes]
 
     except Exception as e:
@@ -214,7 +217,7 @@ async def run_evaluation(
     metrics_map = {
         GenerationMetricType.FAITHFULNESS: FaithfulnessMetric,
         GenerationMetricType.CONTEXT_PRECISION: ContextualPrecisionMetric,
-        GenerationMetricType.CONTEXT_RELEVANCY: ContextualRelevancyMetric,
+        GenerationMetricType.CONTEXTUAL_RELEVANCY: ContextualRelevancyMetric,
         GenerationMetricType.CONTEXT_RECALL: ContextualRecallMetric,
         GenerationMetricType.ANSWER_RELEVANCY: AnswerRelevancyMetric,
     }
@@ -253,7 +256,7 @@ async def run_evaluation(
 
         def avg(key: str) -> float:
             vals = [r[key] for r in rows if r.get(key) is not None]
-            return sum(vals) / len(vals) if vals else None
+            return sum(vals) / len(vals) if vals else 0.0
 
         summary = {
             "total": len(qa_pairs),
@@ -270,7 +273,7 @@ async def run_evaluation(
         mlflow.log_metrics(summary, synchronous=synchronous)
         try:
             df = pd.DataFrame.from_records(rows, index="index")
-            mlflow.log_table(data=df, artifact_file="eval_results.csv")
+            mlflow.log_table(data=df, artifact_file="eval_results.json")
         except Exception as e:
             logger.error(f"Failed to log eval results as table: {e}")
 

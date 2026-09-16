@@ -307,11 +307,9 @@ class RAGWorkflow(Workflow):
         index: PropertyGraphIndex | VectorStoreIndex = ev.index
 
         if not query:
-            #logger.warning("Query is empty. Please provide a query with `query=...`.")
             return None
 
         if index is None:
-            #logger.warning("No index found. Please ingest documents first with `ingest=True`.")
             return None
 
         logger.info(f"Query: {query}")
