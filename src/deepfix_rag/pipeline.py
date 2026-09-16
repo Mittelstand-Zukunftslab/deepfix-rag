@@ -1,8 +1,6 @@
 """RAG retrieval and generation execution powered by LlamaIndex Workflows."""
 
-import asyncio
 import logging
-import os
 from typing import Any
 
 from llama_index.core import (
@@ -11,16 +9,13 @@ from llama_index.core import (
     StorageContext,
     VectorStoreIndex,
 )
-from llama_index.retrievers.bm25 import BM25Retriever
-import Stemmer
-from llama_index.core.retrievers import QueryFusionRetriever
-
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.graph_stores.types import GraphStore
 from llama_index.core.indices.base import BaseIndex
 from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
 from llama_index.core.response_synthesizers import CompactAndRefine
+from llama_index.core.retrievers import QueryFusionRetriever
 from llama_index.core.schema import NodeWithScore
 from llama_index.core.vector_stores.types import BasePydanticVectorStore
 from llama_index.core.workflow import (
@@ -36,13 +31,15 @@ from llama_index.graph_stores.falkordb import FalkorDBGraphStore
 from llama_index.graph_stores.memgraph import MemgraphPropertyGraphStore
 from llama_index.llms.litellm import LiteLLM
 from llama_index.postprocessor.cohere_rerank import CohereRerank
+from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.vector_stores.lancedb import LanceDBVectorStore
 from pydantic import BaseModel, Field
+import Stemmer
 from turbovec.llama_index import TurboQuantVectorStore
 
 from deepfix_rag.config.schema import GraphStoreType, RAGConfig, VectorStoreType
 from deepfix_rag.config.settings import settings
-from deepfix_rag.data import DataLoader, DataLoaderConfig, DataSourceType
+from deepfix_rag.data import DataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -186,25 +183,29 @@ class RAGWorkflow(Workflow):
             )
         return index
     
-    def _build_retriever(self,index:VectorStoreIndex, top_k:int=5, language:str="german"):
+    def _build_retriever(self,index:VectorStoreIndex, top_k:int=5, language:str="german", use_async:bool=True):
         assert isinstance(index, VectorStoreIndex), f"Expected VectorStoreIndex, got {type(index)}"
         if self.config.retrieval.hybrid:
             retriever = QueryFusionRetriever(
             [
                 index.as_retriever(similarity_top_k=top_k),
                 BM25Retriever.from_defaults(
-                    docstore=index.docstore, similarity_top_k=top_k,language=language
-            ),
+                    index=index, 
+                    similarity_top_k=top_k,
+                    language=language, 
+                    stemmer=Stemmer.Stemmer("german")
+                ),
             ],
-            num_queries=1,
-            use_async=True,
+            num_queries=1, # This is for the query expansion, set to 1 to disable it
+            use_async=use_async,
+            similarity_top_k=top_k,
             )
         else:
             retriever = index.as_retriever(similarity_top_k=top_k)
         return retriever
 
     @step
-    async def process_start(self, ctx: Context, ev: StartEvent) -> RetrieverEvent | StopEvent | None:
+    async def process_start(self, ctx: Context, ev: StartEvent) -> StopEvent:
         """Entry point for both Ingestion and Retrieval."""
         data_config = ev.get("data_config")
 
@@ -245,11 +246,12 @@ class RAGWorkflow(Workflow):
                 index=index,
                 top_k=self.config.retrieval.top_k,
                 language=self.config.retrieval.language,
+                use_async=True,
             )
         nodes = await retriever.aretrieve(query)
 
         logger.debug(f"Retrieved {len(nodes)} nodes")
-        
+
         return RetrieverEvent(nodes=nodes)
 
     @step

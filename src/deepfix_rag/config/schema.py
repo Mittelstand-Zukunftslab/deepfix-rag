@@ -82,6 +82,7 @@ class RetrievalConfig(BaseModel):
         default=0.5, ge=0.0, le=1.0, description="Dense vs lexical weight for hybrid search."
     )
     bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")
+    language: str = Field(default="german", description="Language of the documents.")
 
 
 class EvalConfig(BaseModel):

@@ -10,7 +10,6 @@ if hasattr(sys.stderr, "reconfigure"):
 import asyncio
 import logging
 from pathlib import Path
-import pandas as pd
 
 from deepeval.metrics import (
     AnswerRelevancyMetric,
@@ -22,6 +21,7 @@ from deepeval.metrics import (
 )
 from deepeval.test_case import LLMTestCase
 import mlflow
+import pandas as pd
 import tiktoken
 
 from deepfix_rag.config.schema import GenerationMetricType, RAGConfig
