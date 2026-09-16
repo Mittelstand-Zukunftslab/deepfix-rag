@@ -106,7 +106,10 @@ def make_metrics(
 async def _measure_one_metric(metric_type: str, metric: BaseMetric, tc: LLMTestCase) -> dict:
     """Evaluate a single metric against a test case, returning partial row data."""
     try:
-        score, reason, success = await metric.a_measure(tc)
+        res = await metric.a_measure(tc)
+        score = getattr(metric, "score", 0.0)
+        reason = getattr(metric, "reason", "No reason provided")
+        success = metric.is_successful() if hasattr(metric, "is_successful") else bool(score >= getattr(metric, "threshold", 0.5))
         return {
             f"{metric_type}_score": score,
             f"{metric_type}_pass": success,
