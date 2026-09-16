@@ -1,7 +1,7 @@
 """deepfix eval subcommand."""
 
-from pathlib import Path
 import asyncio
+from pathlib import Path
 
 import typer
 import yaml

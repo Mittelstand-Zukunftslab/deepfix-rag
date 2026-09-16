@@ -1,6 +1,5 @@
 """Pydantic schema for RAG configuration validation."""
 
-from deepeval.metrics.faithfulness import faithfulness
 from enum import StrEnum
 
 from pydantic import BaseModel, Field

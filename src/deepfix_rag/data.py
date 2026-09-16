@@ -1,16 +1,14 @@
+from abc import ABC, abstractmethod
 from enum import StrEnum
 import json
 import logging
+from pathlib import Path
 
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
-
-# -------------------------------------------------------------------------
-# 1. ENUMS & CONFIGURATION (Type Safety & Pydantic)
-# -------------------------------------------------------------------------
 
 
 class DataSourceType(StrEnum):
@@ -27,18 +25,25 @@ class DataLoaderConfig(BaseModel):
     split: str | None = Field("train", description="Dataset split (HF only).")
     text_column: str = Field("text", description="Which column to map to the Document body.")
     doc_id_column: str = Field("id", description="Which column to map to the Document ID.")
+    query_column: str = Field("question", description="Which column to map to the Question/Query.")
+    answer_column: str = Field(
+        "answer", description="Which column to map to the Ground Truth/Answer."
+    )
+    config_name: str | None = Field(
+        None, description="Dataset config or subset name (e.g. 'qa' for HF)."
+    )
 
 
-# -------------------------------------------------------------------------
-# 2. THE STRATEGY PATTERN (Loaders)
-# -------------------------------------------------------------------------
-
-
-class BaseLoaderStrategy:
+class BaseLoaderStrategy(ABC):
     """Abstract interface for all data loaders."""
 
+    @abstractmethod
     def load(self, config: DataLoaderConfig) -> list[Document]:
         raise NotImplementedError("Subclasses must implement load()")
+
+    @abstractmethod
+    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+        raise NotImplementedError("Subclasses must implement load_qa()")
 
 
 class HuggingFaceLoader(BaseLoaderStrategy):
@@ -66,6 +71,29 @@ class HuggingFaceLoader(BaseLoaderStrategy):
 
         return docs_list
 
+    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            raise ImportError("Please install the 'datasets' library to load from HuggingFace.")
+
+        path = str(config.path_or_repo).replace("\\", "/")
+        config_name = config.config_name or "qa"
+        split = config.split or "test"
+
+        logger.info(
+            f"Downloading HuggingFace QA dataset '{path}' (subset: {config_name}, split: {split})..."
+        )
+        try:
+            ds = load_dataset(path, config_name, split=split)
+        except Exception:
+            logger.info(
+                f"Subset '{config_name}' not found for '{path}', falling back to default subset."
+            )
+            ds = load_dataset(path, split=split)
+
+        return [dict(row) for row in ds]
+
 
 class LocalFileLoader(BaseLoaderStrategy):
     def load(self, config: DataLoaderConfig) -> list[Document]:
@@ -83,16 +111,55 @@ class LocalFileLoader(BaseLoaderStrategy):
                     )
         return docs_list
 
+    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+        logger.info(f"Loading local QA file '{config.path_or_repo}'...")
+        with open(config.path_or_repo, "r", encoding="utf-8-sig") as f:
+            content = f.read().strip()
+
+        if not content:
+            return []
+
+        if content.startswith("["):
+            try:
+                data = json.loads(content)
+                if isinstance(data, list):
+                    return [dict(row) for row in data]
+            except json.JSONDecodeError:
+                pass
+
+        rows = []
+        for line in content.splitlines():
+            line_str = line.strip()
+            if line_str:
+                rows.append(json.loads(line_str))
+        return rows
+
 
 class DirectoryLoader(BaseLoaderStrategy):
     def load(self, config: DataLoaderConfig) -> list[Document]:
         logger.info(f"Scanning local directory '{config.path_or_repo}'...")
         return SimpleDirectoryReader(config.path_or_repo).load_data()
 
+    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+        from pathlib import Path
 
-# -------------------------------------------------------------------------
-# 3. THE FACTORY (Single point of entry)
-# -------------------------------------------------------------------------
+        dir_path = Path(config.path_or_repo)
+        logger.info(f"Scanning local directory '{dir_path}' for QA dataset...")
+
+        for candidate_name in ("qa.jsonl", "queries.jsonl", "test.jsonl", "dev.jsonl", "qa.json"):
+            candidate_file = dir_path / candidate_name
+            if candidate_file.is_file():
+                file_config = config.model_copy(
+                    update={
+                        "source_type": DataSourceType.LOCAL_FILE,
+                        "path_or_repo": str(candidate_file),
+                    }
+                )
+                return LocalFileLoader().load_qa(file_config)
+
+        raise FileNotFoundError(
+            f"No QA dataset file (qa.jsonl, queries.jsonl, test.jsonl, etc.) found in directory '{dir_path}'."
+        )
 
 
 class DataLoader:
@@ -118,3 +185,42 @@ class DataLoader:
         docs = strategy.load(config)
         logger.info(f"Successfully loaded {len(docs)} documents.")
         return docs
+
+    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+        """Load QA pairs using the configured strategy."""
+        strategy = self.strategies.get(config.source_type)
+        if not strategy:
+            raise ValueError(f"Unknown source type: {config.source_type}")
+
+        qa_pairs = strategy.load_qa(config)
+        logger.info(f"Successfully loaded {len(qa_pairs)} QA pairs.")
+        return qa_pairs
+
+    def load_qa_from_source(
+        self,
+        path_or_repo: str | Path,
+        split: str = "test",
+        config_name: str | None = "qa",
+        query_column: str = "question",
+        answer_column: str = "answer",
+    ) -> list[dict]:
+        """Automatically detects source type and loads QA dataset."""
+        from pathlib import Path
+
+        p = Path(path_or_repo)
+        if p.is_file():
+            source_type = DataSourceType.LOCAL_FILE
+        elif p.is_dir():
+            source_type = DataSourceType.DIRECTORY
+        else:
+            source_type = DataSourceType.HUGGINGFACE
+
+        config = DataLoaderConfig(
+            source_type=source_type,
+            path_or_repo=str(path_or_repo),
+            split=split,
+            config_name=config_name,
+            query_column=query_column,
+            answer_column=answer_column,
+        )
+        return self.load_qa(config)

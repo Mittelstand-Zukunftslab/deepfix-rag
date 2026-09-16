@@ -1,8 +1,5 @@
 """Run DeepEval scoring over a dataset using the RAG pipeline."""
 
-import csv
-import json
-import os
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -10,29 +7,28 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-from pathlib import Path
-import time
-import traceback
-
 import asyncio
+import logging
+from pathlib import Path
+import pandas as pd
 
 from deepeval.metrics import (
-    ContextualPrecisionMetric,
-    FaithfulnessMetric,
     AnswerRelevancyMetric,
-    ContextualRelevancyMetric,
+    BaseMetric,
+    ContextualPrecisionMetric,
     ContextualRecallMetric,
+    ContextualRelevancyMetric,
+    FaithfulnessMetric,
 )
-from deepeval.test_case import LLMTestCase, LLMTestCaseParams
+from deepeval.test_case import LLMTestCase
 import mlflow
-from deepeval.metrics import BaseMetric
-import logging
-from deepfix_rag.config.schema import RAGConfig, GenerationMetricType
-from deepfix_rag.config.settings import settings
-from deepfix_rag.pipeline import RAGWorkflow
-from deepfix_rag.evaluation.llm import ProxyJudgeLLM
-
 import tiktoken
+
+from deepfix_rag.config.schema import GenerationMetricType, RAGConfig
+from deepfix_rag.config.settings import settings
+from deepfix_rag.data import DataLoader
+from deepfix_rag.evaluation.llm import ProxyJudgeLLM
+from deepfix_rag.pipeline import RAGWorkflow
 
 _enc = tiktoken.get_encoding("cl100k_base")
 
@@ -61,16 +57,9 @@ def is_deflection(answer: str) -> bool:
     return any(phrase in lowered for phrase in DEFLECTION_PHRASES)
 
 
-# TODO: integrate with dataloader module
-def load_qa_dataset(dataset_path: Path) -> list[dict]:
-    if Path(dataset_path).is_file():
-        with open(dataset_path, "r", encoding="utf-8-sig") as f:
-            return [json.loads(line) for line in f]
-
-    from datasets import load_dataset
-
-    ds = load_dataset(str(dataset_path).replace("\\", "/"), "qa", split="test")
-    return [dict(row) for row in ds]
+def load_qa_dataset(dataset_path: Path | str, split: str = "test") -> list[dict]:
+    loader = DataLoader()
+    return loader.load_qa_from_source(dataset_path, split=split)
 
 
 def setup_mlflow(workspace: str):
@@ -86,11 +75,6 @@ def setup_mlflow(workspace: str):
         )
     mlflow.set_experiment(experiment_id=experiment.experiment_id)
 
-    # candidate_model_id = ensure_candidate_logged_model()
-    # if hasattr(mlflow, "set_active_model"):
-    #    mlflow.set_active_model(model_id=candidate_model_id)
-
-    return None
 
 
 def make_metrics(
@@ -121,12 +105,14 @@ async def _measure_one_metric(metric_type: str, metric: BaseMetric, tc: LLMTestC
         return {
             f"{metric_type}_score": score,
             f"{metric_type}_pass": success,
+            f"{metric_type}_reason": reason,
         }
     except Exception as e:
         logger.warning(f"Metric {metric_type} failed: {e}")
         return {
             f"{metric_type}_score": None,
             f"{metric_type}_pass": None,
+            f"{metric_type}_reason": str(e),
         }
 
 
@@ -201,7 +187,6 @@ async def run_evaluation(
     config: RAGConfig,
     index_dir: str | None = None,
     limit: int | None = None,
-    output_csv: str | None = "eval_results.csv",
     workspace: str = "dev",
     run_name: str = "eval_run",
     synchronous: bool = False,
@@ -210,7 +195,6 @@ async def run_evaluation(
 
     setup_mlflow(workspace)
 
-    # TODO: integrate with dataloader module
     qa_pairs = load_qa_dataset(dataset_path)
     if limit:
         qa_pairs = qa_pairs[:limit]
@@ -247,7 +231,7 @@ async def run_evaluation(
     workflow = RAGWorkflow(config=config, index_dir=index_dir)
     num_qa_pairs = len(qa_pairs)
 
-    async def _throttled_case(qa: dict, i: int) -> dict:
+    async def _run(qa: dict, i: int) -> dict:
         async with semaphore:
             return await _run_one_case(qa, i, workflow, metric_specs, metric_kwargs, num_qa_pairs)
 
@@ -257,7 +241,7 @@ async def run_evaluation(
         mlflow.log_param("concurrency", concurrency_limit, synchronous=synchronous)
 
         # Fan-out all cases concurrently, throttled by semaphore
-        all_rows = await asyncio.gather(*(_throttled_case(qa, i) for i, qa in enumerate(qa_pairs)))
+        all_rows = await asyncio.gather(*(_run(qa, i) for i, qa in enumerate(qa_pairs)))
 
         rows = list(all_rows)
         errors = [r for r in rows if r["error"] is not None]
@@ -279,5 +263,10 @@ async def run_evaluation(
             summary[f"{metric_type}_avg"] = avg(f"{metric_type}_score")
 
         mlflow.log_metrics(summary, synchronous=synchronous)
+        try:
+            df = pd.DataFrame.from_records(rows, index="index")
+            mlflow.log_table(data=df, artifact_file="eval_results.csv")
+        except Exception as e:
+            logger.error(f"Failed to log eval results as table: {e}")
 
     return {**summary, "rows": rows, "error_details": errors}

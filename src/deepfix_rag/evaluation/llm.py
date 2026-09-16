@@ -1,5 +1,5 @@
-import litellm
 from deepeval.models.base_model import DeepEvalBaseLLM
+import litellm
 
 
 class ProxyJudgeLLM(DeepEvalBaseLLM):
