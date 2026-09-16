@@ -81,7 +81,6 @@ def setup_mlflow(workspace: str):
     mlflow.set_experiment(experiment_id=experiment.experiment_id)
 
 
-
 def make_metrics(
     generation_metrics: list[GenerationMetricType],
     async_mode: bool,
@@ -109,7 +108,11 @@ async def _measure_one_metric(metric_type: str, metric: BaseMetric, tc: LLMTestC
         res = await metric.a_measure(tc)
         score = getattr(metric, "score", 0.0)
         reason = getattr(metric, "reason", "No reason provided")
-        success = metric.is_successful() if hasattr(metric, "is_successful") else bool(score >= getattr(metric, "threshold", 0.5))
+        success = (
+            metric.is_successful()
+            if hasattr(metric, "is_successful")
+            else bool(score >= getattr(metric, "threshold", 0.5))
+        )
         return {
             f"{metric_type}_score": score,
             f"{metric_type}_pass": success,

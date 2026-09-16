@@ -16,7 +16,12 @@ from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.graph_stores.types import GraphStore
 from llama_index.core.indices.base import BaseIndex
 from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
-from llama_index.core.response_synthesizers import Refine,CompactAndRefine, SimpleSummarize, TreeSummarize
+from llama_index.core.response_synthesizers import (
+    Refine,
+    CompactAndRefine,
+    SimpleSummarize,
+    TreeSummarize,
+)
 from llama_index.core.response_synthesizers.base import (
     BaseSynthesizer,
 )
@@ -42,7 +47,13 @@ from pydantic import BaseModel, Field
 import Stemmer
 from turbovec.llama_index import TurboQuantVectorStore
 
-from deepfix_rag.config.schema import GraphStoreType, RAGConfig, ResponseSynthesizerType, RetrievalBackend, VectorStoreType
+from deepfix_rag.config.schema import (
+    GraphStoreType,
+    RAGConfig,
+    ResponseSynthesizerType,
+    RetrievalBackend,
+    VectorStoreType,
+)
 from deepfix_rag.config.settings import settings
 from deepfix_rag.data import DataLoader
 
@@ -51,19 +62,23 @@ logger = logging.getLogger(__name__)
 
 class RetrieverEvent(Event):
     """Result of running retrieval."""
+
     nodes: list[NodeWithScore]
 
 
 class RerankEvent(Event):
     """Result of running reranking on retrieved nodes."""
+
     nodes: list[NodeWithScore]
 
 
 class RetrievalResult(BaseModel):
     """Retrieved document candidate."""
+
     doc_id: str = Field(..., description="Unique identifier for the document")
     score: float = Field(..., description="Retrieval score")
     text: str = Field(..., description="The text of the document")
+
 
 class CustomLiteLLM(LiteLLM):
     custom_context_window: int = 20000
@@ -126,10 +141,12 @@ class RAGWorkflow(Workflow):
         )
 
     def _get_vector_store(self) -> BasePydanticVectorStore:
+
         if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
             uri = self.config.retrieval.lancedb_index_dir
+            storage_options: dict[str, str] = {}
+
             if uri.startswith("s3://"):
-                storage_options: dict[str, str] = {}
                 if settings.S3_ACCESS_KEY_ID:
                     storage_options["aws_access_key_id"] = str(settings.S3_ACCESS_KEY_ID)
                 if settings.S3_SECRET_ACCESS_KEY:
@@ -140,14 +157,12 @@ class RAGWorkflow(Workflow):
                     storage_options["endpoint_url"] = str(settings.S3_ENDPOINT_URL)
                     storage_options["aws_endpoint"] = str(settings.S3_ENDPOINT_URL)
 
-                conn = lancedb.connect(
-                    uri=uri,
-                    storage_options=storage_options if storage_options else None,
-                )
-                return LanceDBVectorStore(uri=uri, connection=conn, table_name="documents")
-            else:
-                return LanceDBVectorStore(uri=uri, table_name="documents")
-                    
+            conn = lancedb.connect(
+                uri=uri,
+                storage_options=storage_options if storage_options else None,
+            )
+            return LanceDBVectorStore(uri=uri, connection=conn, table_name="documents")
+
         elif self.config.retrieval.vector_store == VectorStoreType.TURBO_QUANT:
             return TurboQuantVectorStore.from_params(bit_width=self.config.retrieval.bit_width)
         else:
@@ -172,14 +187,13 @@ class RAGWorkflow(Workflow):
 
     def _get_storage_context(self, persist_dir=None) -> StorageContext:
         graph_store = self._get_graph_store()
-        vector_store = self._get_vector_store()
         return StorageContext.from_defaults(
             persist_dir=persist_dir,
             graph_store=graph_store
             if self.config.retrieval.graph_store == GraphStoreType.FALKORDB
             else None,
             index_store=None,
-            vector_store=vector_store,
+            vector_store=self._get_vector_store(),
             property_graph_store=graph_store
             if self.config.retrieval.graph_store == GraphStoreType.MEMGRAPH
             else None,
@@ -211,7 +225,7 @@ class RAGWorkflow(Workflow):
                 embed_model=self._get_embed_model(),
             )
         return index
-    
+
     def _build_retriever(
         self,
         index: VectorStoreIndex,
@@ -251,7 +265,9 @@ class RAGWorkflow(Workflow):
                 bm25 = BM25Retriever.from_defaults(
                     similarity_top_k=top_k,
                     language=language,
-                    stemmer=Stemmer.Stemmer(language if language in ("german", "english") else "german"),
+                    stemmer=Stemmer.Stemmer(
+                        language if language in ("german", "english") else "german"
+                    ),
                     **bm25_kwargs,
                 )
                 retriever = QueryFusionRetriever(
@@ -266,23 +282,28 @@ class RAGWorkflow(Workflow):
                 )
             else:
                 retriever = index.as_retriever(similarity_top_k=top_k)
-        
+
         elif self.config.retrieval.backend == RetrievalBackend.DENSE:
             retriever = index.as_retriever(similarity_top_k=top_k)
-        
+
         else:
             raise ValueError("Invalid retrieval backend for VectorStoreIndex")
-        
+
         return retriever
 
     def _get_response_synthesizer(self) -> BaseSynthesizer:
         kwargs = dict(llm=self._get_llm(), streaming=False)
-        if self.config.generation.response_synthesizer == ResponseSynthesizerType.COMPACT_AND_REFINE:
+        if (
+            self.config.generation.response_synthesizer
+            == ResponseSynthesizerType.COMPACT_AND_REFINE
+        ):
             return CompactAndRefine(**kwargs, verbose=False)
-        elif self.config.generation.response_synthesizer == ResponseSynthesizerType.SIMPLE_SUMMARIZE:
+        elif (
+            self.config.generation.response_synthesizer == ResponseSynthesizerType.SIMPLE_SUMMARIZE
+        ):
             return SimpleSummarize(**kwargs)
         elif self.config.generation.response_synthesizer == ResponseSynthesizerType.TREE_SUMMARIZE:
-            return TreeSummarize(**kwargs,use_async=True)
+            return TreeSummarize(**kwargs, use_async=True)
         elif self.config.generation.response_synthesizer == ResponseSynthesizerType.REFINE:
             return Refine(**kwargs, verbose=False)
         else:
@@ -291,17 +312,17 @@ class RAGWorkflow(Workflow):
     @step
     async def process_start(self, ctx: Context, ev: StartEvent) -> StopEvent | None:
         """Entry point for Ingestion."""
-        ingest: bool  = ev.get("ingest",False)
+        ingest: bool = ev.get("ingest", False)
         if ingest:
             logger.info("Ingesting documents...")
             documents = DataLoader().load_documents(self.config.data)
             index = self._build_index(documents)
             return StopEvent(result=index)
         else:
-            return None        
+            return None
 
     @step
-    async def retrieve(self, ctx: Context, ev: StartEvent) -> RetrieverEvent|None:
+    async def retrieve(self, ctx: Context, ev: StartEvent) -> RetrieverEvent | None:
         """Entry point for RAG, triggered by a StartEvent with `query`."""
         query = ev.query
         index: PropertyGraphIndex | VectorStoreIndex = ev.index
@@ -314,16 +335,16 @@ class RAGWorkflow(Workflow):
 
         logger.info(f"Query: {query}")
         await ctx.store.set("query", query)
-       
+
         if isinstance(index, PropertyGraphIndex):
             kwargs = {}
             kwargs["response_mode"] = "tree_summarize"
             kwargs["embedding_mode"] = "hybrid"
             retriever = index.as_retriever(
-            similarity_top_k=self.config.retrieval.top_k,
-            **kwargs,
+                similarity_top_k=self.config.retrieval.top_k,
+                **kwargs,
             )
-        elif isinstance(index, VectorStoreIndex):        
+        elif isinstance(index, VectorStoreIndex):
             retriever = self._build_retriever(
                 index=index,
                 top_k=self.config.retrieval.top_k,
@@ -354,7 +375,7 @@ class RAGWorkflow(Workflow):
                 nodes = nodes[: self.config.rerank.top_n]
 
         return RerankEvent(nodes=nodes)
-    
+
     def convert_nodes_to_results(self, nodes: list[NodeWithScore]) -> list[RetrievalResult]:
         """Convert a list of NodeWithScore objects to standardized RetrievalResult models."""
         results = []
@@ -375,7 +396,7 @@ class RAGWorkflow(Workflow):
         query = await ctx.store.get("query")
         if query is None:
             raise ValueError("No query found. Please ingest documents first.")
-        
+
         if self.config.retrieval_only:
             logger.info("Retrieval only mode enabled. Returning retrieved nodes.")
             return StopEvent(result=self.convert_nodes_to_results(ev.nodes))
@@ -395,7 +416,7 @@ def execute_pipeline(
 
     async def _arun() -> list[RetrievalResult]:
         index = await workflow.run(ingest=ingest_data)
-        response = await workflow.run(query=query,index=index)
+        response = await workflow.run(query=query, index=index)
         return response
 
     try:

@@ -94,8 +94,12 @@ def mutate_config_cmd(
 def diff_config_cmd(
     config_a: Path | None = typer.Argument(None, help="Path to first RAG configuration YAML."),
     config_b: Path | None = typer.Argument(None, help="Path to second RAG configuration YAML."),
-    base: Path | None = typer.Option(None, "--base", "-b", help="Path to base RAG configuration YAML."),
-    compare: Path | None = typer.Option(None, "--compare", "-c", help="Path to compare RAG configuration YAML."),
+    base: Path | None = typer.Option(
+        None, "--base", "-b", help="Path to base RAG configuration YAML."
+    ),
+    compare: Path | None = typer.Option(
+        None, "--compare", "-c", help="Path to compare RAG configuration YAML."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Output diff in JSON format."),
 ) -> None:
     """Compare two RAG configuration YAMLs and output structural diff."""

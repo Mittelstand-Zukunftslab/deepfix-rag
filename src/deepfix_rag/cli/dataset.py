@@ -17,54 +17,51 @@ console = Console()
 
 @app.command("load")
 def load_dataset(
-    repo: str = typer.Option(
-        ..., "--repo", help="HuggingFace dataset repository (e.g. wirthual/dip-bundestag-qa)"
+    name: str = typer.Option(
+        ...,
+        "--name",
+        "--repo",
+        help="Dataset name preset (e.g. bundestag-qa) or HuggingFace repo (e.g. wirthual/dip-bundestag-qa)",
     ),
     split: str = typer.Option("train", "--split", help="Target split (e.g., train, dev, test)"),
-    text_column: str = typer.Option(
-        "text", "--text-column", help="The primary text/query column map in the dataset"
+    limit: int | None = typer.Option(None, "--limit", help="Maximum number of records to load"),
+    data_root: Path | None = typer.Option(
+        None, "--data-root", help="Root directory for dataset cache"
     ),
 ):
-    """Download and vectorize a dataset using the unified DataLoader."""
+    """Download and standardize a dataset into local cache with strict split isolation."""
+    if split != "train":
+        console.print(f"[red]Error: split must be 'train' (got '{split}').[/red]")
+        raise typer.Exit(code=1)
 
-    console.print(f"[green]Requesting unified DataLoader for '{repo}' (split: {split})...[/green]")
+    console.print(f"Loading dataset '{name}' (split: {split})...")
 
     try:
-        # Build the exact Pydantic Config expected by our DataLoader Interface
-        config = DataLoaderConfig(
-            source_type=DataSourceType.HUGGINGFACE,
-            path_or_repo=repo,
+        loader = DataLoader()
+        corpus_file, qa_file = loader.load_and_save(
+            name_or_repo=name,
             split=split,
-            text_column=text_column,
+            data_root=data_root,
+            limit=limit,
         )
-        documents = DataLoader().load_documents(config)
-
+        target_dir = corpus_file.parent
         console.print(
-            f"[bold green]Successfully loaded {len(documents)} unified LlamaIndex documents![/bold green]"
+            f"[bold green]Dataset '{name}' isolated successfully for {split} at {target_dir}[/bold green]"
         )
 
     except Exception as e:
-        console.print(f"[red]Failed to load dataset with config: '{config}'.\nError: {e}[/red]")
+        console.print(f"[red]Failed to load dataset '{name}'.\nError: {e}[/red]")
         raise typer.Exit(code=1)
-
-#TODO:
-@app.command("load")
-def load_dataset_cmd(
-    name: str = typer.Option(..., "--name", help="Dataset preset (e.g. garage, mtrag) or custom HF path"),
-    split: str = typer.Option(..., "--split", help="Target split (must be 'dev' or 'test')"),
-    stream: bool = typer.Option(False, "--stream", help="Enable streaming for large datasets"),
-):
-    """Download and standardize a dataset into local cache with strict split isolation."""
-    
-    raise NotImplementedError("Not implemented yet")
 
 
 @app.command("list")
 def list_datasets_cmd(
-    data_root: Path | None = typer.Option(None, "--data-root", help="Custom root directory for datasets"),
+    data_root: Path = typer.Option(
+        Path(settings.DATA_PROCESSES_DIR), "--data-root", help="Custom root directory for datasets"
+    ),
 ):
     """List all locally downloaded datasets and available splits."""
-    root = data_root or Path(settings.DATA_ROOT)
+    root = data_root
     if not root.exists():
         console.print("[yellow]No local datasets found.[/yellow]")
         return
@@ -84,13 +81,14 @@ def list_datasets_cmd(
     for name, splits in sorted(datasets_found):
         console.print(f" - [cyan]{name}[/cyan]: splits = {', '.join(splits)}")
 
-#TODO:
+
+# TODO:
 @app.command("generate-unanswerable")
 def generate_unanswerable_cmd(
-    dataset: Path = typer.Option(..., "--dataset", help="Path to dataset directory containing qa.jsonl"),
+    dataset: Path = typer.Option(
+        ..., "--dataset", help="Path to dataset directory containing qa.jsonl"
+    ),
     ratio: float = typer.Option(0.2, "--ratio", help="Ratio of unanswerable queries to generate"),
     output: Path = typer.Option(..., "--output", help="Output path for synthetic QA file"),
 ):
     raise NotImplementedError("Not implemented yet")
-    
-    

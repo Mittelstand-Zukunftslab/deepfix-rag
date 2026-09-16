@@ -1,9 +1,10 @@
 """Pydantic schema for RAG configuration validation."""
 
 from enum import StrEnum
-
+from pathlib import Path
 from pydantic import BaseModel, Field
 from .settings import settings
+
 
 class RetrievalBackend(StrEnum):
     BM25 = "bm25"
@@ -36,16 +37,46 @@ class GraphStoreType(StrEnum):
     FALKORDB = "falkordb"
     NONE = "none"
 
-class DataPreset(StrEnum):
-    BLEQA = "clips/bLLeQA"
-    LEGAL_RAG_BENCH = "isaacus/legal-rag-bench"
-    BUNDESTAG_QA = "wirthual/dip-bundestag-qa"
-    BUNDESTAG_CORPUS = "wirthual/dip-bundestag"
 
 class DataSourceType(StrEnum):
     HUGGINGFACE = "huggingface"
     LOCAL_FILE = "local_file"
     DIRECTORY = "directory"
+
+
+class DataPreset(StrEnum):
+    LEGAL_RAG_BENCH = "HF:isaacus/legal-rag-bench"
+    BUNDESTAG_QA = "HF:wirthual/dip-bundestag-qa"
+    BUNDESTAG_CORPUS = "HF:wirthual/dip-bundestag"
+
+    def get_type_and_repo(self) -> tuple[DataSourceType, str]:
+        if self.startswith("HF:"):
+            return DataSourceType.HUGGINGFACE, self[3:]
+        elif Path(self).is_file():
+            return DataSourceType.LOCAL_FILE, str(self)
+        elif Path(self).is_dir():
+            return DataSourceType.DIRECTORY, str(self)
+        else:
+            raise ValueError(f"Invalid data source: {self}")
+
+    @classmethod
+    def resolve(cls, value_or_name: str) -> tuple[DataSourceType, str]:
+        """Resolve a preset name, alias, or raw path/repo into (DataSourceType, target_str)."""
+        normalized = value_or_name.upper().replace("-", "_")
+        if normalized in cls.__members__:
+            return cls[normalized].get_type_and_repo()
+        for member in cls:
+            if member.value == value_or_name or member.value.removeprefix("HF:") == value_or_name:
+                return member.get_type_and_repo()
+        if value_or_name.startswith("HF:"):
+            return DataSourceType.HUGGINGFACE, value_or_name[3:]
+        p = Path(value_or_name)
+        if p.is_file():
+            return DataSourceType.LOCAL_FILE, str(p)
+        if p.is_dir():
+            return DataSourceType.DIRECTORY, str(p)
+        return DataSourceType.HUGGINGFACE, value_or_name
+
 
 class ResponseSynthesizerType(StrEnum):
     COMPACT_AND_REFINE = "compact_and_refine"
@@ -53,11 +84,14 @@ class ResponseSynthesizerType(StrEnum):
     TREE_SUMMARIZE = "tree_summarize"
     REFINE = "refine"
 
+
 class DataLoaderConfig(BaseModel):
     """Pydantic model to strictly validate data loading requests."""
 
     source_type: DataSourceType = DataSourceType.HUGGINGFACE
-    path_or_repo: str = Field(default=DataPreset.BUNDESTAG_QA, description="Local path or HuggingFace repo ID.")
+    path_or_repo: str = Field(
+        default=DataPreset.BUNDESTAG_QA, description="Local path or HuggingFace repo ID."
+    )
     split: str | None = Field("train", description="Dataset split (HF only).")
     text_column: str = Field("text", description="Which column to map to the Document body.")
     doc_id_column: str = Field("id", description="Which column to map to the Document ID.")
@@ -68,6 +102,7 @@ class DataLoaderConfig(BaseModel):
     config_name: str | None = Field(
         None, description="Dataset config or subset name (e.g. 'qa' for HF)."
     )
+    limit: int | None = Field(None, description="Optional maximum number of records to load.")
 
 
 class ChunkingConfig(BaseModel):
@@ -99,9 +134,7 @@ class RetrievalConfig(BaseModel):
     graph_store: GraphStoreType = Field(
         default=GraphStoreType.NONE, description="Graph store type."
     )
-    lancedb_table_name: str = Field(
-        default="documents", description="Table name for LanceDB."
-    )
+    lancedb_table_name: str = Field(default="documents", description="Table name for LanceDB.")
     lancedb_index_dir: str = Field(
         default=settings.S3_URI, description="Directory for LanceDB index."
     )
@@ -158,6 +191,7 @@ class GenerationConfig(BaseModel):
         default=ResponseSynthesizerType.SIMPLE_SUMMARIZE, description="Response synthesizer type."
     )
     context_window: int = Field(default=20000, ge=64, description="Context window size.")
+
 
 class RAGConfig(BaseModel):
     """Top-level RAG Pipeline Configuration Schema."""
