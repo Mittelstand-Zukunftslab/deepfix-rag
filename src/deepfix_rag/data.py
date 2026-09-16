@@ -1,11 +1,9 @@
-﻿import json
+﻿from enum import StrEnum
+import json
 import logging
-from enum import Enum
-from pathlib import Path
-from typing import Any, List, Optional
 
-from llama_index.core.schema import Document
 from llama_index.core import SimpleDirectoryReader
+from llama_index.core.schema import Document
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -14,7 +12,7 @@ logger = logging.getLogger(__name__)
 # 1. ENUMS & CONFIGURATION (Type Safety & Pydantic)
 # -------------------------------------------------------------------------
 
-class DataSourceType(str, Enum):
+class DataSourceType(StrEnum):
     HUGGINGFACE = "huggingface"
     LOCAL_FILE = "local_file"
     DIRECTORY = "directory"
@@ -23,7 +21,7 @@ class DataLoaderConfig(BaseModel):
     """Pydantic model to strictly validate data loading requests."""
     source_type: DataSourceType
     path_or_repo: str = Field(..., description="Local path or HuggingFace repo ID.")
-    split: Optional[str] = Field("train", description="Dataset split (HF only).")
+    split: str | None = Field("train", description="Dataset split (HF only).")
     text_column: str = Field("text", description="Which column to map to the Document body.")
     doc_id_column: str = Field("id", description="Which column to map to the Document ID.")
 
@@ -33,11 +31,11 @@ class DataLoaderConfig(BaseModel):
 
 class BaseLoaderStrategy:
     """Abstract interface for all data loaders."""
-    def load(self, config: DataLoaderConfig) -> List[Document]:
+    def load(self, config: DataLoaderConfig) -> list[Document]:
         raise NotImplementedError("Subclasses must implement load()")
 
 class HuggingFaceLoader(BaseLoaderStrategy):
-    def load(self, config: DataLoaderConfig) -> List[Document]:
+    def load(self, config: DataLoaderConfig) -> list[Document]:
         try:
             from datasets import load_dataset
         except ImportError:
@@ -58,7 +56,7 @@ class HuggingFaceLoader(BaseLoaderStrategy):
         return docs_list
 
 class LocalFileLoader(BaseLoaderStrategy):
-    def load(self, config: DataLoaderConfig) -> List[Document]:
+    def load(self, config: DataLoaderConfig) -> list[Document]:
         logger.info(f"Loading local file '{config.path_or_repo}'...")
         docs_list = []
         with open(config.path_or_repo, "r", encoding="utf-8") as f:
@@ -72,7 +70,7 @@ class LocalFileLoader(BaseLoaderStrategy):
         return docs_list
 
 class DirectoryLoader(BaseLoaderStrategy):
-    def load(self, config: DataLoaderConfig) -> List[Document]:
+    def load(self, config: DataLoaderConfig) -> list[Document]:
         logger.info(f"Scanning local directory '{config.path_or_repo}'...")
         return SimpleDirectoryReader(config.path_or_repo).load_data()
 
@@ -93,7 +91,7 @@ class DataLoader:
             DataSourceType.DIRECTORY: DirectoryLoader(),
         }
 
-    def load_documents(self, config: DataLoaderConfig) -> List[Document]:
+    def load_documents(self, config: DataLoaderConfig) -> list[Document]:
         """Main entry point. Validates type and delegates to the correct strategy."""
         strategy = self.strategies.get(config.source_type)
         if not strategy:

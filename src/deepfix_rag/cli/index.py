@@ -1,5 +1,6 @@
 """deepfix index subcommand."""
 
+import asyncio
 from pathlib import Path
 
 import typer
@@ -7,9 +8,8 @@ import yaml
 
 from deepfix_rag.cli.ui import print_error, print_json, print_success
 from deepfix_rag.config.schema import RAGConfig
-import asyncio
-from deepfix_rag.pipeline import RAGWorkflow
 from deepfix_rag.data import DataLoaderConfig, DataSourceType
+from deepfix_rag.pipeline import RAGWorkflow
 
 
 def _load_rag_config(config_path: Path) -> RAGConfig:
@@ -57,7 +57,7 @@ def index_cmd(
         workflow = RAGWorkflow(config=rag_config, index_dir=str(index_dir))
         
         # Trigger the LlamaIndex Ingest step natively!
-        print(f"Triggering asynchronous RAGWorkflow data ingestion...")
+        print("Triggering asynchronous RAGWorkflow data ingestion...")
         index = asyncio.run(workflow.run(data_config=data_config))
         
     except Exception as e:

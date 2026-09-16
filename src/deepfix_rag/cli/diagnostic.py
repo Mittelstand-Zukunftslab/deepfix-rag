@@ -5,8 +5,6 @@ from pathlib import Path
 
 import typer
 
-from deepfix_rag.cli.ui import print_error, print_json, print_success
-
 
 class DiagnosticType(str, Enum):
     retrieval = "retrieval"

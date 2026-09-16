@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 
 import mlflow
-from deepfix_rag.config.settings import settings
 
+from deepfix_rag.config.settings import settings
 from deepfix_rag.evaluation.mlflow_helpers import compute_config_hash
 
 if settings.MLFLOW_TRACKING_URI:

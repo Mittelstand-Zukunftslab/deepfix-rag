@@ -1,7 +1,6 @@
-import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+import mlflow
 
 class Settings(BaseSettings):
     # MLflow
@@ -12,11 +11,13 @@ class Settings(BaseSettings):
     MLFLOW_CANDIDATE_ID: str = "baseline_001"
     MLFLOW_DEV_RAG_EXPERIMENT: str = "dev_rag_experiment"
     MLFLOW_CORPUS_ID: str | None = None
+    MLFLOW_ENABLE_ASYNC_TRACE_LOGGING: bool = False
 
     # LLM
     LLM_BASE_URL: str = "https://api.aisc.hpi.de/v1"
     LLM_API_KEY: str | None = None
     LLM_MODEL: str = "qwen3-8-27b"
+    LLM_JUDGE_MODEL: str = "gpt-oss-120b"
 
     # Embedding
     EMBEDDING_MODEL: str = "octen-embedding-8b"
@@ -44,3 +45,6 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if settings.MLFLOW_TRACKING_URI:
+    mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)

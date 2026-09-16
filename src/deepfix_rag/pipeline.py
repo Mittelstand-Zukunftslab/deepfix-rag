@@ -1,18 +1,23 @@
 """RAG retrieval and generation execution powered by LlamaIndex Workflows."""
 
 import asyncio
-import json
-import os
 import logging
 from typing import Any
-from llama_index.graph_stores.memgraph import MemgraphPropertyGraphStore
 
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core import (
+    Document,
+    PropertyGraphIndex,
+    StorageContext,
+    VectorStoreIndex,
+)
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
+from llama_index.core.graph_stores.types import GraphStore
+from llama_index.core.indices.base import BaseIndex
+from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
 from llama_index.core.response_synthesizers import CompactAndRefine
-from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import NodeWithScore
+from llama_index.core.vector_stores.types import BasePydanticVectorStore
 from llama_index.core.workflow import (
     Context,
     Event,
@@ -21,23 +26,16 @@ from llama_index.core.workflow import (
     Workflow,
     step,
 )
-# from turbovec.llama_index import TurboQuantVectorStore (Temporarily disabled until TurboQuant is installed)
-from llama_index.graph_stores.falkordb import FalkorDBGraphStore
-from llama_index.core import (
-    SimpleDirectoryReader,
-    Document,
-    StorageContext,
-    PropertyGraphIndex
-)
 from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.graph_stores.falkordb import FalkorDBGraphStore
+from llama_index.graph_stores.memgraph import MemgraphPropertyGraphStore
 from llama_index.llms.litellm import LiteLLM
 from llama_index.postprocessor.cohere_rerank import CohereRerank
 from llama_index.vector_stores.lancedb import LanceDBVectorStore
-from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
-
 from pydantic import BaseModel, Field
+from turbovec.llama_index import TurboQuantVectorStore
 
-from deepfix_rag.config.schema import RAGConfig, GraphStore, VectorStore
+from deepfix_rag.config.schema import GraphStoreType, RAGConfig, VectorStoreType
 from deepfix_rag.config.settings import settings
 
 from .data import DataLoader
@@ -114,22 +112,22 @@ class RAGWorkflow(Workflow):
             base_url=settings.COHERE_BASE_URL,
         )
     
-    def _get_vector_store(self) -> LanceDBVectorStore: # Removed TurboQuantVectorStore typehint temporarily
-        if self.config.retrieval.vector_store == VectorStore.LANCEDB:
+    def _get_vector_store(self) -> BasePydanticVectorStore:
+        if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
             return LanceDBVectorStore(uri=self.index_dir, table_name="documents")
-        elif self.config.retrieval.vector_store == VectorStore.TURBO_QUANT:
+        elif self.config.retrieval.vector_store == VectorStoreType.TURBO_QUANT:
             return TurboQuantVectorStore.from_params(bit_width=self.config.retrieval.bit_width)
         else:
             raise ValueError("Invalid vector store")
     
-    def _get_graph_store(self):
-        if self.config.retrieval.graph_store == GraphStore.MEMGRAPH:
+    def _get_graph_store(self) -> GraphStore:
+        if self.config.retrieval.graph_store == GraphStoreType.MEMGRAPH:
             return MemgraphPropertyGraphStore(
                 url=settings.MEMGRAPH_URL,
                 username=settings.MEMGRAPH_USERNAME,
                 password=settings.MEMGRAPH_PASSWORD,
             )
-        elif self.config.retrieval.graph_store == GraphStore.FALKORDB:
+        elif self.config.retrieval.graph_store == GraphStoreType.FALKORDB:
             return FalkorDBGraphStore(
                 hostname=settings.FALKORDB_HOST,
                 port=settings.FALKORDB_PORT,
@@ -139,25 +137,25 @@ class RAGWorkflow(Workflow):
             )
         return None
 
-    def _get_storage_context(self, persist_dir=None):
+    def _get_storage_context(self, persist_dir=None) -> StorageContext:
         graph_store = self._get_graph_store()
         vector_store = self._get_vector_store()
         storage_context = StorageContext.from_defaults(
             persist_dir=persist_dir,
-            graph_store=graph_store if self.config.retrieval.graph_store == GraphStore.FALKORDB else None,
+            graph_store=graph_store if self.config.retrieval.graph_store == GraphStoreType.FALKORDB else None,
             index_store=None,
             vector_store=vector_store,
-            property_graph_store=graph_store if self.config.retrieval.graph_store == GraphStore.MEMGRAPH else None,
+            property_graph_store=graph_store if self.config.retrieval.graph_store == GraphStoreType.MEMGRAPH else None,
             image_store=None,  # images of scanned PDFs
         )
 
         return storage_context
 
-    def _build_index(self, documents: list[Document], storage_context=None, **kwargs):
+    def _build_index(self, documents: list[Document], storage_context=None, **kwargs) -> BaseIndex:
         if storage_context is None:
             storage_context = self._get_storage_context()
 
-        if self.config.retrieval.graph_store != GraphStore.NONE:
+        if self.config.retrieval.graph_store != GraphStoreType.NONE:
             index = PropertyGraphIndex.from_documents(
                 documents,
                 storage_context=storage_context,
@@ -177,9 +175,7 @@ class RAGWorkflow(Workflow):
             )
             
         return index
-                   
-            
-            
+    
     @step
     async def ingest(self, ctx: Context, ev: StartEvent) -> StopEvent | None:
         """Entry point to ingest documents into vector/graph index."""
@@ -187,43 +183,32 @@ class RAGWorkflow(Workflow):
         if not data_config:
             raise ValueError("You must pass a 'data_config' DataLoaderConfig to ingest.")
 
-        # Trigger our new world-class Factory Object directly inside the LlamaIndex Workflow graph
         data_loader = DataLoader()
         documents = data_loader.load_documents(data_config)
 
         index = self._build_index(documents)
+        await ctx.store.set("index", index)
         return StopEvent(result=index)
 
     @step
     async def retrieve(
         self, ctx: Context, ev: StartEvent
-    ) -> RetrieverEvent | None:
+    ) -> RetrieverEvent:
         """Entry point for RAG, triggered by a StartEvent with `query`."""
         query = ev.get("query")
-        index: PropertyGraphIndex | VectorStoreIndex = ev.get("index")
+        index: PropertyGraphIndex | VectorStoreIndex = await ctx.store.get("index")
 
         if not query:
-            logger.warning("Query is empty. Please provide a query.")
-            return None
+            raise ValueError("Query is empty. Please provide a query.")
+        
+        if index is None:
+            raise ValueError("No index found. Please ingest documents first.")
         
         # store the query in the global context
         logger.debug(f"Query: {query}")
         await ctx.store.set("query", query)
         
-        if index is None:
-            # Auto-load the index from the vector store if not provided dynamically
-            if self.config.retrieval.graph_store != "none":
-                index = PropertyGraphIndex.from_existing(
-                    property_graph_store=self._get_graph_store(),
-                    embed_model=self._get_embed_model()
-                )
-            else:
-                index = VectorStoreIndex.from_vector_store(
-                    vector_store=self._get_vector_store(),
-                    embed_model=self._get_embed_model()
-                )
-        
-        kwargs = dict()
+        kwargs = {}
         if isinstance(index, PropertyGraphIndex):
             kwargs['response_mode'] = 'tree_summarize'
             kwargs['embedding_mode'] = 'hybrid'
@@ -245,7 +230,7 @@ class RAGWorkflow(Workflow):
         self, ctx: Context, ev: RetrieverEvent
     ) -> RerankEvent:
         """Rerank candidate nodes using CohereRerank with custom base_url."""
-        query = await ctx.store.get("query", default=None)
+        query = await ctx.store.get("query")
         nodes = ev.nodes
         reranker = self._get_reranker()
 
@@ -266,10 +251,11 @@ class RAGWorkflow(Workflow):
     @step
     async def synthesize(self, ctx: Context, ev: RerankEvent) -> StopEvent:
         """Synthesize response using CompactAndRefine."""
-        query = await ctx.store.get("query", default=None)
+        query = await ctx.store.get("query")
+        if query is None:
+            raise ValueError("No query found. Please ingest documents first.")
 
-        llm = self._get_llm()
-        summarizer = CompactAndRefine(llm=llm, streaming=False, verbose=False)
+        summarizer = CompactAndRefine(llm=self._get_llm(), streaming=False, verbose=False)
 
         response = await summarizer.asynthesize(query, nodes=ev.nodes)
         return StopEvent(result=response)

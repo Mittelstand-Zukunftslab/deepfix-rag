@@ -4,8 +4,6 @@ from pathlib import Path
 
 import typer
 
-from deepfix_rag.cli.ui import print_error, print_json, print_success
-
 
 def export_cmd(
     config: Path = typer.Option(

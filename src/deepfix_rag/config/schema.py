@@ -1,10 +1,11 @@
 """Pydantic schema for RAG configuration validation."""
 
-from botocore import retries
-from typing import Literal
+
+from deepeval.metrics.faithfulness import faithfulness
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
-from enum import StrEnum
+
 
 class RetrievalBackend(StrEnum):
     BM25 = "bm25"
@@ -13,19 +14,22 @@ class RetrievalBackend(StrEnum):
     GRAPH = "graph"
     #VECTORLESS = "vectorless"
 
-class GenerationMetrics(StrEnum):
+class GenerationMetricType(StrEnum):
     FAITHFULNESS = "faithfulness"
     CONTEXT_PRECISION = "context_precision"
+    CONTEXT_RECALL = "context_recall"
+    ANSWER_RELEVANCY = "answer_relevancy"
+    CONTEXTUAL_RELEVANCY = "contextual_relevancy"
 
-class RetrievalMetrics(StrEnum):
+class RetrievalMetricType(StrEnum):
     NDCG = "ndcg"
     RECALL = "recall"
 
-class VectorStore(StrEnum):
+class VectorStoreType(StrEnum):
     LANCEDB = "lancedb"
     TURBO_QUANT = "turbo-quant"
 
-class GraphStore(StrEnum):
+class GraphStoreType(StrEnum):
     MEMGRAPH = "memgraph"
     FALKORDB = "falkordb"
     NONE = "none"
@@ -61,11 +65,11 @@ class RetrievalConfig(BaseModel):
         default=RetrievalBackend.HYBRID,
         description="Retrieval backend (pyterrier, bm25, dense, hybrid, graph, vectorless).",
     )
-    vector_store: VectorStore = Field(
-        default=VectorStore.LANCEDB, description="Vector store type."
+    vector_store: VectorStoreType = Field(
+        default=VectorStoreType.LANCEDB, description="Vector store type."
     )
-    graph_store: GraphStore = Field(
-        default=GraphStore.NONE, description="Graph store type."
+    graph_store: GraphStoreType = Field(
+        default=GraphStoreType.NONE, description="Graph store type."
     )
     top_k: int = Field(
         default=10, ge=1, le=100, description="Number of retrieved documents before re-ranking."
@@ -79,8 +83,10 @@ class RetrievalConfig(BaseModel):
 
 class EvalConfig(BaseModel):
     """Evaluation hyperparameters."""
-    retrieval_metrics: list[RetrievalMetrics] = Field(default_factory=lambda: [RetrievalMetrics.NDCG, RetrievalMetrics.RECALL], description="Retrieval metrics.")
-    generation_metrics: list[GenerationMetrics] = Field(default_factory=lambda: [GenerationMetrics.FAITHFULNESS, GenerationMetrics.CONTEXT_PRECISION], description="Generation metrics.")
+    retrieval_metrics: list[RetrievalMetricType] = Field(default_factory=lambda: [RetrievalMetricType.NDCG, RetrievalMetricType.RECALL], description="Retrieval metrics.")
+    generation_metrics: list[GenerationMetricType] = Field(default_factory=lambda: [GenerationMetricType.FAITHFULNESS, GenerationMetricType.CONTEXT_PRECISION,GenerationMetricType.CONTEXT_RECALL,GenerationMetricType.ANSWER_RELEVANCY,GenerationMetricType.CONTEXTUAL_RELEVANCY], description="Generation metrics.")
+
+    threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Metrics threshold.")
     
 
 class RerankConfig(BaseModel):

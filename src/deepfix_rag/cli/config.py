@@ -1,6 +1,5 @@
 """deepfix mutate-config and diff-config subcommands."""
 
-import json
 from pathlib import Path
 from typing import Any
 

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from copy import deepcopy
 import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping
-from copy import deepcopy
 from typing import Any
-
 
 REQUIRED_CONFIG_SECTIONS = (
     "chunking",

@@ -1,8 +1,7 @@
-﻿import json
-from pathlib import Path
+﻿from pathlib import Path
 
-import typer
 from rich.console import Console
+import typer
 
 from deepfix_rag.data import DataLoader, DataLoaderConfig, DataSourceType
 
