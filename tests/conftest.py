@@ -1,0 +1,67 @@
+"""Global pytest fixtures and configuration for deepfix_rag tests."""
+
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from deepfix_rag.config.schema import DataLoaderConfig, RAGConfig
+
+
+@pytest.fixture
+def cli_runner() -> CliRunner:
+    """Fixture providing an isolated Typer CliRunner instance."""
+    return CliRunner()
+
+
+@pytest.fixture(scope="session")
+def tests_dir() -> Path:
+    """Fixture providing the absolute path to the tests directory."""
+    return Path(__file__).parent.resolve()
+
+
+@pytest.fixture(scope="session")
+def test_data_dir(tests_dir: Path) -> Path:
+    """Fixture providing the path to the tests/data directory."""
+    return tests_dir / "data"
+
+
+@pytest.fixture(scope="session")
+def sample_corpus_path(test_data_dir: Path) -> Path:
+    """Fixture providing the path to the sample corpus JSONL file."""
+    path = test_data_dir / "sample_corpus.jsonl"
+    assert path.exists(), f"Sample corpus file does not exist at {path}"
+    return path
+
+
+@pytest.fixture(scope="session")
+def sample_qa_path(test_data_dir: Path) -> Path:
+    """Fixture providing the path to the sample QA JSONL file."""
+    path = test_data_dir / "sample_qa.jsonl"
+    assert path.exists(), f"Sample QA file does not exist at {path}"
+    return path
+
+
+@pytest.fixture(scope="session")
+def default_config_path() -> Path:
+    """Fixture providing the path to the root configs/default.yaml."""
+    path = Path("configs/default.yaml").resolve()
+    assert path.exists(), f"Default config file does not exist at {path}"
+    return path
+
+
+@pytest.fixture
+def default_rag_config() -> RAGConfig:
+    """Fixture providing a fresh default RAGConfig instance."""
+    return RAGConfig()
+
+
+@pytest.fixture
+def sample_rag_config(sample_corpus_path: Path) -> RAGConfig:
+    """Fixture providing a RAGConfig instance pre-configured for local testing with sample data."""
+    cfg = RAGConfig()
+    cfg.retrieval.language = "german"
+    cfg.retrieval.top_k = 3
+    cfg.rerank.enabled = False
+    cfg.data = DataLoaderConfig(path_or_repo=str(sample_corpus_path))
+    return cfg

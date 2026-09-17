@@ -2,7 +2,9 @@
 
 from enum import StrEnum
 from pathlib import Path
+
 from pydantic import BaseModel, Field, model_validator
+
 from .settings import settings
 
 

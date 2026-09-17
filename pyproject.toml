@@ -53,8 +53,9 @@ deepfix-rag = "deepfix_rag.main:app"
 
 [tool.ruff]
 line-length = 99
-src = ["src"]
-include = ["pyproject.toml", "src/**/*.py"]
+src = ["src", "tests"]
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
+
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
@@ -67,4 +68,13 @@ force-sort-within-sections = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
+markers = [
+    "unit: Unit tests with no external network or heavy dependencies",
+    "cli: CLI command interaction tests",
+    "integration: Integration tests requiring filesystem or multi-component workflows",
+    "e2e: End-to-end pipeline execution tests requiring live embedding/LLM backends",
+    "network: Tests that download datasets or interact with remote APIs",
+]
+
 

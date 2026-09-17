@@ -1,4 +1,7 @@
+"""Tests for dataset loader routing, configuration inference, and local parsing."""
+
 from pathlib import Path
+
 import pytest
 
 from deepfix_rag.config.schema import DataLoaderConfig, DataPreset, DataSourceType
@@ -7,11 +10,13 @@ from deepfix_rag.data import (
     DataLoader,
     HuggingFaceLoader,
     LegalRagBenchLoader,
-    LocalFileLoader,
 )
+
+pytestmark = [pytest.mark.unit]
 
 
 def test_dataloader_config_inference_and_defaults(tmp_path: Path):
+    """Verify inference of DataSourceType and preset configurations."""
     # Default is BUNDESTAG_CORPUS and HUGGINGFACE
     cfg_default = DataLoaderConfig()
     assert cfg_default.path_or_repo == DataPreset.BUNDESTAG_CORPUS
@@ -33,24 +38,31 @@ def test_dataloader_config_inference_and_defaults(tmp_path: Path):
 
 
 def test_bundestag_loader_canonical_repos():
+    """Verify canonical HuggingFace repository identifiers for Bundestag loader."""
     loader = BundestagLoader()
     assert loader.CORPUS_REPO == "wirthual/dip-bundestag"
     assert loader.QA_REPO == "wirthual/dip-bundestag-qa"
 
 
 def test_huggingface_loader_routing():
+    """Verify dynamic loader resolution from preset configurations."""
     hf_loader = HuggingFaceLoader()
 
     # Routing to Bundestag
-    b_loader = hf_loader._resolve_loader(DataLoaderConfig(path_or_repo=DataPreset.BUNDESTAG_CORPUS))
+    b_loader = hf_loader._resolve_loader(
+        DataLoaderConfig(path_or_repo=DataPreset.BUNDESTAG_CORPUS)
+    )
     assert isinstance(b_loader, BundestagLoader)
 
     # Routing to Legal RAG Bench
-    l_loader = hf_loader._resolve_loader(DataLoaderConfig(path_or_repo=DataPreset.LEGAL_RAG_BENCH))
+    l_loader = hf_loader._resolve_loader(
+        DataLoaderConfig(path_or_repo=DataPreset.LEGAL_RAG_BENCH)
+    )
     assert isinstance(l_loader, LegalRagBenchLoader)
 
 
 def test_local_file_loader(tmp_path: Path):
+    """Verify parsing of custom local corpus and QA files."""
     corpus_file = tmp_path / "corpus.jsonl"
     corpus_file.write_text(
         '{"id": "c1", "text": "Corpus document text."}\n',
@@ -72,3 +84,17 @@ def test_local_file_loader(tmp_path: Path):
     assert len(qa) == 1
     assert qa[0]["query"] == "Frage?"
     assert qa[0]["answer"] == "Antwort."
+
+
+def test_sample_benchmark_fixtures_loading(
+    sample_corpus_path: Path, sample_qa_path: Path
+):
+    """Verify shared sample fixtures can be loaded via DataLoader."""
+    data_loader = DataLoader()
+    docs = data_loader.load_corpus(sample_corpus_path)
+    assert len(docs) > 0
+    assert docs[0].id_ is not None
+
+    qa = data_loader.load_qa(DataLoaderConfig(path_or_repo=str(sample_qa_path)))
+    assert len(qa) > 0
+    assert "query" in qa[0]

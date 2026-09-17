@@ -1,7 +1,5 @@
 import asyncio
 import concurrent.futures
-import logging
-from pathlib import Path
 from typing import Any
 
 import lancedb
@@ -54,9 +52,8 @@ from deepfix_rag.config.schema import (
     RetrievalBackend,
     VectorStoreType,
 )
-from deepfix_rag.config.settings import settings, LOGGER
+from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader
-
 
 
 class RetrieverEvent(Event):

@@ -2,10 +2,11 @@
 
 import asyncio
 from pathlib import Path
+import shutil
 
 import typer
 import yaml
-import shutil
+
 from deepfix_rag.cli.ui import (
     EXIT_RUNTIME_ERROR,
     EXIT_VALIDATION_ERROR,
