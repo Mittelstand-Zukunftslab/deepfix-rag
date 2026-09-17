@@ -5,7 +5,6 @@ from pathlib import Path
 import shutil
 
 import typer
-import yaml
 
 from deepfix_rag.cli.ui import (
     EXIT_RUNTIME_ERROR,
@@ -15,26 +14,26 @@ from deepfix_rag.cli.ui import (
     print_json,
     print_success,
 )
-from deepfix_rag.config.schema import RAGConfig
+from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.data import DataLoaderConfig
 from deepfix_rag.pipeline import RAGWorkflow
 
 
-def _load_rag_config(config_path: Path) -> RAGConfig:
-    with open(config_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return RAGConfig.model_validate(data)
-
-
 def index_cmd(
-    dataset: str = typer.Option(
-        ..., "--dataset", "-d", help="Path to corpus documents or dataset preset."
-    ),
     config: Path = typer.Option(
         ..., "--config", "-c", help="Path to RAG configuration YAML file."
     ),
-    index_dir: Path = typer.Option(
-        ..., "--index-dir", "-o", help="Target directory for generated index."
+    dataset: str | None = typer.Option(
+        None,
+        "--dataset",
+        "-d",
+        help="Path to corpus documents or dataset preset (overrides config.data.path_or_repo).",
+    ),
+    index_dir: Path | None = typer.Option(
+        None,
+        "--index-dir",
+        "-o",
+        help="Target directory for generated index (overrides config.retrieval.lancedb_index_dir).",
     ),
     force: bool = typer.Option(
         False, "--force", "-f", help="Overwrite existing index directory if present."
@@ -43,7 +42,7 @@ def index_cmd(
 ) -> None:
     """Build vector/lexical index for a dataset using a given configuration."""
     try:
-        rag_config = _load_rag_config(config)
+        rag_config = load_rag_config(config)
     except FileNotFoundError:
         emit_error(
             f"Config file not found: {config}",
@@ -57,22 +56,44 @@ def index_cmd(
             json_output=json_output,
         )
 
-    if index_dir.exists() and any(index_dir.iterdir()):
-        if not force:
-            emit_error(
-                f"Index directory '{index_dir}' already exists and is not empty. Use --force to overwrite.",
-                code=EXIT_VALIDATION_ERROR,
-                json_output=json_output,
-            )
+    target_dataset = dataset or (rag_config.data.path_or_repo if rag_config.data else None)
+    if not target_dataset:
+        emit_error(
+            "Dataset must be specified either via --dataset flag or within config.data.path_or_repo.",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
+
+    target_index_dir = (
+        str(index_dir)
+        if index_dir is not None
+        else (rag_config.retrieval.lancedb_index_dir if rag_config.retrieval else None)
+    )
+    if not target_index_dir:
+        emit_error(
+            "Index directory must be specified either via --index-dir flag or within config.retrieval.lancedb_index_dir.",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
+
+    if not str(target_index_dir).startswith("s3://"):
+        local_path = Path(target_index_dir)
+        if local_path.exists() and any(local_path.iterdir()):
+            if not force:
+                emit_error(
+                    f"Index directory '{target_index_dir}' already exists and is not empty. Use --force to overwrite.",
+                    code=EXIT_VALIDATION_ERROR,
+                    json_output=json_output,
+                )
+            else:
+                shutil.rmtree(local_path)
+                local_path.mkdir(parents=True, exist_ok=True)
         else:
-            shutil.rmtree(index_dir)
-            index_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        index_dir.mkdir(parents=True, exist_ok=True)
+            local_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        rag_config.retrieval.lancedb_index_dir = str(index_dir)
-        rag_config.data = DataLoaderConfig(path_or_repo=dataset)
+        rag_config.retrieval.lancedb_index_dir = str(target_index_dir)
+        rag_config.data = DataLoaderConfig(path_or_repo=target_dataset)
 
         workflow = RAGWorkflow(config=rag_config)
 
@@ -93,6 +114,8 @@ def index_cmd(
         )
 
     if json_output:
-        print_json({"status": "success", "index_path": str(index_dir)})
+        print_json({"status": "success", "index_path": str(target_index_dir)})
     else:
-        print_success(f"Indexed documents successfully via Workflow into LanceDB at {index_dir}.")
+        print_success(
+            f"Indexed documents successfully via Workflow into LanceDB at {target_index_dir}."
+        )

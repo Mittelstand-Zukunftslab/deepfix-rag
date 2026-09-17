@@ -43,7 +43,9 @@ def test_cli_dataset_subcommands_help(cli_runner: CliRunner):
         assert result.exit_code == EXIT_SUCCESS, f"Failed for dataset subcommand: {subcmd}"
 
 
-def test_mutate_config_json_output(cli_runner: CliRunner, default_config_path: Path, tmp_path: Path):
+def test_mutate_config_json_output(
+    cli_runner: CliRunner, default_config_path: Path, tmp_path: Path
+):
     """Verify mutate-config emits valid JSON to stdout on success with exit code 0."""
     out_config = tmp_path / "mutated.yaml"
 
@@ -139,9 +141,7 @@ def test_mutate_config_invalid_override_format_exit_code(
     assert payload["code"] == EXIT_VALIDATION_ERROR
 
 
-def test_diff_config_json_output(
-    cli_runner: CliRunner, default_config_path: Path, tmp_path: Path
-):
+def test_diff_config_json_output(cli_runner: CliRunner, default_config_path: Path, tmp_path: Path):
     """Verify diff-config outputs structured JSON to stdout."""
     mutated_config = tmp_path / "mutated.yaml"
 
@@ -232,14 +232,14 @@ def test_dataset_load_validation_error_split(cli_runner: CliRunner):
     assert payload["code"] == EXIT_VALIDATION_ERROR
 
 
-def test_diagnostic_stub_exit_code_and_json(cli_runner: CliRunner):
-    """Verify run-diagnostic returns exit code 2 and structured error JSON."""
+def test_diagnostic_stub_exit_code_and_json(cli_runner: CliRunner, default_config_path: Path):
+    """Verify run-diagnostic returns exit code 2 and structured error JSON with --config or --dataset."""
     result = cli_runner.invoke(
         app,
         [
             "run-diagnostic",
-            "--dataset",
-            "bundestag-qa",
+            "--config",
+            str(default_config_path),
             "--json",
         ],
     )
@@ -248,6 +248,18 @@ def test_diagnostic_stub_exit_code_and_json(cli_runner: CliRunner):
     assert payload["status"] == "error"
     assert payload["code"] == EXIT_RUNTIME_ERROR
     assert "not implemented" in payload["error"].lower()
+
+
+def test_eval_missing_config_fails(cli_runner: CliRunner):
+    """Verify deepfix eval requires --config."""
+    result = cli_runner.invoke(app, ["eval", "--json"])
+    assert result.exit_code != EXIT_SUCCESS
+
+
+def test_index_missing_config_fails(cli_runner: CliRunner):
+    """Verify deepfix index requires --config."""
+    result = cli_runner.invoke(app, ["index", "--json"])
+    assert result.exit_code != EXIT_SUCCESS
 
 
 def test_export_stub_exit_code_and_json(cli_runner: CliRunner, default_config_path: Path):

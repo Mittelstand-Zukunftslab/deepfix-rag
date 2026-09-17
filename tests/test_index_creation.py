@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
+import yaml
 
 from deepfix_rag.cli.ui import EXIT_SUCCESS, EXIT_VALIDATION_ERROR
+from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.main import app
 
 pytestmark = [pytest.mark.cli, pytest.mark.integration]
@@ -76,3 +78,71 @@ def test_cli_index_cmd_with_force_succeeds(
     # Verify that marker.txt was deleted and LanceDB documents dataset was created
     assert not (index_dir / "marker.txt").exists()
     assert (index_dir / "documents.lance").exists()
+
+
+def test_cli_index_cmd_declarative_config_only(
+    cli_runner: CliRunner,
+    sample_corpus_path: Path,
+    tmp_path: Path,
+):
+    """Verify that deepfix index succeeds declaratively using only --config."""
+    index_dir = tmp_path / "declarative_index"
+    config_path = tmp_path / "declarative_config.yaml"
+
+    cfg = RAGConfig()
+    cfg.data.path_or_repo = str(sample_corpus_path)
+    cfg.retrieval.lancedb_index_dir = str(index_dir)
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg.model_dump(mode="json"), f)
+
+    result = cli_runner.invoke(
+        app,
+        [
+            "index",
+            "--config",
+            str(config_path),
+            "--json",
+        ],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "success"
+    assert payload["index_path"] == str(index_dir)
+    assert (index_dir / "documents.lance").exists()
+
+
+def test_cli_index_cmd_declarative_with_cli_overrides(
+    cli_runner: CliRunner,
+    sample_corpus_path: Path,
+    tmp_path: Path,
+):
+    """Verify that CLI flags override values declared in the config YAML."""
+    config_index_dir = tmp_path / "config_index"
+    cli_index_dir = tmp_path / "cli_index"
+    config_path = tmp_path / "override_config.yaml"
+
+    cfg = RAGConfig()
+    cfg.data.path_or_repo = str(sample_corpus_path)
+    cfg.retrieval.lancedb_index_dir = str(config_index_dir)
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg.model_dump(mode="json"), f)
+
+    result = cli_runner.invoke(
+        app,
+        [
+            "index",
+            "--config",
+            str(config_path),
+            "--index-dir",
+            str(cli_index_dir),
+            "--json",
+        ],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "success"
+    assert payload["index_path"] == str(cli_index_dir)
+    assert (cli_index_dir / "documents.lance").exists()
+    assert not config_index_dir.exists()

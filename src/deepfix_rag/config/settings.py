@@ -17,6 +17,7 @@ def get_logger():
     logger.addHandler(stream_handler)
     return logger
 
+
 class Settings(BaseSettings):
     # MLflow
     MLFLOW_TRACKING_USERNAME: str | None = None

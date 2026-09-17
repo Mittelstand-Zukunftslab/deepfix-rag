@@ -4,7 +4,6 @@ import asyncio
 from pathlib import Path
 
 import typer
-import yaml
 
 from deepfix_rag.cli.ui import (
     EXIT_RUNTIME_ERROR,
@@ -13,43 +12,52 @@ from deepfix_rag.cli.ui import (
     print_json,
     print_success,
 )
-from deepfix_rag.config.schema import RAGConfig
+from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.evaluation.runner import run_evaluation
 
 
-def _load_rag_config(config_path: Path) -> RAGConfig:
-    with open(config_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return RAGConfig.model_validate(data)
-
-
 def eval_cmd(
-    dataset: Path = typer.Option(
-        ..., "--dataset", "-d", help="Path or preset identifier for the evaluation dataset."
-    ),
     config: Path = typer.Option(
         ..., "--config", "-c", help="Path to RAG configuration YAML file."
     ),
+    dataset: str | None = typer.Option(
+        None,
+        "--dataset",
+        "-d",
+        help="Path or preset identifier for the evaluation dataset (overrides config.data.path_or_repo).",
+    ),
+    split: str | None = typer.Option(
+        None,
+        "--split",
+        "-s",
+        help="Dataset split to evaluate on (overrides config.data.split).",
+    ),
     index_dir: str | None = typer.Option(
-        None, "--index-dir", "-i", help="Directory containing the built vector/lexical index."
+        None,
+        "--index-dir",
+        "-i",
+        help="Directory containing the built vector/lexical index (overrides config.retrieval.lancedb_index_dir).",
     ),
     compare: Path | None = typer.Option(
         None, "--compare", help="Optional baseline configuration YAML for delta comparison."
     ),
     json_output: bool = typer.Option(False, "--json", help="Output results in JSON format."),
     limit: int | None = typer.Option(
-        None, "--limit", "-n", help="Limit number of queries to evaluate."
+        None,
+        "--limit",
+        "-n",
+        help="Limit number of queries to evaluate (overrides config.data.limit).",
     ),
     concurrency: int | None = typer.Option(
         None,
         "--concurrency",
         "-j",
-        help="Max parallel QA cases (overrides config). Defaults to config value.",
+        help="Max parallel QA cases (overrides config.eval.concurrency).",
     ),
 ) -> None:
     """Run DeepEval evaluation on a dataset using a given RAG configuration."""
     try:
-        rag_config = _load_rag_config(config)
+        rag_config = load_rag_config(config)
     except FileNotFoundError:
         emit_error(
             f"Config file not found: {config}",
@@ -63,14 +71,38 @@ def eval_cmd(
             json_output=json_output,
         )
 
+    target_dataset = dataset or (rag_config.data.path_or_repo if rag_config.data else None)
+    if not target_dataset:
+        emit_error(
+            "Dataset must be specified either via --dataset flag or within config.data.path_or_repo.",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
+
+    target_index_dir = (
+        index_dir
+        if index_dir is not None
+        else (rag_config.retrieval.lancedb_index_dir if rag_config.retrieval else None)
+    )
+    target_split = split or (rag_config.data.split if rag_config.data else "dev")
+    target_limit = (
+        limit if limit is not None else (rag_config.data.limit if rag_config.data else None)
+    )
+    target_concurrency = (
+        concurrency
+        if concurrency is not None
+        else (rag_config.eval.concurrency if rag_config.eval else None)
+    )
+
     try:
         candidate_summary = asyncio.run(
             run_evaluation(
-                dataset_path=dataset,
+                dataset_path=target_dataset,
                 config=rag_config,
-                index_dir=index_dir,
-                limit=limit,
-                max_concurrency=concurrency,
+                index_dir=target_index_dir,
+                split=target_split,
+                limit=target_limit,
+                max_concurrency=target_concurrency,
             )
         )
     except typer.Exit:
@@ -95,7 +127,7 @@ def eval_cmd(
         return
 
     try:
-        baseline_config = _load_rag_config(compare)
+        baseline_config = load_rag_config(compare)
     except FileNotFoundError:
         emit_error(
             f"Baseline config file not found: {compare}",
@@ -112,11 +144,12 @@ def eval_cmd(
     try:
         baseline_summary = asyncio.run(
             run_evaluation(
-                dataset_path=dataset,
+                dataset_path=target_dataset,
                 config=baseline_config,
-                index_dir=index_dir,
-                limit=limit,
-                max_concurrency=concurrency,
+                index_dir=target_index_dir,
+                split=target_split,
+                limit=target_limit,
+                max_concurrency=target_concurrency,
             )
         )
     except typer.Exit:

@@ -185,10 +185,11 @@ async def _run_one_case(
 
 
 async def run_evaluation(
-    dataset_path: Path,
+    dataset_path: Path | str,
     config: RAGConfig,
     index_dir: str | None = None,
     limit: int | None = None,
+    split: str | None = None,
     workspace: str = "dev",
     run_name: str = "eval_run",
     synchronous: bool = False,
@@ -197,9 +198,12 @@ async def run_evaluation(
 
     setup_mlflow(workspace)
 
-    qa_pairs = load_qa_dataset(dataset_path)
-    if limit:
-        qa_pairs = qa_pairs[:limit]
+    target_split = split or (config.data.split if config.data else "test")
+    target_limit = limit if limit is not None else (config.data.limit if config.data else None)
+
+    qa_pairs = load_qa_dataset(dataset_path, split=target_split)
+    if target_limit:
+        qa_pairs = qa_pairs[:target_limit]
 
     judge = ProxyJudgeLLM(
         model=settings.LLM_JUDGE_MODEL,

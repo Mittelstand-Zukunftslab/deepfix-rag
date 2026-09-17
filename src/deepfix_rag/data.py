@@ -264,7 +264,9 @@ class DataLoader:
             DataSourceType.DIRECTORY: DirectoryLoader(),
         }
 
-    def load_corpus(self, config_or_target: DataLoaderConfig | str | Path | None = None, **kwargs) -> list[Document]:
+    def load_corpus(
+        self, config_or_target: DataLoaderConfig | str | Path | None = None, **kwargs
+    ) -> list[Document]:
         """Main entry point to load corpus documents."""
         if isinstance(config_or_target, DataLoaderConfig):
             config = config_or_target
@@ -343,7 +345,10 @@ class DataLoader:
 
         corpus_repo = (
             BundestagLoader.CORPUS_REPO
-            if (repo in (BundestagLoader.CORPUS_REPO, BundestagLoader.QA_REPO) or "bundestag" in dataset_name)
+            if (
+                repo in (BundestagLoader.CORPUS_REPO, BundestagLoader.QA_REPO)
+                or "bundestag" in dataset_name
+            )
             else repo
         )
 
@@ -366,7 +371,10 @@ class DataLoader:
         if not is_corpus_only:
             qa_repo = (
                 BundestagLoader.QA_REPO
-                if (repo in (BundestagLoader.CORPUS_REPO, BundestagLoader.QA_REPO) or "bundestag" in dataset_name)
+                if (
+                    repo in (BundestagLoader.CORPUS_REPO, BundestagLoader.QA_REPO)
+                    or "bundestag" in dataset_name
+                )
                 else repo
             )
             qa_config = DataLoaderConfig(

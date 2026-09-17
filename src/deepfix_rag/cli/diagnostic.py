@@ -16,8 +16,14 @@ class DiagnosticType(str, Enum):
 
 
 def diagnostic_cmd(
-    dataset: Path = typer.Option(
-        ..., "--dataset", "-d", help="Path or preset identifier for the evaluation dataset."
+    dataset: str | None = typer.Option(
+        None,
+        "--dataset",
+        "-d",
+        help="Path or preset identifier for the evaluation dataset (overrides config.data.path_or_repo).",
+    ),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to RAG configuration YAML file."
     ),
     type: DiagnosticType = typer.Option(
         DiagnosticType.retrieval,

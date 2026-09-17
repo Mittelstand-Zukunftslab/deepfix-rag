@@ -13,8 +13,8 @@ from deepfix_rag.cli.ui import (
     print_json,
     print_success,
 )
+from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.config.mutator import apply_mutation, compute_config_diff
-from deepfix_rag.config.schema import RAGConfig
 
 
 def _parse_value(raw: str) -> Any:
@@ -31,12 +31,6 @@ def _parse_value(raw: str) -> Any:
         return int(raw)
     except ValueError:
         return raw
-
-
-def _load_rag_config(config_path: Path) -> RAGConfig:
-    with open(config_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return RAGConfig.model_validate(data)
 
 
 def mutate_config_cmd(
@@ -61,7 +55,7 @@ def mutate_config_cmd(
         )
 
     try:
-        base_config = _load_rag_config(base)
+        base_config = load_rag_config(base)
     except Exception as e:
         emit_error(
             f"Failed to parse base config '{base}': {e}",
@@ -151,8 +145,8 @@ def diff_config_cmd(
         )
 
     try:
-        cfg_a = _load_rag_config(first)
-        cfg_b = _load_rag_config(second)
+        cfg_a = load_rag_config(first)
+        cfg_b = load_rag_config(second)
     except Exception as e:
         emit_error(
             f"Error loading configs for comparison: {e}",

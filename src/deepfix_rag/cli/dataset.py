@@ -122,7 +122,9 @@ def list_datasets_cmd(
         print_json(
             {
                 "status": "success",
-                "datasets": [{"name": name, "splits": splits} for name, splits in sorted(datasets_found)],
+                "datasets": [
+                    {"name": name, "splits": splits} for name, splits in sorted(datasets_found)
+                ],
             }
         )
         return

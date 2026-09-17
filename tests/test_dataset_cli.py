@@ -35,9 +35,7 @@ def test_dataset_invalid_split(cli_runner: CliRunner, tmp_path: Path):
 @pytest.mark.integration
 @pytest.mark.network
 @pytest.mark.parametrize("dataset_name", ["bundestag-qa", "legal-rag-bench"])
-def test_dataset_load_live_hf_dev_split(
-    cli_runner: CliRunner, tmp_path: Path, dataset_name: str
-):
+def test_dataset_load_live_hf_dev_split(cli_runner: CliRunner, tmp_path: Path, dataset_name: str):
     """Verify loading real records from live Hugging Face Hub with --limit into isolated directory."""
     result = cli_runner.invoke(
         app,

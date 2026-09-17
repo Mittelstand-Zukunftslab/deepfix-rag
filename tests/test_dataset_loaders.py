@@ -55,9 +55,7 @@ def test_huggingface_loader_routing():
     assert isinstance(b_loader, BundestagLoader)
 
     # Routing to Legal RAG Bench
-    l_loader = hf_loader._resolve_loader(
-        DataLoaderConfig(path_or_repo=DataPreset.LEGAL_RAG_BENCH)
-    )
+    l_loader = hf_loader._resolve_loader(DataLoaderConfig(path_or_repo=DataPreset.LEGAL_RAG_BENCH))
     assert isinstance(l_loader, LegalRagBenchLoader)
 
 
@@ -86,9 +84,7 @@ def test_local_file_loader(tmp_path: Path):
     assert qa[0]["answer"] == "Antwort."
 
 
-def test_sample_benchmark_fixtures_loading(
-    sample_corpus_path: Path, sample_qa_path: Path
-):
+def test_sample_benchmark_fixtures_loading(sample_corpus_path: Path, sample_qa_path: Path):
     """Verify shared sample fixtures can be loaded via DataLoader."""
     data_loader = DataLoader()
     docs = data_loader.load_corpus(sample_corpus_path)

@@ -286,9 +286,6 @@ pilotproject-deepfix/
 │   │   └── schema.py              <- Pydantic RAGConfig model definition
 │   ├── diagnostics/               <- Failure mode classification engine
 │   ├── evaluation/                <- Evaluation runner and MLflow integrations
-│   │   ├── indexing.py            <- LanceDB index building wrapper
-│   │   ├── mlflow_candidate.py    <- Candidate manifest logging
-│   │   ├── mlflow_helpers.py      <- MLflow tracking and metric logging
 │   │   └── runner.py              <- DeepEval pipeline execution runner
 │   ├── retrieval/                 <- Retrieval and generation engines
 │   │   ├── models.py              <- EmbeddingClient and GenerationClient
@@ -320,7 +317,7 @@ DeepFix uses [pytest](https://docs.pytest.org/) for automated testing and [Ruff]
 
 Run the full test suite with `uv`:
 ```bash
-uv run pytest -v
+uv run --env-file .env pytest -v
 ```
 Alternatively, with an active virtual environment:
 ```bash
@@ -343,22 +340,22 @@ Tests are categorized using markers registered in `pyproject.toml` to allow targ
 
 #### Run Fast Unit Tests Only
 ```bash
-uv run pytest -v -m "unit"
+uv run --env-file .env pytest -v -m "unit"
 ```
 
 #### Run CLI Tests Only
 ```bash
-uv run pytest -v -m "cli"
+uv run --env-file .env pytest -v -m "cli"
 ```
 
 #### Run Fast Tests (Skip Network & E2E)
 ```bash
-uv run pytest -v -m "not network and not e2e"
+uv run --env-file .env pytest -v -m "not network and not e2e"
 ```
 
 #### Run End-to-End Pipeline Tests
 ```bash
-uv run pytest -v -m "e2e"
+uv run --env-file .env pytest -v -m "e2e"
 ```
 
 ### Shared Fixtures (`tests/conftest.py`)
@@ -375,14 +372,10 @@ Common fixtures are defined in [`tests/conftest.py`](tests/conftest.py) for reus
 ```bash
 # Check code style and imports with ruff
 uv run ruff check
-# or
-make lint
 
 # Automatically format and fix issues
 uv run ruff check --fix
 uv run ruff format
-# or
-make format
 ```
 ---
 ## License
