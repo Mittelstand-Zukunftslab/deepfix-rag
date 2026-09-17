@@ -214,7 +214,6 @@ class GenerationConfig(BaseModel):
     response_synthesizer: ResponseSynthesizerType = Field(
         default=ResponseSynthesizerType.SIMPLE_SUMMARIZE, description="Response synthesizer type."
     )
-    context_window: int = Field(default=20000, ge=64, description="Context window size.")
 
 
 class RAGConfig(BaseModel):

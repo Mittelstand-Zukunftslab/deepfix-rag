@@ -77,7 +77,7 @@ class RetrievalResult(BaseModel):
 
 
 class CustomLiteLLM(LiteLLM):
-    custom_context_window: int = 20000
+    custom_context_window: int = settings.LLM_CONTEXT_WINDOW
 
     @property
     def metadata(self):
@@ -123,7 +123,6 @@ class RAGWorkflow(Workflow):
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
             system_prompt=self.config.generation.system_prompt,
-            context_window=self.config.generation.context_window,
         )
 
     def _get_reranker(self) -> CohereRerank | None:
@@ -304,7 +303,7 @@ class RAGWorkflow(Workflow):
             raise ValueError("Invalid response synthesizer")
 
     @step
-    async def process_start(self, ctx: Context, ev: StartEvent) -> StopEvent | None:
+    async def ingestion(self, ctx: Context, ev: StartEvent) -> StopEvent | None:
         """Entry point for Ingestion."""
         ingest: bool = ev.get("ingest", False)
         if ingest:
