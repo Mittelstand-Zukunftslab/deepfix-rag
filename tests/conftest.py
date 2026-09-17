@@ -1,11 +1,14 @@
 """Global pytest fixtures and configuration for deepfix_rag tests."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from deepfix_rag.config.schema import DataLoaderConfig, RAGConfig
+from deepfix_rag.config.settings import settings
+from deepfix_rag.pipeline import RAGWorkflow
 
 
 @pytest.fixture
@@ -65,3 +68,42 @@ def sample_rag_config(sample_corpus_path: Path) -> RAGConfig:
     cfg.rerank.enabled = False
     cfg.data = DataLoaderConfig(path_or_repo=str(sample_corpus_path))
     return cfg
+
+
+@pytest.fixture
+def isolated_mlflow_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Fixture providing an isolated local SQLite MLflow tracking environment."""
+    import mlflow
+
+    db_path = tmp_path / "mlflow.db"
+    tracking_uri = f"sqlite:///{db_path.as_posix()}"
+    mlflow.set_tracking_uri(tracking_uri)
+    monkeypatch.setattr(settings, "MLFLOW_TRACKING_URI", tracking_uri)
+    monkeypatch.setattr(settings, "MLFLOW_DEV_WORKSPACE", None)
+
+    try:
+        exp = mlflow.get_experiment_by_name(settings.MLFLOW_DEV_RAG_EXPERIMENT)
+        if exp is None:
+            mlflow.create_experiment(settings.MLFLOW_DEV_RAG_EXPERIMENT)
+    except Exception:
+        pass
+
+    yield tracking_uri
+
+
+@pytest.fixture
+def populated_sample_index_dir(sample_corpus_path: Path, tmp_path: Path) -> Path:
+    """Fixture providing a temporary LanceDB directory pre-populated with sample corpus."""
+
+    index_dir = tmp_path / "sample_lancedb_index"
+    cfg = RAGConfig()
+    cfg.retrieval.lancedb_index_dir = str(index_dir)
+    cfg.data = DataLoaderConfig(path_or_repo=str(sample_corpus_path))
+    cfg.retrieval.load_if_exists = False
+
+    async def _build():
+        workflow = RAGWorkflow(config=cfg)
+        return await workflow.run(ingest=True)
+
+    asyncio.run(_build())
+    return index_dir

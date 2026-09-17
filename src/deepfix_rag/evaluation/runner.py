@@ -27,7 +27,7 @@ from deepfix_rag.config.schema import GenerationMetricType, RAGConfig
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader
 from deepfix_rag.evaluation.llm import ProxyJudgeLLM
-from deepfix_rag.pipeline import RAGWorkflow
+from deepfix_rag.pipeline import RAGWorkflow, RetrievalResult
 
 _enc = tiktoken.get_encoding("cl100k_base")
 
@@ -96,7 +96,12 @@ def make_metrics(
 async def _measure_one_metric(metric_type: str, metric: BaseMetric, tc: LLMTestCase) -> dict:
     """Evaluate a single metric against a test case, returning partial row data."""
     try:
-        await metric.a_measure(tc)
+        if getattr(metric, "async_mode", False) and hasattr(metric, "a_measure"):
+            await metric.a_measure(tc)
+        elif hasattr(metric, "measure"):
+            await asyncio.to_thread(metric.measure, tc)
+        elif hasattr(metric, "a_measure"):
+            await metric.a_measure(tc)
         score = getattr(metric, "score", 0.0)
         reason = getattr(metric, "reason", "No reason provided")
         success = (
@@ -124,17 +129,14 @@ async def _run_one_case(
     workflow: RAGWorkflow,
     metric_specs: dict[str, type],
     metric_kwargs: dict,
-    num_qa_pairs: int,
 ) -> dict:
     query = qa.get("question") or qa.get("query", "")
     expected_output = qa.get("answer") or qa.get("expected_output", "N/A")
-    # question_id = qa.get("id", f"q_{i}")
     deflection = False
     try:
-        LOGGER.info(f"Evaluating Question {i + 1}/{num_qa_pairs}: {query[:50]}...")
-        response = await workflow.run(query=query)
-        answer = getattr(response, "response", getattr(response, "result", str(response)))
-        context = [n.node.get_content() for n in response.source_nodes]
+        response: list[RetrievalResult] | None = await workflow.run(query=query)
+        context = [r.text for r in response] if response else []
+        answer = context[0] if context else ""
 
     except Exception as e:
         return {
@@ -187,23 +189,15 @@ async def _run_one_case(
 async def run_evaluation(
     dataset_path: Path | str,
     config: RAGConfig,
-    index_dir: str | None = None,
-    limit: int | None = None,
-    split: str | None = None,
     workspace: str = "dev",
     run_name: str = "eval_run",
-    synchronous: bool = False,
-    max_concurrency: int | None = None,
 ) -> dict:
 
     setup_mlflow(workspace)
 
-    target_split = split or (config.data.split if config.data else "test")
-    target_limit = limit if limit is not None else (config.data.limit if config.data else None)
-
-    qa_pairs = load_qa_dataset(dataset_path, split=target_split)
-    if target_limit:
-        qa_pairs = qa_pairs[:target_limit]
+    qa_pairs = load_qa_dataset(dataset_path, split=config.data.split)
+    if config.data.limit:
+        qa_pairs = qa_pairs[: config.data.limit]
 
     judge = ProxyJudgeLLM(
         model=settings.LLM_JUDGE_MODEL,
@@ -220,7 +214,7 @@ async def run_evaluation(
         GenerationMetricType.ANSWER_RELEVANCY: AnswerRelevancyMetric,
     }
     metric_kwargs = dict(
-        async_mode=not synchronous,
+        async_mode=False,
         include_reason=True,
         threshold=config.eval.threshold,
         model=judge,
@@ -230,21 +224,21 @@ async def run_evaluation(
     }
 
     # Determine effective concurrency
-    concurrency_limit = 1 if synchronous else (max_concurrency or config.eval.concurrency)
+    concurrency_limit = config.eval.concurrency or 1
     semaphore = asyncio.Semaphore(concurrency_limit)
     LOGGER.info(f"Running evaluation with concurrency={concurrency_limit}")
 
-    workflow = RAGWorkflow(config=config, index_dir=index_dir)
-    num_qa_pairs = len(qa_pairs)
+    workflow = RAGWorkflow(config=config)
+    await workflow.run(ingest=True)
 
     async def _run(qa: dict, i: int) -> dict:
         async with semaphore:
-            return await _run_one_case(qa, i, workflow, metric_specs, metric_kwargs, num_qa_pairs)
+            return await _run_one_case(qa, i, workflow, metric_specs, metric_kwargs)
 
     with mlflow.start_run(run_name=run_name):
-        mlflow.log_params(config.model_dump(), synchronous=synchronous)
-        mlflow.log_param("n_questions", len(qa_pairs), synchronous=synchronous)
-        mlflow.log_param("concurrency", concurrency_limit, synchronous=synchronous)
+        mlflow.log_params(config.model_dump(), synchronous=False)
+        mlflow.log_param("n_questions", len(qa_pairs), synchronous=False)
+        mlflow.log_param("concurrency", concurrency_limit, synchronous=False)
 
         # Fan-out all cases concurrently, throttled by semaphore
         all_rows = await asyncio.gather(*(_run(qa, i) for i, qa in enumerate(qa_pairs)))
@@ -268,7 +262,7 @@ async def run_evaluation(
         for metric_type in metric_specs:
             summary[f"{metric_type}_avg"] = avg(f"{metric_type}_score")
 
-        mlflow.log_metrics(summary, synchronous=synchronous)
+        mlflow.log_metrics(summary, synchronous=False)
         try:
             df = pd.DataFrame.from_records(rows, index="index")
             mlflow.log_table(data=df, artifact_file="eval_results.json")

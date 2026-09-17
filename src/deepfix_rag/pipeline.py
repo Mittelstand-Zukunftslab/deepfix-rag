@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+from pathlib import Path
 from typing import Any
 
 import lancedb
@@ -85,6 +86,12 @@ class CustomLiteLLM(LiteLLM):
         meta.context_window = self.custom_context_window
         return meta
 
+    async def acomplete(self, prompt: str, formatted: bool = False, **kwargs: Any):
+        return await asyncio.to_thread(self.complete, prompt, formatted=formatted, **kwargs)
+
+    async def achat(self, messages: Any, **kwargs: Any):
+        return await asyncio.to_thread(self.chat, messages, **kwargs)
+
 
 class RAGWorkflow(Workflow):
     """Event-driven RAG Workflow supporting Ingestion, Retrieval, Reranking, and Synthesis."""
@@ -100,6 +107,7 @@ class RAGWorkflow(Workflow):
         self.config = config or RAGConfig()
         self.llm = llm
         self.embed_model = embed_model
+        self._index: BaseIndex | None = None
 
     def _get_embed_model(self) -> BaseEmbedding:
         if self.embed_model is not None:
@@ -194,6 +202,59 @@ class RAGWorkflow(Workflow):
             else None,
             image_store=None,  # images of scanned PDFs
         )
+
+    def _index_exists(self) -> bool:
+        """Check if an index already exists for the configured storage backend."""
+        try:
+            if self.config.retrieval.graph_store != GraphStoreType.NONE:
+                return False
+            if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
+                uri = self.config.retrieval.lancedb_index_dir
+                if not str(uri).startswith("s3://") and not Path(uri).exists():
+                    return False
+                vector_store = self._get_vector_store()
+                conn = getattr(
+                    vector_store, "_connection", getattr(vector_store, "connection", None)
+                )
+                if conn is not None:
+                    table_name = getattr(
+                        vector_store,
+                        "table_name",
+                        getattr(vector_store, "_table_name", "documents"),
+                    )
+                    tables = (
+                        list(conn.list_tables())
+                        if hasattr(conn, "list_tables")
+                        else list(conn.table_names())
+                    )
+                    if table_name in tables:
+                        tbl = conn.open_table(table_name)
+                        count = tbl.count_rows() if hasattr(tbl, "count_rows") else len(tbl)
+                        return count > 0
+            return False
+        except Exception as e:
+            LOGGER.debug(f"Index existence check failed: {e}")
+            return False
+
+    def _load_existing_index(self) -> BaseIndex:
+        """Load an existing index from the storage backend."""
+        if self.config.retrieval.graph_store != GraphStoreType.NONE:
+            storage_context = self._get_storage_context()
+            graph_store = getattr(
+                storage_context,
+                "property_graph_store",
+                getattr(storage_context, "graph_store", None),
+            )
+            return PropertyGraphIndex.from_existing(
+                property_graph_store=graph_store,
+                embed_model=self._get_embed_model(),
+            )
+        else:
+            vector_store = self._get_vector_store()
+            return VectorStoreIndex.from_vector_store(
+                vector_store=vector_store,
+                embed_model=self._get_embed_model(),
+            )
 
     def _build_index(self, documents: list[Document], storage_context=None, **kwargs) -> BaseIndex:
         if storage_context is None:
@@ -307,9 +368,14 @@ class RAGWorkflow(Workflow):
         """Entry point for Ingestion."""
         ingest: bool = ev.get("ingest", False)
         if ingest:
-            LOGGER.info("Ingesting corpus documents...")
-            documents = DataLoader().load_corpus(self.config.data)
-            index = self._build_index(documents)
+            if self.config.retrieval.load_if_exists and self._index_exists():
+                LOGGER.info("Existing index detected. Loading pre-built index...")
+                index = self._load_existing_index()
+            else:
+                LOGGER.info("Ingesting corpus documents...")
+                documents = DataLoader().load_corpus(self.config.data)
+                index = self._build_index(documents)
+            self._index = index
             return StopEvent(result=index)
         else:
             return None
@@ -318,7 +384,7 @@ class RAGWorkflow(Workflow):
     async def retrieve(self, ctx: Context, ev: StartEvent) -> RetrieverEvent | None:
         """Entry point for RAG, triggered by a StartEvent with `query`."""
         query = ev.get("query", None)
-        index: PropertyGraphIndex | VectorStoreIndex | None = ev.get("index", None)
+        index: BaseIndex | None = ev.get("index", self._index)
 
         if not query:
             return None

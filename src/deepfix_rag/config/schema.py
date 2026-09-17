@@ -170,6 +170,10 @@ class RetrievalConfig(BaseModel):
     )
     bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")
     language: str = Field(default="german", description="Language of the documents.")
+    load_if_exists: bool = Field(
+        default=True,
+        description="Load existing index if present rather than re-ingesting corpus.",
+    )
 
 
 class EvalConfig(BaseModel):
