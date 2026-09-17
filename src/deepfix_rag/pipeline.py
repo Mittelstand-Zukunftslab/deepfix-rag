@@ -155,10 +155,9 @@ class RAGWorkflow(Workflow):
                 if settings.S3_SECRET_ACCESS_KEY:
                     storage_options["aws_secret_access_key"] = str(settings.S3_SECRET_ACCESS_KEY)
                 if settings.S3_REGION:
-                    storage_options["aws_region"] = str(settings.S3_REGION)
+                    storage_options["region"] = str(settings.S3_REGION)
                 if settings.S3_ENDPOINT_URL:
-                    storage_options["endpoint_url"] = str(settings.S3_ENDPOINT_URL)
-                    storage_options["aws_endpoint"] = str(settings.S3_ENDPOINT_URL)
+                    storage_options["endpoint"] = str(settings.S3_ENDPOINT_URL)
 
             conn = lancedb.connect(
                 uri=uri,

@@ -82,3 +82,17 @@ def test_retrieval_bit_width_validation():
 
     with pytest.raises(ValidationError):
         RAGConfig.model_validate({"retrieval": {"bit_width": 5}})
+
+
+@pytest.mark.parametrize("config_filename", ["default.yaml", "octen.yaml", "rerank.yaml"])
+def test_predefined_config_files_valid(config_filename: str):
+    """Verify all repository configuration templates match RAGConfig schema."""
+    from pathlib import Path
+
+    from deepfix_rag.cli.utils import load_rag_config
+
+    config_path = Path("configs") / config_filename
+    assert config_path.exists()
+    config = load_rag_config(config_path)
+    assert isinstance(config, RAGConfig)
+    assert config.retrieval.load_if_exists is True

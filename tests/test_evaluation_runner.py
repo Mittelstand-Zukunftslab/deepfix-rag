@@ -136,7 +136,6 @@ class TestRunnerOneCase:
             workflow=mock_workflow,
             metric_specs={},
             metric_kwargs={},
-            num_qa_pairs=1,
         )
 
         assert res["index"] == 0
@@ -167,7 +166,6 @@ class TestRunnerOneCase:
             workflow=mock_workflow,
             metric_specs={},
             metric_kwargs={},
-            num_qa_pairs=1,
         )
 
         assert res["deflection"] is True
@@ -185,7 +183,6 @@ class TestRunnerOneCase:
             workflow=mock_workflow,
             metric_specs={},
             metric_kwargs={},
-            num_qa_pairs=1,
         )
 
         assert res["index"] == 0
@@ -207,7 +204,6 @@ class TestRunEvaluationLive:
         sample_qa_path: Path,
         sample_corpus_path: Path,
         populated_sample_index_dir: Path,
-        isolated_mlflow_env: str,
     ):
         """Verify live run_evaluation execution on sample QA dataset with real judge and index."""
         assert settings.LLM_API_KEY, "LLM_API_KEY must be configured for live evaluation tests."

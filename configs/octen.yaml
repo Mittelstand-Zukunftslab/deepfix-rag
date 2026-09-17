@@ -18,6 +18,7 @@ retrieval:
   hybrid_alpha: 0.5
   bit_width: 4
   language: german
+  load_if_exists: true
 
 rerank:
   enabled: false
@@ -28,7 +29,6 @@ generation:
   max_tokens: 1024
   system_prompt: null
   response_synthesizer: simple_summarize
-  context_window: 20000
 
 data:
   path_or_repo: HF:wirthual/dip-bundestag
