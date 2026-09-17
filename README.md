@@ -294,30 +294,95 @@ pilotproject-deepfix/
 │   │   ├── models.py              <- EmbeddingClient and GenerationClient
 │   │   └── pipeline.py            <- Hybrid and dense retrieval pipeline
 │   └── main.py                    <- Entrypoint CLI application (`deepfix`)
-├── tests/                         <- Unit and integration tests (pytest)
-│   ├── test_cli_commands.py
-│   ├── test_config_mutator.py
-│   ├── test_dataset_cli.py
-│   ├── test_embedding_client.py
-│   └── test_retrieval_pipeline.py
+├── tests/                         <- Test suite (pytest + conftest.py)
+│   ├── conftest.py                <- Shared fixtures (cli_runner, configs, benchmark paths)
+│   ├── data/                      <- Test benchmark datasets
+│   │   ├── sample_corpus.jsonl    <- Sample German legal corpus for tests
+│   │   └── sample_qa.jsonl        <- Sample German legal QA pairs
+│   ├── test_cli.py                <- CLI subcommands, JSON schema & exit codes
+│   ├── test_config_mutator.py     <- Config schema, parameter mutations & diffs
+│   ├── test_dataset_cli.py        <- Dataset CLI commands and split isolation
+│   ├── test_dataset_loaders.py    <- Hugging Face / local dataset loader routing
+│   ├── test_end_to_end.py         <- Full ingestion, LanceDB indexing & hybrid retrieval
+│   └── test_index_creation.py     <- LanceDB index building & overwrite safety
 ├── candidate_manifest.json        <- Example MLflow candidate artifact
 ├── Makefile                       <- Development and environment convenience tasks
-├── pyproject.toml                 <- Package dependencies and project metadata
+├── pyproject.toml                 <- Package dependencies, Ruff & pytest configuration
 ├── register_prompt.py             <- Script to register RAG prompts with MLflow
 └── README.md                      <- Project documentation (this file)
 ```
 ---
 ## Development & Testing
-Run code quality checks and tests:
+
+DeepFix uses [pytest](https://docs.pytest.org/) for automated testing and [Ruff](https://docs.astral.sh/ruff/) for code formatting and linting.
+
+### Running Tests
+
+Run the full test suite with `uv`:
 ```bash
-# Format code with ruff
-make format
-# Lint code with ruff
-make lint
-# Run all test suites
+uv run pytest -v
+```
+Alternatively, with an active virtual environment:
+```bash
+pytest
+# or via Makefile
 make test
-# or directly with pytest:
-pytest tests/
+```
+
+### Pytest Markers & Selective Execution
+
+Tests are categorized using markers registered in `pyproject.toml` to allow targeted execution:
+
+| Marker | Description | Example Target |
+| :--- | :--- | :--- |
+| `unit` | Fast unit tests with no network or external dependencies | Schema validation, mutators, loaders |
+| `cli` | Typer CLI commands, JSON contract & exit code validation | `test_cli.py`, `test_dataset_cli.py` |
+| `integration` | Tests requiring local filesystem, LanceDB tables, or loaders | `test_index_creation.py`, local loader tests |
+| `e2e` | Full end-to-end pipeline ingestion, embedding & retrieval | `test_end_to_end.py` |
+| `network` | Tests interacting with live Hugging Face Hub APIs | Live dataset download tests |
+
+#### Run Fast Unit Tests Only
+```bash
+uv run pytest -v -m "unit"
+```
+
+#### Run CLI Tests Only
+```bash
+uv run pytest -v -m "cli"
+```
+
+#### Run Fast Tests (Skip Network & E2E)
+```bash
+uv run pytest -v -m "not network and not e2e"
+```
+
+#### Run End-to-End Pipeline Tests
+```bash
+uv run pytest -v -m "e2e"
+```
+
+### Shared Fixtures (`tests/conftest.py`)
+
+Common fixtures are defined in [`tests/conftest.py`](tests/conftest.py) for reuse across test modules:
+- **`cli_runner`**: Provides an isolated `typer.testing.CliRunner` instance.
+- **`default_config_path`**: Path to root [`configs/default.yaml`](configs/default.yaml).
+- **`sample_corpus_path`**: Path to [`tests/data/sample_corpus.jsonl`](tests/data/sample_corpus.jsonl).
+- **`sample_qa_path`**: Path to [`tests/data/sample_qa.jsonl`](tests/data/sample_qa.jsonl).
+- **`default_rag_config`**: Fresh default `RAGConfig` instance.
+- **`sample_rag_config`**: Pre-configured `RAGConfig` referencing sample benchmark fixtures.
+
+### Code Quality & Linting
+```bash
+# Check code style and imports with ruff
+uv run ruff check
+# or
+make lint
+
+# Automatically format and fix issues
+uv run ruff check --fix
+uv run ruff format
+# or
+make format
 ```
 ---
 ## License
