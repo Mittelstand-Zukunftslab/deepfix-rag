@@ -5,6 +5,8 @@ from pathlib import Path
 
 import typer
 
+from deepfix_rag.cli.ui import EXIT_RUNTIME_ERROR, emit_error
+
 
 class DiagnosticType(str, Enum):
     retrieval = "retrieval"
@@ -29,5 +31,8 @@ def diagnostic_cmd(
     json_output: bool = typer.Option(False, "--json", help="Output results in JSON format."),
 ) -> None:
     """Run deterministic failure mode diagnostics on retrieval/grounding."""
-
-    raise NotImplementedError("Not implemented yet")
+    emit_error(
+        "run-diagnostic is not implemented yet.",
+        code=EXIT_RUNTIME_ERROR,
+        json_output=json_output,
+    )

@@ -5,10 +5,17 @@ from pathlib import Path
 
 import typer
 import yaml
-
-from deepfix_rag.cli.ui import print_error, print_json, print_success
+import shutil
+from deepfix_rag.cli.ui import (
+    EXIT_RUNTIME_ERROR,
+    EXIT_VALIDATION_ERROR,
+    emit_error,
+    print_info,
+    print_json,
+    print_success,
+)
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.data import DataLoaderConfig, DataSourceType
+from deepfix_rag.data import DataLoaderConfig
 from deepfix_rag.pipeline import RAGWorkflow
 
 
@@ -19,7 +26,7 @@ def _load_rag_config(config_path: Path) -> RAGConfig:
 
 
 def index_cmd(
-    dataset: Path = typer.Option(
+    dataset: str = typer.Option(
         ..., "--dataset", "-d", help="Path to corpus documents or dataset preset."
     ),
     config: Path = typer.Option(
@@ -34,37 +41,55 @@ def index_cmd(
     json_output: bool = typer.Option(False, "--json", help="Output results in JSON format."),
 ) -> None:
     """Build vector/lexical index for a dataset using a given configuration."""
-
     try:
         rag_config = _load_rag_config(config)
     except FileNotFoundError:
-        print_error(f"Config file not found: {config}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Config file not found: {config}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
     except Exception as e:
-        print_error(f"Failed to parse config '{config}': {e}")
-        raise typer.Exit(code=1)
-
-    try:
-        # Wrap the user path into our strict Pydantic scheme
-        data_config = DataLoaderConfig(
-            source_type=DataSourceType.DIRECTORY
-            if dataset.is_dir()
-            else DataSourceType.LOCAL_FILE,
-            path_or_repo=str(dataset),
-            text_column="text",
-            doc_id_column="id",
+        emit_error(
+            f"Failed to parse config '{config}': {e}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
         )
 
-        # Instantiate the Workflow explicitly
-        workflow = RAGWorkflow(config=rag_config, index_dir=str(index_dir))
+    if index_dir.exists() and any(index_dir.iterdir()):
+        if not force:
+            emit_error(
+                f"Index directory '{index_dir}' already exists and is not empty. Use --force to overwrite.",
+                code=EXIT_VALIDATION_ERROR,
+                json_output=json_output,
+            )
+        else:
+            shutil.rmtree(index_dir)
+            index_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        index_dir.mkdir(parents=True, exist_ok=True)
 
-        # Trigger the LlamaIndex Ingest step natively!
-        print("Triggering asynchronous RAGWorkflow data ingestion...")
-        index = asyncio.run(workflow.run(data_config=data_config))
+    try:
+        rag_config.retrieval.lancedb_index_dir = str(index_dir)
+        rag_config.data = DataLoaderConfig(path_or_repo=dataset)
 
+        workflow = RAGWorkflow(config=rag_config)
+
+        print_info("Triggering asynchronous RAGWorkflow data ingestion...")
+
+        async def _run_ingest():
+            return await workflow.run(ingest=True)
+
+        asyncio.run(_run_ingest())
+
+    except typer.Exit:
+        raise
     except Exception as e:
-        print_error(f"Workflow Indexing failed: {e}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Workflow Indexing failed: {e}",
+            code=EXIT_RUNTIME_ERROR,
+            json_output=json_output,
+        )
 
     if json_output:
         print_json({"status": "success", "index_path": str(index_dir)})

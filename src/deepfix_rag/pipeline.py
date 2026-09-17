@@ -1,24 +1,24 @@
 import asyncio
 import concurrent.futures
 import logging
+from pathlib import Path
 from typing import Any
 
+import lancedb
 from llama_index.core import (
     Document,
     PropertyGraphIndex,
     StorageContext,
     VectorStoreIndex,
 )
-import lancedb
-
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.graph_stores.types import GraphStore
 from llama_index.core.indices.base import BaseIndex
 from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
 from llama_index.core.response_synthesizers import (
-    Refine,
     CompactAndRefine,
+    Refine,
     SimpleSummarize,
     TreeSummarize,
 )
@@ -54,10 +54,9 @@ from deepfix_rag.config.schema import (
     RetrievalBackend,
     VectorStoreType,
 )
-from deepfix_rag.config.settings import settings
+from deepfix_rag.config.settings import settings, LOGGER
 from deepfix_rag.data import DataLoader
 
-logger = logging.getLogger(__name__)
 
 
 class RetrieverEvent(Event):
@@ -200,8 +199,6 @@ class RAGWorkflow(Workflow):
             image_store=None,  # images of scanned PDFs
         )
 
-        return storage_context
-
     def _build_index(self, documents: list[Document], storage_context=None, **kwargs) -> BaseIndex:
         if storage_context is None:
             storage_context = self._get_storage_context()
@@ -259,7 +256,7 @@ class RAGWorkflow(Workflow):
                             if loaded_nodes:
                                 bm25_kwargs["nodes"] = loaded_nodes
                 except Exception as e:
-                    logger.warning(f"Could not load nodes from vector store for BM25: {e}")
+                    LOGGER.warning(f"Could not load nodes from vector store for BM25: {e}")
 
             if "nodes" in bm25_kwargs or "index" in bm25_kwargs:
                 bm25 = BM25Retriever.from_defaults(
@@ -314,8 +311,8 @@ class RAGWorkflow(Workflow):
         """Entry point for Ingestion."""
         ingest: bool = ev.get("ingest", False)
         if ingest:
-            logger.info("Ingesting documents...")
-            documents = DataLoader().load_documents(self.config.data)
+            LOGGER.info("Ingesting corpus documents...")
+            documents = DataLoader().load_corpus(self.config.data)
             index = self._build_index(documents)
             return StopEvent(result=index)
         else:
@@ -324,8 +321,8 @@ class RAGWorkflow(Workflow):
     @step
     async def retrieve(self, ctx: Context, ev: StartEvent) -> RetrieverEvent | None:
         """Entry point for RAG, triggered by a StartEvent with `query`."""
-        query = ev.query
-        index: PropertyGraphIndex | VectorStoreIndex = ev.index
+        query = ev.get("query", None)
+        index: PropertyGraphIndex | VectorStoreIndex | None = ev.get("index", None)
 
         if not query:
             return None
@@ -333,7 +330,7 @@ class RAGWorkflow(Workflow):
         if index is None:
             return None
 
-        logger.info(f"Query: {query}")
+        LOGGER.info(f"Query: {query}")
         await ctx.store.set("query", query)
 
         if isinstance(index, PropertyGraphIndex):
@@ -353,7 +350,7 @@ class RAGWorkflow(Workflow):
             )
         nodes = await retriever.aretrieve(query)
 
-        logger.info(f"Retrieved {len(nodes)} nodes")
+        LOGGER.info(f"Retrieved {len(nodes)} nodes")
 
         return RetrieverEvent(nodes=nodes)
 
@@ -367,9 +364,9 @@ class RAGWorkflow(Workflow):
         if reranker is not None:
             try:
                 nodes = reranker.postprocess_nodes(nodes, query_str=query)
-                logger.info(f"Reranked {len(nodes)} nodes")
+                LOGGER.info(f"Reranked {len(nodes)} nodes")
             except Exception as e:
-                logger.warning(
+                LOGGER.warning(
                     f"CohereRerank failed: {e}. Falling back to top_n un-reranked nodes."
                 )
                 nodes = nodes[: self.config.rerank.top_n]
@@ -398,7 +395,7 @@ class RAGWorkflow(Workflow):
             raise ValueError("No query found. Please ingest documents first.")
 
         if self.config.retrieval_only:
-            logger.info("Retrieval only mode enabled. Returning retrieved nodes.")
+            LOGGER.info("Retrieval only mode enabled. Returning retrieved nodes.")
             return StopEvent(result=self.convert_nodes_to_results(ev.nodes))
 
         summarizer = self._get_response_synthesizer()

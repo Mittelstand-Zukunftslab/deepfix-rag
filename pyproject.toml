@@ -57,8 +57,8 @@ src = ["src"]
 include = ["pyproject.toml", "src/**/*.py"]
 
 [tool.ruff.lint]
-extend-select = ["I"]  # Add import sorting
-ignore = ["B008"]  # Allow function calls in argument defaults (standard for Typer)
+select = ["E", "F", "I"]
+ignore = ["B008", "E501"]  # Allow Typer defaults and long docstrings/lines
 
 [tool.ruff.lint.isort]
 known-first-party = ["deepfix_rag"]

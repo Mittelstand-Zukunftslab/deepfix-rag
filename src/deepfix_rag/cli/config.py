@@ -6,7 +6,13 @@ from typing import Any
 import typer
 import yaml
 
-from deepfix_rag.cli.ui import print_error, print_json, print_success
+from deepfix_rag.cli.ui import (
+    EXIT_RUNTIME_ERROR,
+    EXIT_VALIDATION_ERROR,
+    emit_error,
+    print_json,
+    print_success,
+)
 from deepfix_rag.config.mutator import apply_mutation, compute_config_diff
 from deepfix_rag.config.schema import RAGConfig
 
@@ -48,32 +54,51 @@ def mutate_config_cmd(
 ) -> None:
     """Validate and apply parameter overrides to a RAG config YAML."""
     if not base.exists():
-        print_error(f"Base config file not found: {base}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Base config file not found: {base}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
 
     try:
         base_config = _load_rag_config(base)
     except Exception as e:
-        print_error(f"Failed to parse base config '{base}': {e}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Failed to parse base config '{base}': {e}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
 
     overrides = {}
     for item in set_overrides:
         if "=" not in item:
-            print_error(f"Invalid override format '{item}'. Expected format: key.subkey=value")
-            raise typer.Exit(code=1)
+            emit_error(
+                f"Invalid override format '{item}'. Expected format: key.subkey=value",
+                code=EXIT_VALIDATION_ERROR,
+                json_output=json_output,
+            )
         key, val = item.split("=", 1)
         overrides[key.strip()] = _parse_value(val.strip())
 
     try:
         mutated_config = apply_mutation(base_config, overrides)
     except Exception as e:
-        print_error(f"Configuration mutation validation failed: {e}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Configuration mutation validation failed: {e}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with open(output, "w", encoding="utf-8") as f:
-        yaml.safe_dump(mutated_config.model_dump(mode="json"), f, sort_keys=False)
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with open(output, "w", encoding="utf-8") as f:
+            yaml.safe_dump(mutated_config.model_dump(mode="json"), f, sort_keys=False)
+    except Exception as e:
+        emit_error(
+            f"Failed to write mutated config to '{output}': {e}",
+            code=EXIT_RUNTIME_ERROR,
+            json_output=json_output,
+        )
 
     diffs = compute_config_diff(base_config, mutated_config)
     result = {
@@ -106,27 +131,40 @@ def diff_config_cmd(
     first = config_a or base
     second = config_b or compare
     if not first or not second:
-        print_error("Both base and compare configs must be provided.")
-        raise typer.Exit(code=2)
+        emit_error(
+            "Both base and compare configs must be provided.",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
 
     if not first.exists():
-        print_error(f"Config file not found: {first}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Config file not found: {first}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
     if not second.exists():
-        print_error(f"Config file not found: {second}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Config file not found: {second}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
 
     try:
         cfg_a = _load_rag_config(first)
         cfg_b = _load_rag_config(second)
     except Exception as e:
-        print_error(f"Error loading configs for comparison: {e}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Error loading configs for comparison: {e}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
 
     diffs = compute_config_diff(cfg_a, cfg_b)
     result = {
-        "config_a": str(config_a),
-        "config_b": str(config_b),
+        "status": "success",
+        "config_a": str(first),
+        "config_b": str(second),
         "diffs": {k: {"config_a": v[0], "config_b": v[1]} for k, v in diffs.items()},
     }
 

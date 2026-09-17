@@ -8,7 +8,6 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 import asyncio
-import logging
 from pathlib import Path
 
 from deepeval.metrics import (
@@ -25,19 +24,12 @@ import pandas as pd
 import tiktoken
 
 from deepfix_rag.config.schema import GenerationMetricType, RAGConfig
-from deepfix_rag.config.settings import settings
+from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader
 from deepfix_rag.evaluation.llm import ProxyJudgeLLM
 from deepfix_rag.pipeline import RAGWorkflow
 
 _enc = tiktoken.get_encoding("cl100k_base")
-
-logger = logging.getLogger("DeepFix RAG Eval Runner")
-logger.setLevel(logging.DEBUG)
-formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setFormatter(formatter)
-logger.addHandler(stream_handler)
 
 
 def count_tokens(text: str) -> int:
@@ -63,8 +55,7 @@ def is_deflection(answer: str) -> bool:
 
 
 def load_qa_dataset(dataset_path: Path | str, split: str = "test") -> list[dict]:
-    loader = DataLoader()
-    return loader.load_qa_from_source(dataset_path, split=split)
+    return DataLoader().load_qa(dataset_path, split=split)
 
 
 def setup_mlflow(workspace: str):
@@ -105,7 +96,7 @@ def make_metrics(
 async def _measure_one_metric(metric_type: str, metric: BaseMetric, tc: LLMTestCase) -> dict:
     """Evaluate a single metric against a test case, returning partial row data."""
     try:
-        res = await metric.a_measure(tc)
+        await metric.a_measure(tc)
         score = getattr(metric, "score", 0.0)
         reason = getattr(metric, "reason", "No reason provided")
         success = (
@@ -119,7 +110,7 @@ async def _measure_one_metric(metric_type: str, metric: BaseMetric, tc: LLMTestC
             f"{metric_type}_reason": reason,
         }
     except Exception as e:
-        logger.warning(f"Metric {metric_type} failed: {e}")
+        LOGGER.warning(f"Metric {metric_type} failed: {e}")
         return {
             f"{metric_type}_score": None,
             f"{metric_type}_pass": None,
@@ -140,7 +131,7 @@ async def _run_one_case(
     # question_id = qa.get("id", f"q_{i}")
     deflection = False
     try:
-        logger.info(f"Evaluating Question {i + 1}/{num_qa_pairs}: {query[:50]}...")
+        LOGGER.info(f"Evaluating Question {i + 1}/{num_qa_pairs}: {query[:50]}...")
         response = await workflow.run(query=query)
         answer = getattr(response, "response", getattr(response, "result", str(response)))
         context = [n.node.get_content() for n in response.source_nodes]
@@ -237,7 +228,7 @@ async def run_evaluation(
     # Determine effective concurrency
     concurrency_limit = 1 if synchronous else (max_concurrency or config.eval.concurrency)
     semaphore = asyncio.Semaphore(concurrency_limit)
-    logger.info(f"Running evaluation with concurrency={concurrency_limit}")
+    LOGGER.info(f"Running evaluation with concurrency={concurrency_limit}")
 
     workflow = RAGWorkflow(config=config, index_dir=index_dir)
     num_qa_pairs = len(qa_pairs)
@@ -278,6 +269,6 @@ async def run_evaluation(
             df = pd.DataFrame.from_records(rows, index="index")
             mlflow.log_table(data=df, artifact_file="eval_results.json")
         except Exception as e:
-            logger.error(f"Failed to log eval results as table: {e}")
+            LOGGER.error(f"Failed to log eval results as table: {e}")
 
     return {**summary, "rows": rows, "error_details": errors}

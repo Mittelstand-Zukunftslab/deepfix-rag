@@ -1,8 +1,21 @@
+import logging
+import os
+from pathlib import Path
+import sys
+
 import mlflow
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pathlib import Path
-import os
 
+
+def get_logger():
+    """Get logger for deepfix-rag."""
+    logger = logging.getLogger("DeepFix RAG Eval Runner")
+    logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    stream_handler = logging.StreamHandler(sys.stderr)
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+    return logger
 
 class Settings(BaseSettings):
     # MLflow
@@ -60,6 +73,8 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+LOGGER = get_logger()
 
 if settings.MLFLOW_TRACKING_URI:
     mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)

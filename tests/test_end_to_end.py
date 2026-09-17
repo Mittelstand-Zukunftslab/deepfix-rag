@@ -23,10 +23,7 @@ def test_e2e_pipeline_flow(tmp_path: Path):
     cfg.rerank.enabled = False
     cfg.retrieval.lancedb_index_dir = str(index_dir)
     cfg.data = DataLoaderConfig(
-        source_type=DataSourceType.LOCAL_FILE,
         path_or_repo=str(sample_corpus_file),
-        doc_id_column="doc_id",
-        text_column="text",
     )
 
     workflow = RAGWorkflow(config=cfg)    

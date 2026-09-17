@@ -2,7 +2,7 @@
 
 from enum import StrEnum
 from pathlib import Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from .settings import settings
 
 
@@ -59,15 +59,36 @@ class DataPreset(StrEnum):
         else:
             raise ValueError(f"Invalid data source: {self}")
 
+    def is_corpus_only(self) -> bool:
+        return self == DataPreset.BUNDESTAG_CORPUS
+
+    def default_corpus_subset(self) -> str | None:
+        if self == DataPreset.LEGAL_RAG_BENCH:
+            return "corpus"
+        return None
+
+    def default_qa_subset(self) -> str | None:
+        if self == DataPreset.LEGAL_RAG_BENCH:
+            return "qa"
+        return None
+
+    @classmethod
+    def find_preset(cls, value_or_name: str) -> "DataPreset | None":
+        """Find matching DataPreset member if exists."""
+        normalized = value_or_name.upper().replace("-", "_")
+        if normalized in cls.__members__:
+            return cls[normalized]
+        for member in cls:
+            if member.value == value_or_name or member.value.removeprefix("HF:") == value_or_name:
+                return member
+        return None
+
     @classmethod
     def resolve(cls, value_or_name: str) -> tuple[DataSourceType, str]:
         """Resolve a preset name, alias, or raw path/repo into (DataSourceType, target_str)."""
-        normalized = value_or_name.upper().replace("-", "_")
-        if normalized in cls.__members__:
-            return cls[normalized].get_type_and_repo()
-        for member in cls:
-            if member.value == value_or_name or member.value.removeprefix("HF:") == value_or_name:
-                return member.get_type_and_repo()
+        preset = cls.find_preset(value_or_name)
+        if preset is not None:
+            return preset.get_type_and_repo()
         if value_or_name.startswith("HF:"):
             return DataSourceType.HUGGINGFACE, value_or_name[3:]
         p = Path(value_or_name)
@@ -88,21 +109,22 @@ class ResponseSynthesizerType(StrEnum):
 class DataLoaderConfig(BaseModel):
     """Pydantic model to strictly validate data loading requests."""
 
-    source_type: DataSourceType = DataSourceType.HUGGINGFACE
     path_or_repo: str = Field(
-        default=DataPreset.BUNDESTAG_QA, description="Local path or HuggingFace repo ID."
+        default=DataPreset.BUNDESTAG_CORPUS,
+        description="Local path, dataset preset, or HuggingFace repo ID.",
     )
     split: str | None = Field("train", description="Dataset split (HF only).")
-    text_column: str = Field("text", description="Which column to map to the Document body.")
-    doc_id_column: str = Field("id", description="Which column to map to the Document ID.")
-    query_column: str = Field("question", description="Which column to map to the Question/Query.")
-    answer_column: str = Field(
-        "answer", description="Which column to map to the Ground Truth/Answer."
-    )
-    config_name: str | None = Field(
-        None, description="Dataset config or subset name (e.g. 'qa' for HF)."
-    )
     limit: int | None = Field(None, description="Optional maximum number of records to load.")
+    source_type: DataSourceType | None = Field(
+        default=None, description="Inferred automatically from path_or_repo if not provided."
+    )
+
+    @model_validator(mode="after")
+    def infer_source_type(self) -> "DataLoaderConfig":
+        if self.source_type is None:
+            st, _ = DataPreset.resolve(self.path_or_repo)
+            self.source_type = st
+        return self
 
 
 class ChunkingConfig(BaseModel):

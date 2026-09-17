@@ -6,7 +6,13 @@ from pathlib import Path
 import typer
 import yaml
 
-from deepfix_rag.cli.ui import print_error, print_json, print_success
+from deepfix_rag.cli.ui import (
+    EXIT_RUNTIME_ERROR,
+    EXIT_VALIDATION_ERROR,
+    emit_error,
+    print_json,
+    print_success,
+)
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.evaluation.runner import run_evaluation
 
@@ -42,15 +48,20 @@ def eval_cmd(
     ),
 ) -> None:
     """Run DeepEval evaluation on a dataset using a given RAG configuration."""
-
     try:
         rag_config = _load_rag_config(config)
     except FileNotFoundError:
-        print_error(f"Config file not found: {config}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Config file not found: {config}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
     except Exception as e:
-        print_error(f"Failed to parse config '{config}': {e}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Failed to parse config '{config}': {e}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
 
     try:
         candidate_summary = asyncio.run(
@@ -62,12 +73,16 @@ def eval_cmd(
                 max_concurrency=concurrency,
             )
         )
+    except typer.Exit:
+        raise
     except RuntimeError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1)
+        emit_error(str(e), code=EXIT_RUNTIME_ERROR, json_output=json_output)
     except Exception as e:
-        print_error(f"Evaluation failed: {e}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Evaluation failed: {e}",
+            code=EXIT_RUNTIME_ERROR,
+            json_output=json_output,
+        )
 
     candidate_result = {k: v for k, v in candidate_summary.items() if k != "rows"}
 
@@ -82,11 +97,17 @@ def eval_cmd(
     try:
         baseline_config = _load_rag_config(compare)
     except FileNotFoundError:
-        print_error(f"Baseline config file not found: {compare}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Baseline config file not found: {compare}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
     except Exception as e:
-        print_error(f"Failed to parse baseline config '{compare}': {e}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Failed to parse baseline config '{compare}': {e}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
 
     try:
         baseline_summary = asyncio.run(
@@ -98,12 +119,16 @@ def eval_cmd(
                 max_concurrency=concurrency,
             )
         )
+    except typer.Exit:
+        raise
     except RuntimeError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1)
+        emit_error(str(e), code=EXIT_RUNTIME_ERROR, json_output=json_output)
     except Exception as e:
-        print_error(f"Baseline evaluation failed: {e}")
-        raise typer.Exit(code=1)
+        emit_error(
+            f"Baseline evaluation failed: {e}",
+            code=EXIT_RUNTIME_ERROR,
+            json_output=json_output,
+        )
 
     baseline_result = {k: v for k, v in baseline_summary.items() if k != "rows"}
 
