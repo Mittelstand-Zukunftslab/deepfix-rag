@@ -376,6 +376,8 @@ class RAGWorkflow(Workflow):
                 embed_model=self._get_embed_model(),
                 transformations=transformations,
             )
+            if hasattr(index, "docstore") and len(index.docstore.docs) == 0:
+                index.docstore.add_documents(documents)
         return index
 
     def _get_dense_retriever(self, index: BaseIndex, top_k: int) -> BaseRetriever:
@@ -412,6 +414,9 @@ class RAGWorkflow(Workflow):
             bm25_kwargs["index"] = index
         elif hasattr(index, "nodes") and len(index.nodes) > 0:
             bm25_kwargs["nodes"] = index.nodes
+        elif hasattr(index, "docstore"):
+            LOGGER.warning("BM25Retriever docstore has 0 documents; falling back to dense retriever.")
+            return self._get_dense_retriever(index, top_k)
         else:
             nodes = self._load_nodes_from_vector_store()
             if not nodes:
