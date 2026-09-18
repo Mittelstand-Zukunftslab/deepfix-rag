@@ -3,10 +3,12 @@
 from abc import ABC, abstractmethod
 import json
 from pathlib import Path
+from typing import Any
 
 from datasets import load_dataset
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document
+import pandas as pd
 
 from .config.schema import DataLoaderConfig, DataPreset, DataSourceType
 from .config.settings import LOGGER, settings
@@ -46,7 +48,7 @@ class BundestagLoader(BaseLoaderStrategy):
             if not text:
                 continue
             doc_id = str(row.get("id") or row.get("doc_id") or row.get("index") or f"doc_{i}")
-            metadata = {"source": repo, "split": split}
+            metadata = {"source": repo, "split": split, "doc_id": doc_id}
             if row.get("title"):
                 metadata["title"] = row["title"]
             if row.get("footnotes"):
@@ -105,7 +107,7 @@ class LegalRagBenchLoader(BaseLoaderStrategy):
             if not text:
                 continue
             doc_id = str(row.get("id") or row.get("doc_id") or row.get("index") or f"doc_{i}")
-            metadata = {"source": self.REPO, "split": split}
+            metadata = {"source": self.REPO, "split": split, "doc_id": doc_id}
             if row.get("title"):
                 metadata["title"] = row["title"]
             if row.get("footnotes"):
@@ -180,7 +182,11 @@ class LocalFileLoader(BaseLoaderStrategy):
                 doc_id = str(item.get("id", item.get("doc_id", "")))
                 text = item.get("text", item.get("content", ""))
                 docs_list.append(
-                    Document(text=text, id_=doc_id, metadata={"source": config.path_or_repo})
+                    Document(
+                        text=text,
+                        id_=doc_id,
+                        metadata={"source": config.path_or_repo, "doc_id": doc_id},
+                    )
                 )
         return docs_list
 
@@ -309,6 +315,53 @@ class DataLoader:
         qa_pairs = strategy.load_qa(config)
         LOGGER.info(f"Successfully loaded {len(qa_pairs)} QA pairs.")
         return qa_pairs
+
+    @staticmethod
+    def to_qrels_df(qa_pairs: list[dict[str, Any]]) -> pd.DataFrame:
+        """Convert a list of QA pair dicts to a PyTerrier-compatible qrels DataFrame.
+
+        Supports records with:
+        - "doc_id": single document ID (str)
+        - "doc_ids" / "relevant_doc_ids": list of document IDs (list[str])
+
+        Returns DataFrame with columns: ['qid', 'docno', 'label'] where label=1.
+        """
+        rows = []
+        for r in qa_pairs:
+            qid = str(r.get("query_id") or r.get("id") or "")
+            if not qid:
+                continue
+            doc_ids: list[str] = []
+            if "relevant_doc_ids" in r and isinstance(r["relevant_doc_ids"], list):
+                doc_ids.extend(str(d) for d in r["relevant_doc_ids"] if d)
+            elif "doc_ids" in r and isinstance(r["doc_ids"], list):
+                doc_ids.extend(str(d) for d in r["doc_ids"] if d)
+            elif "doc_id" in r and r["doc_id"]:
+                doc_ids.append(str(r["doc_id"]))
+
+            for did in doc_ids:
+                rows.append({"qid": str(qid), "docno": str(did), "label": 1})
+
+        if not rows:
+            return pd.DataFrame(columns=["qid", "docno", "label"]).astype(
+                {"qid": "str", "docno": "str", "label": "int64"}
+            )
+        df = pd.DataFrame(rows)
+        df["qid"] = df["qid"].astype(str)
+        df["docno"] = df["docno"].astype(str)
+        df["label"] = df["label"].astype(int)
+        return df
+
+    def load_qrels(
+        self,
+        config_or_target: DataLoaderConfig | str | Path | None = None,
+        split: str = "test",
+        limit: int | None = None,
+        **kwargs,
+    ) -> pd.DataFrame:
+        """Load QA pairs and return as a PyTerrier qrels DataFrame."""
+        qa_pairs = self.load_qa(config_or_target, split=split, limit=limit, **kwargs)
+        return self.to_qrels_df(qa_pairs)
 
     def collate_documents(self, docs: list[Document], join_str: str = "\n\n") -> list[Document]:
         raise NotImplementedError("Not implemented yet.")

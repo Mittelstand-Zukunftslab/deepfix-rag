@@ -256,6 +256,57 @@ def test_eval_missing_config_fails(cli_runner: CliRunner):
     assert result.exit_code != EXIT_SUCCESS
 
 
+def test_eval_help_contains_retrieval_only(cli_runner: CliRunner):
+    """Verify deepfix eval help documents the --retrieval-only option."""
+    result = cli_runner.invoke(app, ["eval", "--help"])
+    assert result.exit_code == EXIT_SUCCESS
+    assert "--retrieval-only" in result.stdout
+
+
+def test_eval_retrieval_only_flag_execution(
+    cli_runner: CliRunner,
+    default_config_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """Verify deepfix eval --retrieval-only invokes run_evaluation with retrieval_only=True."""
+    from unittest.mock import AsyncMock
+
+    mock_run = AsyncMock(
+        return_value={
+            "total": 1,
+            "scored": 1,
+            "errors": 0,
+            "ndcg_avg": 0.95,
+            "recall_avg": 1.0,
+            "rows": [],
+        }
+    )
+    monkeypatch.setattr("deepfix_rag.cli.eval.run_evaluation", mock_run)
+
+    dummy_dataset = tmp_path / "test.jsonl"
+    dummy_dataset.write_text('{"query": "q", "answer": "a", "doc_id": "d"}\n', encoding="utf-8")
+
+    result = cli_runner.invoke(
+        app,
+        [
+            "eval",
+            "--config",
+            str(default_config_path),
+            "--dataset",
+            str(dummy_dataset),
+            "--retrieval-only",
+            "--json",
+        ],
+    )
+    assert result.exit_code == EXIT_SUCCESS
+    payload = json.loads(result.stdout)
+    assert payload["ndcg_avg"] == 0.95
+    assert payload["recall_avg"] == 1.0
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["retrieval_only"] is True
+
+
 def test_index_missing_config_fails(cli_runner: CliRunner):
     """Verify deepfix index requires --config."""
     result = cli_runner.invoke(app, ["index", "--json"])

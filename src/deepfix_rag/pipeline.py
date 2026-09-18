@@ -391,7 +391,7 @@ class RAGWorkflow(Workflow):
         if index is None:
             return None
 
-        LOGGER.info(f"Query: {query}")
+        LOGGER.debug(f"Query: {query}")
         await ctx.store.set("query", query)
 
         if isinstance(index, PropertyGraphIndex):
@@ -411,7 +411,7 @@ class RAGWorkflow(Workflow):
             )
         nodes = await retriever.aretrieve(query)
 
-        LOGGER.info(f"Retrieved {len(nodes)} nodes")
+        LOGGER.debug(f"Retrieved {len(nodes)} nodes")
 
         return RetrieverEvent(nodes=nodes)
 
@@ -422,15 +422,12 @@ class RAGWorkflow(Workflow):
         nodes = ev.nodes
         reranker = self._get_reranker()
 
-        if reranker is not None:
-            try:
-                nodes = reranker.postprocess_nodes(nodes, query_str=query)
-                LOGGER.info(f"Reranked {len(nodes)} nodes")
-            except Exception as e:
-                LOGGER.warning(
-                    f"CohereRerank failed: {e}. Falling back to top_n un-reranked nodes."
-                )
-                nodes = nodes[: self.config.rerank.top_n]
+        if reranker is None:
+            LOGGER.debug("No reranker configured")
+            return RerankEvent(nodes=nodes)
+
+        nodes = reranker.postprocess_nodes(nodes, query_str=query)
+        LOGGER.debug(f"Reranked {len(nodes)} nodes")
 
         return RerankEvent(nodes=nodes)
 
@@ -453,14 +450,16 @@ class RAGWorkflow(Workflow):
         """Synthesize response using CompactAndRefine."""
         query = await ctx.store.get("query")
         if query is None:
-            raise ValueError("No query found. Please ingest documents first.")
+            raise ValueError("Provide 'query=<your-query>'.")
 
         if self.config.retrieval_only:
             LOGGER.info("Retrieval only mode enabled. Returning retrieved nodes.")
+            await ctx.store.set("synthesized_response", "")
             return StopEvent(result=self.convert_nodes_to_results(ev.nodes))
 
         summarizer = self._get_response_synthesizer()
         response = await summarizer.asynthesize(query, nodes=ev.nodes)
+        await ctx.store.set("synthesized_response", str(response.response) if response else "")
         response_model = self.convert_nodes_to_results(response.source_nodes)
         return StopEvent(result=response_model)
 

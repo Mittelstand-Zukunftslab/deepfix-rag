@@ -1,9 +1,10 @@
 """Tests for Evaluation Runner, Deflection Detection, Metric Computation, and Live Pipeline Scoring."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
-from deepeval.test_case import LLMTestCase
+import mlflow
+import pandas as pd
+from pyterrier.measures import R, nDCG
 import pytest
 
 from deepfix_rag.config.schema import DataLoaderConfig, GenerationMetricType, RAGConfig
@@ -11,8 +12,13 @@ from deepfix_rag.config.settings import settings
 from deepfix_rag.evaluation.llm import ProxyJudgeLLM
 from deepfix_rag.evaluation.runner import (
     DEFLECTION_PHRASES,
-    _measure_one_metric,
-    _run_one_case,
+    CaseResult,
+    EvaluationRunner,
+    EvaluationSummary,
+    EvaluationTracker,
+    RetrievalEvaluator,
+    _resolve_retrieval_measures,
+    compute_retrieval_metrics,
     count_tokens,
     is_deflection,
     make_metrics,
@@ -75,7 +81,6 @@ class TestRunnerHelpers:
 
     def test_setup_mlflow_missing_experiment_raises(self, monkeypatch: pytest.MonkeyPatch):
         """Verify setup_mlflow raises RuntimeError when configured experiment is missing."""
-        import mlflow
 
         monkeypatch.setattr(settings, "MLFLOW_DEV_WORKSPACE", None)
         monkeypatch.setattr(mlflow, "get_experiment_by_name", lambda name: None)
@@ -84,114 +89,153 @@ class TestRunnerHelpers:
 
 
 # =========================================================================
-# 2. Case Execution & Resilience Unit Tests
+# 2. Retrieval Evaluation & PyTerrier Unit Tests
 # =========================================================================
 @pytest.mark.unit
-class TestRunnerOneCase:
-    """Unit tests for individual case evaluation, error handling, and metric measurements."""
+class TestRetrievalEvaluation:
+    """Unit tests for PyTerrier retrieval measure resolution and metric computation."""
 
-    @pytest.mark.asyncio
-    async def test_measure_one_metric_success(self):
-        """Verify successful metric measurement extracts score, pass status, and reason."""
-        mock_metric = MagicMock()
-        mock_metric.a_measure = AsyncMock()
-        mock_metric.score = 0.85
-        mock_metric.reason = "Good grounding in context."
-        mock_metric.is_successful.return_value = True
-
-        tc = LLMTestCase(
-            input="query",
-            actual_output="answer",
-            retrieval_context=["context"],
+    def test_resolve_retrieval_measures(self):
+        """Verify resolution of string/enum retrieval metrics to PyTerrier measure objects."""
+        measures = _resolve_retrieval_measures(
+            ["ndcg", "recall", "mrr", "map", "unknown_metric"], cutoff=5
         )
+        measure_strs = [str(m) for m in measures]
+        assert "nDCG@5" in measure_strs
+        assert "R@5" in measure_strs
+        assert "RR" in measure_strs
+        assert "AP" in measure_strs
+        assert len(measures) == 4
 
-        res = await _measure_one_metric("faithfulness", mock_metric, tc)
-        assert res["faithfulness_score"] == 0.85
-        assert res["faithfulness_pass"] is True
-        assert "Good grounding" in res["faithfulness_reason"]
+    def test_compute_retrieval_metrics(self):
+        """Verify compute_retrieval_metrics calculates valid NDCG and Recall scores."""
 
-    @pytest.mark.asyncio
-    async def test_measure_one_metric_exception_handling(self):
-        """Verify metric exceptions are caught gracefully returning None score and error reason."""
-        mock_metric = MagicMock()
-        mock_metric.a_measure = AsyncMock(side_effect=RuntimeError("LLM API Timeout"))
-
-        tc = LLMTestCase(input="query", actual_output="answer", retrieval_context=["context"])
-        res = await _measure_one_metric("faithfulness", mock_metric, tc)
-
-        assert res["faithfulness_score"] is None
-        assert res["faithfulness_pass"] is None
-        assert "LLM API Timeout" in res["faithfulness_reason"]
-
-    @pytest.mark.asyncio
-    async def test_run_one_case_empty_response_fallback(self):
-        """Verify pipeline returning empty response receives fallback answer and does not crash."""
-        mock_workflow = MagicMock()
-        mock_workflow.run = AsyncMock(return_value=[])
-
-        qa = {"question": "Was regelt § 315c?", "answer": "Erwartete Antwort"}
-        res = await _run_one_case(
-            qa=qa,
-            i=0,
-            workflow=mock_workflow,
-            metric_specs={},
-            metric_kwargs={},
+        qrels = pd.DataFrame(
+            [
+                {"qid": "q1", "docno": "d1", "label": 1},
+                {"qid": "q2", "docno": "d2", "label": 1},
+            ]
         )
-
-        assert res["index"] == 0
-        assert res["error"] is None
-        assert "Error: The model failed to generate any output." in res["answer"]
-        assert res["deflection"] is False
-
-    @pytest.mark.asyncio
-    async def test_run_one_case_deflection_flag(self):
-        """Verify deflection phrases in model response set deflection=True in output row."""
-        from deepfix_rag.pipeline import RetrievalResult
-
-        mock_workflow = MagicMock()
-        mock_workflow.run = AsyncMock(
-            return_value=[
-                RetrievalResult(
-                    doc_id="doc_1",
-                    score=1.0,
-                    text="I do not have enough information in the provided context.",
-                )
+        res = pd.DataFrame(
+            [
+                {"qid": "q1", "docno": "d1", "score": 1.0, "rank": 0},
+                {"qid": "q1", "docno": "d3", "score": 0.5, "rank": 1},
+                {"qid": "q2", "docno": "d4", "score": 1.0, "rank": 0},
+                {"qid": "q2", "docno": "d2", "score": 0.5, "rank": 1},
             ]
         )
 
-        qa = {"question": "Frage?", "answer": "Antwort"}
-        res = await _run_one_case(
-            qa=qa,
-            i=0,
-            workflow=mock_workflow,
-            metric_specs={},
-            metric_kwargs={},
-        )
+        per_query, agg = compute_retrieval_metrics(res, qrels, [nDCG @ 2, R @ 2])
+        assert "q1" in per_query
+        assert "q2" in per_query
+        assert per_query["q1"]["nDCG@2"] == 1.0
+        assert per_query["q1"]["R@2"] == 1.0
+        assert per_query["q2"]["R@2"] == 1.0
+        assert "nDCG@2" in agg
+        assert "R@2" in agg
 
-        assert res["deflection"] is True
+    def test_compute_retrieval_metrics_empty(self):
+        """Verify compute_retrieval_metrics handles empty inputs gracefully."""
 
-    @pytest.mark.asyncio
-    async def test_run_one_case_workflow_exception(self):
-        """Verify workflow execution failure is captured in row error field."""
-        mock_workflow = MagicMock()
-        mock_workflow.run = AsyncMock(side_effect=ConnectionError("LanceDB connection lost"))
-
-        qa = {"question": "Frage?", "answer": "Antwort"}
-        res = await _run_one_case(
-            qa=qa,
-            i=0,
-            workflow=mock_workflow,
-            metric_specs={},
-            metric_kwargs={},
-        )
-
-        assert res["index"] == 0
-        assert "LanceDB connection lost" in res["error"]
-        assert res["answer"] is None
+        per_query, agg = compute_retrieval_metrics(pd.DataFrame(), pd.DataFrame(), [nDCG @ 5])
+        assert per_query == {}
+        assert agg == {}
 
 
 # =========================================================================
-# 3. Live End-to-End Evaluation Tests
+# 3. Object-Oriented Evaluation Architecture Tests
+# =========================================================================
+@pytest.mark.unit
+class TestObjectOrientedEvaluators:
+    """Unit tests verifying the object-oriented evaluation architecture, models, and tracker."""
+
+    def test_case_result_to_dict_flattening(self):
+        """Verify CaseResult flattens metric dictionary entries into the root dictionary."""
+        case = CaseResult(
+            index=0,
+            query_id="q_01",
+            question="What is the law?",
+            ground_truth_doc_ids=["doc_1"],
+            retrieved_doc_ids=["doc_1", "doc_2"],
+            retrieved_scores=[0.95, 0.45],
+            answer="The law is...",
+            deflection=False,
+            metrics={"faithfulness_score": 0.85, "ndcg_score": 1.0},
+        )
+        data = case.to_dict()
+        assert data["index"] == 0
+        assert data["query_id"] == "q_01"
+        assert data["ground_truth_doc_ids"] == ["doc_1"]
+        assert data["retrieved_doc_ids"] == ["doc_1", "doc_2"]
+        assert data["faithfulness_score"] == 0.85
+        assert data["ndcg_score"] == 1.0
+
+    def test_evaluation_summary_dict_compatibility(self):
+        """Verify EvaluationSummary implements dict-like access for seamless backwards compatibility."""
+        summary = EvaluationSummary(
+            total=5,
+            scored=5,
+            errors=0,
+            deflection_rate=0.2,
+            metrics={"faithfulness_avg": 0.9, "ndcg_avg": 0.85},
+            rows=[{"query_id": "q1"}],
+        )
+        assert summary["total"] == 5
+        assert summary["faithfulness_avg"] == 0.9
+        assert summary["ndcg_avg"] == 0.85
+        assert summary.get("errors") == 0
+        assert summary.get("nonexistent", "fallback") == "fallback"
+        assert "deflection_rate" in summary
+        assert "rows" in summary
+        assert set(summary.keys()) >= {"total", "scored", "errors", "deflection_rate", "rows"}
+        assert len(summary.values()) > 0
+        assert ("faithfulness_avg", 0.9) in summary.items()
+
+    def test_retrieval_evaluator_evaluate_and_populate(self):
+        """Verify RetrievalEvaluator evaluates dataframes and populates CaseResult metrics."""
+        qrels = pd.DataFrame([{"qid": "q1", "docno": "d1", "label": 1}])
+        res = pd.DataFrame(
+            [
+                {"qid": "q1", "docno": "d1", "score": 1.0, "rank": 0},
+                {"qid": "q1", "docno": "d2", "score": 0.5, "rank": 1},
+            ]
+        )
+
+        evaluator = RetrievalEvaluator(measures=["ndcg", "recall"], cutoff_k=2)
+        eval_result = evaluator.evaluate(res, qrels)
+
+        assert "nDCG@2" in eval_result.aggregated
+        assert "R@2" in eval_result.aggregated
+        assert eval_result.aggregated["nDCG@2"] == 1.0
+        assert eval_result.aggregated["R@2"] == 1.0
+
+        case = CaseResult(index=0, query_id="q1", question="Q?")
+        evaluator.populate_case_metrics([case], eval_result)
+        assert case.metrics["ndcg_score"] == 1.0
+        assert case.metrics["recall_score"] == 1.0
+
+    def test_evaluation_tracker_sanitization(self):
+        """Verify EvaluationTracker sanitizes '@' to '_at_' for MLflow key compliance."""
+        assert EvaluationTracker.sanitize_metric_key("nDCG@10") == "nDCG_at_10"
+        assert EvaluationTracker.sanitize_metric_key("R@5") == "R_at_5"
+        assert EvaluationTracker.sanitize_metric_key("faithfulness_avg") == "faithfulness_avg"
+
+    def test_evaluation_runner_init_defaults(self):
+        """Verify EvaluationRunner configures appropriate sub-evaluators and cutoff from RAGConfig."""
+        config = RAGConfig()
+        config.retrieval.top_k = 7
+        config.retrieval_only = True
+
+        runner = EvaluationRunner(config=config)
+        assert runner.cutoff_k == 7
+        assert runner.retrieval_evaluator is not None
+        assert runner.retrieval_evaluator.cutoff_k == 7
+        assert runner.generation_evaluator is None
+        assert runner.tracker is not None
+
+
+# =========================================================================
+# 4. Live End-to-End Evaluation Tests
 # =========================================================================
 @pytest.mark.integration
 @pytest.mark.e2e

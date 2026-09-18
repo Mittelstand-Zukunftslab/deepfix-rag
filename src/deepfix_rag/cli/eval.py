@@ -54,6 +54,11 @@ def eval_cmd(
         "-j",
         help="Max parallel QA cases (overrides config.eval.concurrency).",
     ),
+    retrieval_only: bool = typer.Option(
+        False,
+        "--retrieval-only",
+        help="Evaluate retrieval only (NDCG, Recall) and skip LLM synthesis and DeepEval judge.",
+    ),
 ) -> None:
     """Run DeepEval evaluation on a dataset using a given RAG configuration."""
     try:
@@ -94,6 +99,8 @@ def eval_cmd(
         else (rag_config.eval.concurrency if rag_config.eval else None)
     )
 
+    target_retrieval_only = retrieval_only or rag_config.retrieval_only
+
     try:
         candidate_summary = asyncio.run(
             run_evaluation(
@@ -103,6 +110,7 @@ def eval_cmd(
                 split=target_split,
                 limit=target_limit,
                 max_concurrency=target_concurrency,
+                retrieval_only=target_retrieval_only,
             )
         )
     except typer.Exit:
@@ -142,6 +150,7 @@ def eval_cmd(
         )
 
     try:
+        baseline_retrieval_only = retrieval_only or baseline_config.retrieval_only
         baseline_summary = asyncio.run(
             run_evaluation(
                 dataset_path=target_dataset,
@@ -150,6 +159,7 @@ def eval_cmd(
                 split=target_split,
                 limit=target_limit,
                 max_concurrency=target_concurrency,
+                retrieval_only=baseline_retrieval_only,
             )
         )
     except typer.Exit:
@@ -167,8 +177,11 @@ def eval_cmd(
 
     delta_keys = [
         "faithfulness_avg",
-        "contextual_precision_avg",
-        "answer_correctness_avg",
+        "context_precision_avg",
+        "context_recall_avg",
+        "answer_relevancy_avg",
+        "ndcg_avg",
+        "recall_avg",
         "deflection_rate",
         "errors",
     ]

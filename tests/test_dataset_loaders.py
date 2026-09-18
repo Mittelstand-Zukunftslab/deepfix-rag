@@ -94,3 +94,36 @@ def test_sample_benchmark_fixtures_loading(sample_corpus_path: Path, sample_qa_p
     qa = data_loader.load_qa(DataLoaderConfig(path_or_repo=str(sample_qa_path)))
     assert len(qa) > 0
     assert "query" in qa[0]
+
+
+def test_to_qrels_df_single_and_multi_doc_ids():
+    """Verify to_qrels_df handles single doc_id, doc_ids list, and relevant_doc_ids list."""
+    qa_records = [
+        {"query_id": "q1", "doc_id": "d1"},
+        {"query_id": "q2", "doc_ids": ["d2", "d3"]},
+        {"query_id": "q3", "relevant_doc_ids": ["d4", "d5"]},
+        {"query_id": "q4"},  # no doc_id
+    ]
+    df = DataLoader.to_qrels_df(qa_records)
+    assert list(df.columns) == ["qid", "docno", "label"]
+    assert len(df) == 5
+    assert set(df["qid"]) == {"q1", "q2", "q3"}
+    assert set(df["docno"]) == {"d1", "d2", "d3", "d4", "d5"}
+    assert all(df["label"] == 1)
+
+
+def test_to_qrels_df_empty():
+    """Verify to_qrels_df returns typed empty DataFrame for empty inputs."""
+    df = DataLoader.to_qrels_df([])
+    assert list(df.columns) == ["qid", "docno", "label"]
+    assert len(df) == 0
+
+
+def test_load_qrels_from_sample_qa(sample_qa_path: Path):
+    """Verify load_qrels produces valid PyTerrier qrels DataFrame from sample QA file."""
+    data_loader = DataLoader()
+    qrels = data_loader.load_qrels(sample_qa_path)
+    assert len(qrels) == 3
+    assert set(qrels["qid"]) == {"q_de_001", "q_de_002", "q_de_003"}
+    assert set(qrels["docno"]) == {"doc_de_001", "doc_de_004", "doc_de_003"}
+    assert all(qrels["label"] == 1)
