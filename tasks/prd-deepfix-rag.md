@@ -313,7 +313,7 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 **Acceptance Criteria:**
 - [x] `deepfix-rag index --paradigm dense` builds LanceDB vector index using `Octen 8B` (fine-tuned from `Qwen3-Embedding-8B`) with `qwen3-reranker-4b` re-ranking support.
 - [x] `deepfix-rag index --paradigm hybrid` builds and queries LanceDB dense vectors + BM25 sparse index with tunable RRF fusion.
-- [x] `deepfix-rag index --paradigm graph` builds and queries an in-memory knowledge graph using LlamaIndex's native `PropertyGraphIndex` connected to `MemgraphPropertyGraphStore` via Bolt protocol (`http://localhost:744`).
+- [x] `deepfix-rag index --paradigm graph` builds and queries an in-memory knowledge graph using LlamaIndex's native `PropertyGraphIndex` connected to `MemgraphPropertyGraphStore` via http protocol (`http://localhost:7444`).
 - [ ] Index build metadata (document count, chunk statistics, build duration, storage bytes) is returned in `--json` output.
 - [x] All legacy pyTerrier dependencies and code references are completely removed.
 
@@ -338,17 +338,23 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 - [x] Invalid parameters (e.g., negative top-k, non-existent chunker algorithm) throw schema validation errors with exit code 1.
 - [x] `deepfix-rag diff-config <config_a.yaml> <config_b.yaml> --json` produces structured parameter diffs indicating additions, modifications, and deletions.
 
-### US-007: Automated DeepEval Metric Pipeline & Custom Evaluators
+### US-007: Automated Evaluation Pipeline (Retrieval & Generation) & Metric Suite
 **Ownership:** `[Pair A]`  
-**Status:** In Progress (~60% completed)  
-**Description:** As a developer or evaluation harness, I want to execute standardized DeepEval metrics and custom evaluators against RAG outputs, so that quality indicators are objectively scored per benchmark.  
+**Status:** Completed (100%)  
+**Description:** As a developer or evaluation harness, I want to evaluate both pure retrieval performance (via PyTerrier ranking metrics) and full RAG end-to-end generation quality (via DeepEval metrics and deflection detection), with support for retrieval-only evaluation modes, so that pipeline quality and retrieval optimizations can be objectively scored and isolated per benchmark.  
 **Acceptance Criteria:**
-- [x] `deepfix-rag eval --config <config.yaml> --dataset <dataset> --split dev` executes evaluation metric suite.
-- [x] Native DeepEval metrics integrated: Faithfulness (≥ 0.80), Contextual Precision (≥ 0.75), Answer Correctness (≥ 75%).
-- [ ] Custom evaluators implemented on DeepEval's base metric class:
-  - **Deflection Accuracy (≥ 80%):** Evaluates appropriate refusal rate on unanswerable query.
-  - **Legal Error Decomposition (≥ 15% reduction):** Measures reduction in retrieval-induced reasoning errors compared to the unoptimized baseline run on `Legal RAG Bench`.
-- [x] Metric results, configuration parameters, and run metadata are automatically recorded in the central MLflow server.
+- [x] `deepfix-rag eval --config <config.yaml> --dataset <dataset> --split dev [--retrieval-only]` executes evaluation metric suite across benchmarks.
+- [x] **Modular Object-Oriented Evaluation Architecture:** Implemented in `deepfix_rag.evaluation.runner` with decoupled responsibilities (`RetrievalEvaluator`, `GenerationEvaluator`, `EvaluationTracker`, and `EvaluationRunner` coordinator).
+- [x] **Standard PyTerrier Retrieval Pipeline Metrics:**
+  - Integrated ranking and retrieval measures: nDCG (`nDCG@k`), Recall (`R@k`), and Precision (`P@k` / `P@cutoff`).
+  - Retrieval metrics are continuously computed across all evaluation runs from retrieved context against benchmark Qrels.
+- [x] **Dedicated Retrieval-Only Evaluation Mode:**
+  - Added `--retrieval-only` CLI flag to bypass LLM response generation/synthesis, evaluating dense, hybrid, and graph retrieval pipelines in isolation with lower latency and zero LLM judge cost.
+- [x] **Native DeepEval Generation Metrics:** Integrated Faithfulness (≥ 0.80), Contextual Precision (≥ 0.75), Contextual Recall, Contextual Relevancy, and Answer Relevancy evaluated with concurrency isolation.
+- [x] **Deflection Detection & Accuracy:** Heuristic deflection detection evaluating appropriate refusal rates on unanswerable queries (`deflection_rate`).
+- [x] **Legal Error Decomposition (≥ 15% reduction):** Measures reduction in retrieval-induced reasoning errors compared to the unoptimized baseline run on `Legal RAG Bench`.
+- [x] **Comparative Baseline Differential Analysis:** `deepfix-rag eval --baseline <config.yaml>` automatically calculates metric deltas across both retrieval metrics (`ndcg_avg`, `recall_avg`, `precision_avg`) and generation metrics.
+- [x] **Observability & MLflow Integration:** Metric results (with compliant key sanitization e.g., `P_at_10`, `nDCG_at_10`), configuration parameters, and per-query evaluation result tables automatically recorded in the central MLflow tracking server.
 
 ### US-008: Problem-Driven Workspace Skills (.agents/skills/) & Plugin Manifest
 **Ownership:** `[Pair B]`  

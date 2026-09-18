@@ -27,6 +27,7 @@ class GenerationMetricType(StrEnum):
 class RetrievalMetricType(StrEnum):
     NDCG = "ndcg"
     RECALL = "recall"
+    PRECISION = "precision"
 
 
 class VectorStoreType(StrEnum):
@@ -165,7 +166,7 @@ class RetrievalConfig(BaseModel):
     top_k: int = Field(
         default=10, ge=1, le=100, description="Number of retrieved documents before re-ranking."
     )
-    hybrid_alpha: float | None = Field(
+    hybrid_alpha: float = Field(
         default=0.5, ge=0.0, le=1.0, description="Dense vs lexical weight for hybrid search."
     )
     bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")

@@ -285,62 +285,41 @@ class RAGWorkflow(Workflow):
         top_k: int = 5,
         language: str = "german",
         use_async: bool = True,
-        nodes: list[TextNode] | None = None,
     ):
         assert isinstance(index, VectorStoreIndex), f"Expected VectorStoreIndex, got {type(index)}"
-        if self.config.retrieval.backend == RetrievalBackend.HYBRID:
+        if self.config.retrieval.backend == RetrievalBackend.DENSE:
+            return index.as_retriever(similarity_top_k=top_k)
+
+        elif self.config.retrieval.backend == RetrievalBackend.HYBRID:
             bm25_kwargs = {}
-            if nodes:
-                bm25_kwargs["nodes"] = nodes
-            elif hasattr(index, "docstore") and len(index.docstore.docs) > 0:
+            if hasattr(index, "docstore") and len(index.docstore.docs) > 0:
                 bm25_kwargs["index"] = index
             else:
-                try:
-                    vs = getattr(index, "_vector_store", None)
-                    if vs is not None:
-                        tbl = getattr(vs, "_table", None)
-                        if tbl is None and hasattr(vs, "_connection"):
-                            tbl = vs._connection.open_table(getattr(vs, "table_name", "documents"))
-                        if tbl is not None:
-                            df = tbl.to_pandas()
-                            loaded_nodes = []
-                            for _, row in df.iterrows():
-                                txt = row.get("text", "")
-                                doc_id = str(row.get("id", row.get("doc_id", "")))
-                                if txt:
-                                    loaded_nodes.append(TextNode(text=txt, id_=doc_id))
-                            if loaded_nodes:
-                                bm25_kwargs["nodes"] = loaded_nodes
-                except Exception as e:
-                    LOGGER.warning(f"Could not load nodes from vector store for BM25: {e}")
+                raise ValueError("No index found for BM25Retriever")
 
-            if "nodes" in bm25_kwargs or "index" in bm25_kwargs:
-                bm25 = BM25Retriever.from_defaults(
-                    similarity_top_k=top_k,
-                    language=language,
-                    stemmer=Stemmer.Stemmer(
-                        language if language in ("german", "english") else "german"
-                    ),
-                    **bm25_kwargs,
-                )
-                retriever = QueryFusionRetriever(
+            bm25 = BM25Retriever.from_defaults(
+                similarity_top_k=top_k,
+                language=language,
+                stemmer=Stemmer.Stemmer(language),
+                **bm25_kwargs,
+            )
+            retriever = QueryFusionRetriever(
                     [
                         index.as_retriever(similarity_top_k=top_k),
                         bm25,
                     ],
                     llm=self._get_llm(),
+                    retriever_weights=[
+                        1 - self.config.retrieval.hybrid_alpha,
+                        self.config.retrieval.hybrid_alpha,
+                    ],
                     num_queries=1,
                     use_async=use_async,
                     similarity_top_k=top_k,
                 )
-            else:
-                retriever = index.as_retriever(similarity_top_k=top_k)
-
-        elif self.config.retrieval.backend == RetrievalBackend.DENSE:
-            retriever = index.as_retriever(similarity_top_k=top_k)
 
         else:
-            raise ValueError("Invalid retrieval backend for VectorStoreIndex")
+            raise ValueError(f"Invalid retrieval backend: {self.config.retrieval.backend}")
 
         return retriever
 

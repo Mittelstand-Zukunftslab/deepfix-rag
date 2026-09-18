@@ -10,6 +10,7 @@ if hasattr(sys.stderr, "reconfigure"):
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -26,7 +27,7 @@ from llama_index.core.workflow import Context
 import mlflow
 import pandas as pd
 import pyterrier as pt
-from pyterrier.measures import AP, RR, R, nDCG
+from pyterrier.measures import AP, RR, P, R, nDCG
 import tiktoken
 
 from deepfix_rag.config.schema import (
@@ -69,6 +70,102 @@ def load_qa_dataset(dataset_path: Path | str, split: str = "test") -> list[dict]
 
 
 # =========================================================================
+# Failure Modes & Diagnostics
+# =========================================================================
+
+
+class RAGFailureMode(StrEnum):
+    """Classification of RAG execution outcomes and failure modes."""
+
+    SUCCESS = "success"
+    RETRIEVAL_MISS = "retrieval_miss"
+    RETRIEVAL_INDUCED_ERROR = "retrieval_induced_error"
+    LLM_REASONING_FAILURE = "llm_reasoning_failure"
+    DEFLECTION_FAILURE = "deflection_failure"
+
+
+def classify_case_failure(
+    case: "CaseResult",
+    threshold: float = 0.7,
+) -> RAGFailureMode:
+    """Classify the failure mode of a single QA case result.
+
+    Decomposes upstream retrieval failures from downstream LLM synthesis/reasoning:
+    - SUCCESS: Ground truth document retrieved (recall == 1.0) and generation passed (score >= threshold),
+      or appropriate deflection on an unanswerable query.
+    - RETRIEVAL_MISS: Ground truth document completely missed by the retriever (recall == 0.0).
+    - RETRIEVAL_INDUCED_ERROR: Relevant document only partially retrieved (0.0 < recall < 1.0)
+      or buried by noise distractors (precision < 0.5), directly inducing generation failure.
+    - LLM_REASONING_FAILURE: All relevant context retrieved (recall == 1.0, precision >= 0.5),
+      but LLM hallucinated, misread the statute, or failed faithfulness/relevancy.
+    - DEFLECTION_FAILURE: Model inappropriately deflected on an answerable query with retrieved context,
+      or failed to deflect on an unanswerable query.
+    """
+    # Check for unanswerable query
+    is_unanswerable = not bool(case.ground_truth_doc_ids) or bool(case.metrics.get("unanswerable"))
+    if is_unanswerable:
+        if case.deflection:
+            return RAGFailureMode.SUCCESS
+        return RAGFailureMode.DEFLECTION_FAILURE
+
+    # Answerable query: resolve recall and precision
+    recall = case.metrics.get("recall_score")
+    if recall is None:
+        if case.ground_truth_doc_ids:
+            retrieved_set = set(case.retrieved_doc_ids)
+            gt_set = set(case.ground_truth_doc_ids)
+            recall = len(retrieved_set & gt_set) / len(gt_set)
+        else:
+            recall = 1.0
+
+    precision = case.metrics.get("precision_score")
+    if precision is None:
+        if case.retrieved_doc_ids and case.ground_truth_doc_ids:
+            retrieved_set = set(case.retrieved_doc_ids)
+            gt_set = set(case.ground_truth_doc_ids)
+            precision = len(retrieved_set & gt_set) / len(case.retrieved_doc_ids)
+        else:
+            precision = 1.0 if recall == 1.0 else 0.0
+
+    # If model deflected on an answerable query
+    if case.deflection:
+        if recall == 0.0:
+            return RAGFailureMode.RETRIEVAL_MISS
+        if recall < 1.0:
+            return RAGFailureMode.RETRIEVAL_INDUCED_ERROR
+        return RAGFailureMode.DEFLECTION_FAILURE
+
+    # Complete retrieval miss
+    if recall == 0.0:
+        return RAGFailureMode.RETRIEVAL_MISS
+
+    # Check generation quality
+    gen_scores: list[float] = []
+    for key in ("faithfulness_score", "answer_relevancy_score"):
+        val = case.metrics.get(key)
+        if isinstance(val, (int, float)):
+            gen_scores.append(float(val))
+
+    # If generation scores exist, check whether any failed the threshold
+    if gen_scores:
+        generation_failed = any(score < threshold for score in gen_scores)
+    else:
+        generation_failed = bool(case.error)
+
+    if recall >= 1.0:
+        if generation_failed:
+            if precision < 0.5:
+                return RAGFailureMode.RETRIEVAL_INDUCED_ERROR
+            return RAGFailureMode.LLM_REASONING_FAILURE
+        return RAGFailureMode.SUCCESS
+
+    # 0.0 < recall < 1.0
+    if generation_failed or not gen_scores:
+        return RAGFailureMode.RETRIEVAL_INDUCED_ERROR
+    return RAGFailureMode.SUCCESS
+
+
+# =========================================================================
 # Data Models
 # =========================================================================
 
@@ -87,6 +184,7 @@ class CaseResult:
     deflection: bool = False
     error: str | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
+    failure_mode: str = RAGFailureMode.SUCCESS.value
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to flat dictionary matching standard schema for DataFrame & MLflow logging."""
@@ -100,6 +198,7 @@ class CaseResult:
             "answer": self.answer,
             "deflection": self.deflection,
             "error": self.error,
+            "failure_mode": self.failure_mode,
         }
         base.update(self.metrics)
         return base
@@ -121,6 +220,9 @@ class EvaluationSummary:
     scored: int
     errors: int
     deflection_rate: float = 0.0
+    retrieval_induced_error_count: int = 0
+    retrieval_induced_error_rate: float = 0.0
+    failure_distribution: dict[str, int] = field(default_factory=dict)
     metrics: dict[str, float] = field(default_factory=dict)
     rows: list[dict[str, Any]] = field(default_factory=list)
     error_details: list[dict[str, Any]] = field(default_factory=list)
@@ -131,6 +233,9 @@ class EvaluationSummary:
             "scored": self.scored,
             "errors": self.errors,
             "deflection_rate": self.deflection_rate,
+            "retrieval_induced_error_count": self.retrieval_induced_error_count,
+            "retrieval_induced_error_rate": self.retrieval_induced_error_rate,
+            "failure_distribution": self.failure_distribution,
         }
         res.update(self.metrics)
         res["rows"] = self.rows
@@ -188,6 +293,8 @@ class RetrievalEvaluator:
                 measures.append(nDCG @ cutoff)
             elif m_lower in ("recall", "recall_at_k", "r"):
                 measures.append(R @ cutoff)
+            elif m_lower in ("precision", "precision_at_k", "p"):
+                measures.append(P @ cutoff)
             elif m_lower in ("mrr", "rr"):
                 measures.append(RR)
             elif m_lower in ("map", "ap"):
@@ -223,11 +330,13 @@ class RetrievalEvaluator:
         """Enrich CaseResult instances with retrieval scores."""
         ndcg_key = str(nDCG @ self.cutoff_k)
         recall_key = str(R @ self.cutoff_k)
+        precision_key = str(P @ self.cutoff_k)
 
         for case in cases:
             q_scores = eval_result.per_query.get(case.query_id, {})
             case.metrics["ndcg_score"] = q_scores.get(ndcg_key)
             case.metrics["recall_score"] = q_scores.get(recall_key)
+            case.metrics["precision_score"] = q_scores.get(precision_key)
             for m in self.resolved_measures:
                 case.metrics[str(m)] = q_scores.get(str(m))
 
@@ -587,8 +696,25 @@ class EvaluationRunner:
         retrieval_eval_result = self.retrieval_evaluator.evaluate(res_df, qrels_df)
         self.retrieval_evaluator.populate_case_metrics(cases, retrieval_eval_result)
 
+        eval_threshold = (
+            self.config.eval.threshold
+            if (self.config.eval and self.config.eval.threshold is not None)
+            else 0.7
+        )
+        failure_counts: dict[str, int] = {mode.value: 0 for mode in RAGFailureMode}
+        for case in cases:
+            mode = classify_case_failure(case, threshold=eval_threshold)
+            case.failure_mode = mode.value
+            failure_counts[mode.value] += 1
+
         rows = [c.to_dict() for c in cases]
         errors = [r for r in rows if r.get("error") is not None]
+
+        retrieval_induced_error_count = failure_counts[
+            RAGFailureMode.RETRIEVAL_INDUCED_ERROR.value
+        ]
+        retrieval_induced_error_rate = retrieval_induced_error_count / len(cases) if cases else 0.0
+        failure_distribution = dict(failure_counts)
 
         def avg(key: str) -> float:
             vals = [r[key] for r in rows if r.get(key) is not None]
@@ -608,6 +734,13 @@ class EvaluationRunner:
                 summary_metrics["ndcg_avg"] = m_val
             elif "r@" in m_str.lower() or "recall" in m_str.lower():
                 summary_metrics["recall_avg"] = m_val
+            elif "p@" in m_str.lower() or "precision" in m_str.lower():
+                summary_metrics["precision_avg"] = m_val
+
+        summary_metrics["retrieval_induced_error_count"] = float(retrieval_induced_error_count)
+        summary_metrics["retrieval_induced_error_rate"] = float(retrieval_induced_error_rate)
+        for f_mode, count in failure_distribution.items():
+            summary_metrics[f"failure_{f_mode}_count"] = float(count)
 
         deflection_rate = (
             sum(r.get("deflection", False) for r in rows) / len(rows)
@@ -620,6 +753,9 @@ class EvaluationRunner:
             scored=len(rows),
             errors=len(errors),
             deflection_rate=deflection_rate,
+            retrieval_induced_error_count=retrieval_induced_error_count,
+            retrieval_induced_error_rate=retrieval_induced_error_rate,
+            failure_distribution=failure_distribution,
             metrics=summary_metrics,
             rows=rows,
             error_details=errors,
@@ -635,11 +771,6 @@ class EvaluationRunner:
         self.tracker.log_run(run_name=run_name, params=run_params, summary=summary)
 
         return summary
-
-
-# =========================================================================
-# Module-level Façade & Legacy Compatibility
-# =========================================================================
 
 
 async def run_evaluation(

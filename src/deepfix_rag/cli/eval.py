@@ -16,6 +16,26 @@ from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.evaluation.runner import run_evaluation
 
 
+def compute_error_reduction(
+    baseline_err: int | float | None,
+    candidate_err: int | float | None,
+    threshold_pct: float = 15.0,
+) -> tuple[float | None, bool]:
+    """Compute percentage reduction in errors between baseline and candidate.
+
+    Returns:
+        tuple[float | None, bool]: (reduction_pct, target_met)
+    """
+    if baseline_err is None or candidate_err is None:
+        return None, False
+    if baseline_err > 0:
+        reduction_pct = ((baseline_err - candidate_err) / baseline_err) * 100.0
+    else:
+        reduction_pct = 0.0 if candidate_err == 0 else -100.0
+    target_met = bool(reduction_pct >= threshold_pct)
+    return reduction_pct, target_met
+
+
 def eval_cmd(
     config: Path = typer.Option(
         ..., "--config", "-c", help="Path to RAG configuration YAML file."
@@ -39,7 +59,10 @@ def eval_cmd(
         help="Directory containing the built vector/lexical index (overrides config.retrieval.lancedb_index_dir).",
     ),
     compare: Path | None = typer.Option(
-        None, "--compare", help="Optional baseline configuration YAML for delta comparison."
+        None,
+        "--compare",
+        "--baseline",
+        help="Optional baseline configuration YAML for delta comparison.",
     ),
     json_output: bool = typer.Option(False, "--json", help="Output results in JSON format."),
     limit: int | None = typer.Option(
@@ -99,7 +122,7 @@ def eval_cmd(
         else (rag_config.eval.concurrency if rag_config.eval else None)
     )
 
-    target_retrieval_only = retrieval_only or rag_config.retrieval_only
+    target_retrieval_only = rag_config.retrieval_only or retrieval_only
 
     try:
         candidate_summary = asyncio.run(
@@ -182,7 +205,10 @@ def eval_cmd(
         "answer_relevancy_avg",
         "ndcg_avg",
         "recall_avg",
+        "precision_avg",
         "deflection_rate",
+        "retrieval_induced_error_count",
+        "retrieval_induced_error_rate",
         "errors",
     ]
     delta = {}
@@ -194,14 +220,31 @@ def eval_cmd(
         else:
             delta[key] = c_val - b_val
 
+    reduction_pct, target_met = compute_error_reduction(
+        baseline_result.get("retrieval_induced_error_count"),
+        candidate_result.get("retrieval_induced_error_count"),
+    )
+
+    delta["retrieval_induced_error_reduction_pct"] = reduction_pct
+    delta["retrieval_induced_error_target_met"] = target_met
+
     output = {
         "candidate": candidate_result,
         "baseline": baseline_result,
         "delta": delta,
+        "retrieval_induced_error_reduction_pct": reduction_pct,
+        "retrieval_induced_error_target_met": target_met,
     }
 
     if json_output:
         print_json(output)
     else:
         print_success("Comparison complete.")
+        if reduction_pct is not None:
+            status = "MET (>= 15%)" if target_met else "NOT MET (< 15%)"
+            typer.secho(
+                f"Retrieval-induced error reduction: {reduction_pct:.2f}% [{status}]",
+                fg=typer.colors.GREEN if target_met else typer.colors.YELLOW,
+                bold=True,
+            )
         print_json(output)

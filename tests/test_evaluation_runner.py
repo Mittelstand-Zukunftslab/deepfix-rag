@@ -2,12 +2,16 @@
 
 from pathlib import Path
 
-import mlflow
 import pandas as pd
-from pyterrier.measures import R, nDCG
+from pyterrier.measures import P, R, nDCG
 import pytest
 
-from deepfix_rag.config.schema import DataLoaderConfig, GenerationMetricType, RAGConfig
+from deepfix_rag.config.schema import (
+    DataLoaderConfig,
+    GenerationMetricType,
+    RAGConfig,
+    RetrievalMetricType,
+)
 from deepfix_rag.config.settings import settings
 from deepfix_rag.evaluation.llm import ProxyJudgeLLM
 from deepfix_rag.evaluation.runner import (
@@ -16,14 +20,13 @@ from deepfix_rag.evaluation.runner import (
     EvaluationRunner,
     EvaluationSummary,
     EvaluationTracker,
+    GenerationEvaluator,
+    RAGFailureMode,
     RetrievalEvaluator,
-    _resolve_retrieval_measures,
-    compute_retrieval_metrics,
+    classify_case_failure,
     count_tokens,
     is_deflection,
-    make_metrics,
     run_evaluation,
-    setup_mlflow,
 )
 
 
@@ -59,33 +62,25 @@ class TestRunnerHelpers:
         for ans in valid_answers:
             assert is_deflection(ans) is False
 
-    def test_make_metrics(self):
-        """Verify metric instantiation with thresholds and ProxyJudgeLLM."""
+    def test_generation_evaluator_metric_classes(self):
+        """Verify GenerationEvaluator registers configured DeepEval metric classes."""
         judge = ProxyJudgeLLM(
             model="test-judge",
             api_base="https://example.com/v1",
             api_key="test-key",
         )
-        metrics = make_metrics(
+        evaluator = GenerationEvaluator(
             generation_metrics=[
                 GenerationMetricType.FAITHFULNESS,
                 GenerationMetricType.ANSWER_RELEVANCY,
             ],
-            async_mode=True,
             threshold=0.7,
             judge=judge,
         )
-        assert GenerationMetricType.FAITHFULNESS in metrics
-        assert GenerationMetricType.ANSWER_RELEVANCY in metrics
-        assert metrics[GenerationMetricType.FAITHFULNESS].threshold == 0.7
-
-    def test_setup_mlflow_missing_experiment_raises(self, monkeypatch: pytest.MonkeyPatch):
-        """Verify setup_mlflow raises RuntimeError when configured experiment is missing."""
-
-        monkeypatch.setattr(settings, "MLFLOW_DEV_WORKSPACE", None)
-        monkeypatch.setattr(mlflow, "get_experiment_by_name", lambda name: None)
-        with pytest.raises(RuntimeError, match="does not exist in this workspace"):
-            setup_mlflow("dev")
+        assert GenerationMetricType.FAITHFULNESS in evaluator._metric_classes
+        assert GenerationMetricType.ANSWER_RELEVANCY in evaluator._metric_classes
+        assert evaluator.threshold == 0.7
+        assert "test-judge" in evaluator.judge.model
 
 
 # =========================================================================
@@ -97,18 +92,29 @@ class TestRetrievalEvaluation:
 
     def test_resolve_retrieval_measures(self):
         """Verify resolution of string/enum retrieval metrics to PyTerrier measure objects."""
-        measures = _resolve_retrieval_measures(
-            ["ndcg", "recall", "mrr", "map", "unknown_metric"], cutoff=5
+        measures = RetrievalEvaluator._resolve_measures(
+            [
+                "ndcg",
+                "recall",
+                "precision",
+                "p",
+                RetrievalMetricType.PRECISION,
+                "mrr",
+                "map",
+                "unknown_metric",
+            ],
+            cutoff=5,
         )
         measure_strs = [str(m) for m in measures]
         assert "nDCG@5" in measure_strs
         assert "R@5" in measure_strs
+        assert "P@5" in measure_strs
         assert "RR" in measure_strs
         assert "AP" in measure_strs
-        assert len(measures) == 4
+        assert len(measures) == 7
 
     def test_compute_retrieval_metrics(self):
-        """Verify compute_retrieval_metrics calculates valid NDCG and Recall scores."""
+        """Verify RetrievalEvaluator calculates valid NDCG, Recall, and Precision scores."""
 
         qrels = pd.DataFrame(
             [
@@ -125,21 +131,29 @@ class TestRetrievalEvaluation:
             ]
         )
 
-        per_query, agg = compute_retrieval_metrics(res, qrels, [nDCG @ 2, R @ 2])
-        assert "q1" in per_query
-        assert "q2" in per_query
-        assert per_query["q1"]["nDCG@2"] == 1.0
-        assert per_query["q1"]["R@2"] == 1.0
-        assert per_query["q2"]["R@2"] == 1.0
-        assert "nDCG@2" in agg
-        assert "R@2" in agg
+        evaluator = RetrievalEvaluator(cutoff_k=2)
+        evaluator.resolved_measures = [nDCG @ 2, R @ 2, P @ 2]
+        eval_result = evaluator.evaluate(res, qrels)
+
+        assert "q1" in eval_result.per_query
+        assert "q2" in eval_result.per_query
+        assert eval_result.per_query["q1"]["nDCG@2"] == 1.0
+        assert eval_result.per_query["q1"]["R@2"] == 1.0
+        assert eval_result.per_query["q1"]["P@2"] == 0.5
+        assert eval_result.per_query["q2"]["R@2"] == 1.0
+        assert eval_result.per_query["q2"]["P@2"] == 0.5
+        assert "nDCG@2" in eval_result.aggregated
+        assert "R@2" in eval_result.aggregated
+        assert "P@2" in eval_result.aggregated
 
     def test_compute_retrieval_metrics_empty(self):
-        """Verify compute_retrieval_metrics handles empty inputs gracefully."""
+        """Verify RetrievalEvaluator handles empty inputs gracefully."""
 
-        per_query, agg = compute_retrieval_metrics(pd.DataFrame(), pd.DataFrame(), [nDCG @ 5])
-        assert per_query == {}
-        assert agg == {}
+        evaluator = RetrievalEvaluator(cutoff_k=5)
+        evaluator.resolved_measures = [nDCG @ 5]
+        eval_result = evaluator.evaluate(pd.DataFrame(), pd.DataFrame())
+        assert eval_result.per_query == {}
+        assert eval_result.aggregated == {}
 
 
 # =========================================================================
@@ -201,23 +215,27 @@ class TestObjectOrientedEvaluators:
             ]
         )
 
-        evaluator = RetrievalEvaluator(measures=["ndcg", "recall"], cutoff_k=2)
+        evaluator = RetrievalEvaluator(measures=["ndcg", "recall", "precision"], cutoff_k=2)
         eval_result = evaluator.evaluate(res, qrels)
 
         assert "nDCG@2" in eval_result.aggregated
         assert "R@2" in eval_result.aggregated
+        assert "P@2" in eval_result.aggregated
         assert eval_result.aggregated["nDCG@2"] == 1.0
         assert eval_result.aggregated["R@2"] == 1.0
+        assert eval_result.aggregated["P@2"] == 0.5
 
         case = CaseResult(index=0, query_id="q1", question="Q?")
         evaluator.populate_case_metrics([case], eval_result)
         assert case.metrics["ndcg_score"] == 1.0
         assert case.metrics["recall_score"] == 1.0
+        assert case.metrics["precision_score"] == 0.5
 
     def test_evaluation_tracker_sanitization(self):
         """Verify EvaluationTracker sanitizes '@' to '_at_' for MLflow key compliance."""
         assert EvaluationTracker.sanitize_metric_key("nDCG@10") == "nDCG_at_10"
         assert EvaluationTracker.sanitize_metric_key("R@5") == "R_at_5"
+        assert EvaluationTracker.sanitize_metric_key("P@10") == "P_at_10"
         assert EvaluationTracker.sanitize_metric_key("faithfulness_avg") == "faithfulness_avg"
 
     def test_evaluation_runner_init_defaults(self):
@@ -232,6 +250,190 @@ class TestObjectOrientedEvaluators:
         assert runner.retrieval_evaluator.cutoff_k == 7
         assert runner.generation_evaluator is None
         assert runner.tracker is not None
+
+    def test_classify_case_failure_scenarios(self):
+        """Verify deterministic decomposition of all RAG failure modes."""
+        # 1. Pure retrieval miss: R@k = 0.0
+        case_miss = CaseResult(
+            index=0,
+            query_id="q1",
+            question="What is the statute?",
+            ground_truth_doc_ids=["doc_1"],
+            retrieved_doc_ids=["doc_99"],
+            metrics={"recall_score": 0.0, "precision_score": 0.0},
+        )
+        assert classify_case_failure(case_miss) == RAGFailureMode.RETRIEVAL_MISS
+
+        # 2. Retrieval-induced reasoning error: 0 < R@k < 1.0 with generation failure
+        case_partial = CaseResult(
+            index=1,
+            query_id="q2",
+            question="Analyze section 1 and 2.",
+            ground_truth_doc_ids=["doc_1", "doc_2"],
+            retrieved_doc_ids=["doc_1"],
+            metrics={
+                "recall_score": 0.5,
+                "precision_score": 1.0,
+                "faithfulness_score": 0.4,
+            },
+        )
+        assert (
+            classify_case_failure(case_partial, threshold=0.7)
+            == RAGFailureMode.RETRIEVAL_INDUCED_ERROR
+        )
+
+        # 3. Retrieval-induced reasoning error: R@k = 1.0 but P@k < 0.5 (distractor noise) with generation failure
+        case_noisy = CaseResult(
+            index=2,
+            query_id="q3",
+            question="What is the penalty?",
+            ground_truth_doc_ids=["doc_1"],
+            retrieved_doc_ids=["doc_1", "noise_1", "noise_2", "noise_3"],
+            metrics={
+                "recall_score": 1.0,
+                "precision_score": 0.25,
+                "faithfulness_score": 0.5,
+            },
+        )
+        assert (
+            classify_case_failure(case_noisy, threshold=0.7)
+            == RAGFailureMode.RETRIEVAL_INDUCED_ERROR
+        )
+
+        # 4. LLM reasoning failure: R@k = 1.0, clean context (P@k >= 0.5), but low faithfulness
+        case_reasoning_fail = CaseResult(
+            index=3,
+            query_id="q4",
+            question="Interpret paragraph 3.",
+            ground_truth_doc_ids=["doc_1"],
+            retrieved_doc_ids=["doc_1"],
+            metrics={
+                "recall_score": 1.0,
+                "precision_score": 1.0,
+                "faithfulness_score": 0.45,
+            },
+        )
+        assert (
+            classify_case_failure(case_reasoning_fail, threshold=0.7)
+            == RAGFailureMode.LLM_REASONING_FAILURE
+        )
+
+        # 5. Success case: R@k = 1.0 with high faithfulness
+        case_success = CaseResult(
+            index=4,
+            query_id="q5",
+            question="What is the definition?",
+            ground_truth_doc_ids=["doc_1"],
+            retrieved_doc_ids=["doc_1"],
+            metrics={
+                "recall_score": 1.0,
+                "precision_score": 1.0,
+                "faithfulness_score": 0.95,
+            },
+        )
+        assert classify_case_failure(case_success, threshold=0.7) == RAGFailureMode.SUCCESS
+
+        # 6. Deflection failure: answerable query with full retrieval, but model deflected
+        case_deflect_fail = CaseResult(
+            index=5,
+            query_id="q6",
+            question="Explain the statute.",
+            ground_truth_doc_ids=["doc_1"],
+            retrieved_doc_ids=["doc_1"],
+            deflection=True,
+            metrics={"recall_score": 1.0, "precision_score": 1.0},
+        )
+        assert classify_case_failure(case_deflect_fail) == RAGFailureMode.DEFLECTION_FAILURE
+
+        # 7. Appropriate deflection on unanswerable query
+        case_unanswerable_ok = CaseResult(
+            index=6,
+            query_id="q7",
+            question="What is Martian law?",
+            ground_truth_doc_ids=[],
+            deflection=True,
+        )
+        assert classify_case_failure(case_unanswerable_ok) == RAGFailureMode.SUCCESS
+
+        # 8. Deflection failure on unanswerable query (model hallucinated answer instead of deflecting)
+        case_unanswerable_hallucinated = CaseResult(
+            index=7,
+            query_id="q8",
+            question="What is Martian law?",
+            ground_truth_doc_ids=[],
+            deflection=False,
+            answer="Martian law requires helmets.",
+        )
+        assert (
+            classify_case_failure(case_unanswerable_hallucinated)
+            == RAGFailureMode.DEFLECTION_FAILURE
+        )
+
+    def test_evaluation_summary_error_decomposition(self):
+        """Verify EvaluationSummary records and exposes error decomposition fields."""
+        summary = EvaluationSummary(
+            total=10,
+            scored=10,
+            errors=0,
+            deflection_rate=0.1,
+            retrieval_induced_error_count=3,
+            retrieval_induced_error_rate=0.3,
+            failure_distribution={
+                "success": 5,
+                "retrieval_miss": 1,
+                "retrieval_induced_error": 3,
+                "llm_reasoning_failure": 1,
+                "deflection_failure": 0,
+            },
+            metrics={"ndcg_avg": 0.8},
+            rows=[{"query_id": "q1", "failure_mode": "retrieval_induced_error"}],
+        )
+
+        assert summary.retrieval_induced_error_count == 3
+        assert summary.retrieval_induced_error_rate == 0.3
+        assert summary.failure_distribution["retrieval_induced_error"] == 3
+
+        data = summary.to_dict()
+        assert data["retrieval_induced_error_count"] == 3
+        assert data["retrieval_induced_error_rate"] == 0.3
+        assert data["failure_distribution"]["success"] == 5
+        assert summary["retrieval_induced_error_count"] == 3
+        assert summary["failure_distribution"]["retrieval_miss"] == 1
+        assert "retrieval_induced_error_rate" in summary
+
+    def test_compute_error_reduction(self):
+        """Verify calculation of retrieval-induced error reduction percentage and target_met flag."""
+        from deepfix_rag.cli.eval import compute_error_reduction
+
+        # 30% reduction: target met (>= 15%)
+        pct, met = compute_error_reduction(baseline_err=10, candidate_err=7)
+        assert pct == 30.0
+        assert met is True
+
+        # 10% reduction: target not met (< 15%)
+        pct, met = compute_error_reduction(baseline_err=10, candidate_err=9)
+        assert pct == 10.0
+        assert met is False
+
+        # 100% reduction: zero errors in candidate
+        pct, met = compute_error_reduction(baseline_err=10, candidate_err=0)
+        assert pct == 100.0
+        assert met is True
+
+        # Negative reduction: candidate introduced more errors
+        pct, met = compute_error_reduction(baseline_err=10, candidate_err=12)
+        assert pct == -20.0
+        assert met is False
+
+        # Zero baseline errors: cannot reduce
+        pct, met = compute_error_reduction(baseline_err=0, candidate_err=0)
+        assert pct == 0.0
+        assert met is False
+
+        # None values handled gracefully
+        pct, met = compute_error_reduction(baseline_err=None, candidate_err=5)
+        assert pct is None
+        assert met is False
 
 
 # =========================================================================

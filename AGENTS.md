@@ -174,10 +174,10 @@ Always reuse standard fixtures defined in [`tests/conftest.py`](tests/conftest.p
 - **`isolated_mlflow_env`**: Isolated local SQLite MLflow tracking environment.
 - **`populated_sample_index_dir`**: Temporary LanceDB directory pre-populated with sample corpus.
 
-### Test Isolation & Mocking
+### Test Isolation & Real Pipeline Testing (No Mocks)
 - Use `tmp_path` fixture for any file/directory writes during tests.
-- Use `monkeypatch` to isolate environment variables and settings.
-- Mock external LLM and Judge endpoints when testing runners and CLI commands to keep tests deterministic and fast.
+- **Strictly No Mocks**: Do NOT use `unittest.mock`, `Mock`, `AsyncMock`, or `monkeypatch` to stub domain logic or pipeline execution. Tests must execute against real code, deterministic local fixtures, or live services.
+- For fast, deterministic runner and CLI tests without external LLM API dependencies, use `--retrieval-only` mode with sample benchmark fixtures (`sample_qa_path`, `sample_corpus_path`, `populated_sample_index_dir`).
 
 ---
 
