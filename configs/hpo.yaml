@@ -1,0 +1,84 @@
+version: "1.0"
+
+base_config: configs/default.yaml
+
+study_name: deepfix_hpo_study
+storage_uri: "sqlite:///:memory:"
+n_trials: 10
+tune_chunking: false
+retrieval_only: false
+
+metrics:
+  targets:
+    - recall
+    - faithfulness
+  retrieval_only_targets:
+    - recall
+    - ndcg
+  aliases:
+    recall:
+      - recall
+      - R@10
+      - R@5
+    ndcg:
+      - ndcg
+      - nDCG@10
+      - nDCG@5
+
+search_space:
+  dense:
+    chunk_size_min: 128
+    chunk_size_max: 2048
+    chunk_size_step: 64
+    chunk_overlap_min: 0
+    chunk_overlap_max: 256
+    chunk_overlap_step: 16
+    top_k_min: 1
+    top_k_max: 50
+    similarity_metrics:
+      - cosine
+      - l2
+      - dot
+  hybrid:
+    chunk_size_min: 128
+    chunk_size_max: 2048
+    chunk_size_step: 64
+    chunk_overlap_min: 0
+    chunk_overlap_max: 256
+    chunk_overlap_step: 16
+    top_k_min: 1
+    top_k_max: 50
+    similarity_metrics:
+      - cosine
+      - l2
+      - dot
+    bm25_k1_min: 0.5
+    bm25_k1_max: 3.0
+    bm25_b_min: 0.1
+    bm25_b_max: 1.0
+    dense_weight_min: 0.0
+    dense_weight_max: 1.0
+    fusion_modes:
+      - reciprocal_rerank
+      - relative_score
+      - dist_based_score
+      - simple
+  graph:
+    extraction_schemas:
+      - default
+      - entity_relationship
+      - domain_legal
+    max_paths_per_chunk_min: 1
+    max_paths_per_chunk_max: 10
+    traversal_hops_min: 1
+    traversal_hops_max: 3
+    dense_weight_min: 0.0
+    dense_weight_max: 1.0
+    fusion_modes:
+      - reciprocal_rerank
+      - relative_score
+      - dist_based_score
+      - simple
+    top_k_min: 1
+    top_k_max: 50
+

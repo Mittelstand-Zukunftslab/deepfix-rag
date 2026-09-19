@@ -146,12 +146,12 @@ deepfix eval \
   --limit 20
 ```
 ### 4. Mutate Hyperparameters
-Create a new candidate configuration by overriding parameters (e.g., increasing `retrieval.top_k` and tuning `retrieval.hybrid_alpha`):
+Create a new candidate configuration by overriding parameters (e.g., increasing `retrieval.top_k` and tuning `retrieval.dense_weight`):
 ```bash
 deepfix mutate-config \
   --base configs/default.yaml \
   --set retrieval.top_k=20 \
-  --set retrieval.hybrid_alpha=0.7 \
+  --set retrieval.dense_weight=0.7 \
   --output configs/candidate_v1.yaml
 ```
 Inspect the parameter diff:
@@ -232,7 +232,8 @@ embedding:
 retrieval:
   backend: hybrid           # hybrid | dense | pyterrier | bm25
   top_k: 10                 # 1 to 100
-  hybrid_alpha: 0.5         # 0.0 (lexical) to 1.0 (dense)
+  dense_weight: 0.5         # 0.0 to 1.0 (dense component weight)
+  bm25_weight: 0.5          # 0.0 to 1.0 (lexical component weight)
 rerank:
   enabled: false
   model: rerank-english-v3.0

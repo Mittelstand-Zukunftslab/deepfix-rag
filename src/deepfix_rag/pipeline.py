@@ -10,11 +10,16 @@ from llama_index.core import (
     StorageContext,
     VectorStoreIndex,
 )
+from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.graph_stores.types import GraphStore
 from llama_index.core.indices.base import BaseIndex
-from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
+from llama_index.core.indices.property_graph import (
+    LLMSynonymRetriever,
+    SchemaLLMPathExtractor,
+    VectorContextRetriever,
+)
 from llama_index.core.response_synthesizers import (
     CompactAndRefine,
     Refine,
@@ -24,8 +29,11 @@ from llama_index.core.response_synthesizers import (
 from llama_index.core.response_synthesizers.base import (
     BaseSynthesizer,
 )
-from llama_index.core.retrievers import QueryFusionRetriever
-from llama_index.core.schema import NodeWithScore, TextNode
+from llama_index.core.retrievers.fusion_retriever import (
+    FUSION_MODES,
+    QueryFusionRetriever,
+)
+from llama_index.core.schema import NodeWithScore
 from llama_index.core.vector_stores.types import BasePydanticVectorStore
 from llama_index.core.workflow import (
     Context,
@@ -55,6 +63,39 @@ from deepfix_rag.config.schema import (
 )
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader
+
+GRAPH_EXTRACTION_SCHEMAS: dict[str, dict[str, list[str]]] = {
+    "entity_relationship": {
+        "entities": ["PERSON", "ORGANIZATION", "LOCATION", "CONCEPT", "EVENT"],
+        "relations": [
+            "RELATED_TO",
+            "PART_OF",
+            "LOCATED_IN",
+            "AFFILIATED_WITH",
+            "OCCURRED_IN",
+        ],
+    },
+    "domain_legal": {
+        "entities": [
+            "STATUTE",
+            "LAW",
+            "COURT",
+            "CASE",
+            "MINISTRY",
+            "ORGANIZATION",
+            "ARTICLE",
+            "PARAGRAPH",
+        ],
+        "relations": [
+            "CITES",
+            "AMENDS",
+            "REGULATES",
+            "DECIDED_BY",
+            "ENACTED_BY",
+            "APPLIES_TO",
+        ],
+    },
+}
 
 
 class RetrieverEvent(Event):
@@ -212,20 +253,16 @@ class RAGWorkflow(Workflow):
                 if not str(uri).startswith("s3://") and not Path(uri).exists():
                     return False
                 vector_store = self._get_vector_store()
-                conn = getattr(
-                    vector_store, "_connection", getattr(vector_store, "connection", None)
-                )
+                conn = getattr(vector_store, "_connection", None)
                 if conn is not None:
-                    table_name = getattr(
-                        vector_store,
-                        "table_name",
-                        getattr(vector_store, "_table_name", "documents"),
+                    table_name = getattr(vector_store, "_table_name", None)
+                    if table_name is None:
+                        return False
+                    tables_res = (
+                        conn.list_tables() if hasattr(conn, "list_tables") else conn.table_names()
                     )
-                    tables = (
-                        list(conn.list_tables())
-                        if hasattr(conn, "list_tables")
-                        else list(conn.table_names())
-                    )
+                    tables = getattr(tables_res, "tables", tables_res)
+                    tables = list(tables) if not isinstance(tables, list) else tables
                     if table_name in tables:
                         tbl = conn.open_table(table_name)
                         count = tbl.count_rows() if hasattr(tbl, "count_rows") else len(tbl)
@@ -237,7 +274,10 @@ class RAGWorkflow(Workflow):
 
     def _load_existing_index(self) -> BaseIndex:
         """Load an existing index from the storage backend."""
-        if self.config.retrieval.graph_store != GraphStoreType.NONE:
+        if (
+            self.config.retrieval.graph_store != GraphStoreType.NONE
+            or self.config.retrieval.backend in (RetrievalBackend.GRAPH, RetrievalBackend.MIXED)
+        ):
             storage_context = self._get_storage_context()
             graph_store = getattr(
                 storage_context,
@@ -259,16 +299,25 @@ class RAGWorkflow(Workflow):
         if storage_context is None:
             storage_context = self._get_storage_context()
 
-        if self.config.retrieval.graph_store != GraphStoreType.NONE:
+        if (
+            self.config.retrieval.graph_store != GraphStoreType.NONE
+            or self.config.retrieval.backend in (RetrievalBackend.GRAPH, RetrievalBackend.MIXED)
+        ):
+            schema_key = str(self.config.retrieval.graph_extraction_schema).lower().strip()
+            schema_info = GRAPH_EXTRACTION_SCHEMAS.get(schema_key)
+            extractor_kwargs: dict[str, Any] = {
+                "llm": self._get_llm(),
+                "max_triplets_per_chunk": self.config.retrieval.graph_max_paths_per_chunk,
+            }
+            if schema_info:
+                extractor_kwargs["possible_entities"] = schema_info["entities"]
+                extractor_kwargs["possible_relations"] = schema_info["relations"]
+
             index = PropertyGraphIndex.from_documents(
                 documents,
                 storage_context=storage_context,
                 embed_model=self._get_embed_model(),
-                kg_extractors=[
-                    SchemaLLMPathExtractor(
-                        llm=self._get_llm(),
-                    )
-                ],
+                kg_extractors=[SchemaLLMPathExtractor(**extractor_kwargs)],
                 show_progress=True,
             )
         else:
@@ -279,49 +328,167 @@ class RAGWorkflow(Workflow):
             )
         return index
 
+    def _get_dense_retriever(self, index: BaseIndex, top_k: int) -> BaseRetriever:
+        """Construct a dense vector retriever from VectorStoreIndex or PropertyGraphIndex."""
+        if isinstance(index, PropertyGraphIndex):
+            vector_store = index.vector_store or self._get_vector_store()
+            return VectorStoreIndex.from_vector_store(
+                vector_store=vector_store,
+                embed_model=self._get_embed_model(),
+            ).as_retriever(similarity_top_k=top_k)
+        elif isinstance(index, VectorStoreIndex):
+            return index.as_retriever(similarity_top_k=top_k)
+        else:
+            raise ValueError(f"Unsupported index type for dense retriever: {type(index)}")
+
+    def _get_bm25_retriever(
+        self, index: BaseIndex, top_k: int, language: str = "german"
+    ) -> BaseRetriever:
+        """Construct a BM25 sparse lexical retriever."""
+        bm25_kwargs = {}
+        if hasattr(index, "docstore") and len(index.docstore.docs) > 0:
+            bm25_kwargs["index"] = index
+        elif hasattr(index, "nodes") and len(index.nodes) > 0:
+            bm25_kwargs["nodes"] = index.nodes
+        else:
+            raise ValueError("No index or docstore found for BM25Retriever")
+
+        bm25 = BM25Retriever.from_defaults(
+            similarity_top_k=top_k,
+            language=language,
+            stemmer=Stemmer.Stemmer(language),
+            **bm25_kwargs,
+        )
+        if hasattr(bm25, "bm25") and bm25.bm25 is not None:
+            bm25.bm25.k1 = self.config.retrieval.bm25_k1
+            bm25.bm25.b = self.config.retrieval.bm25_b
+        return bm25
+
+    def _get_graph_retriever(self, index: BaseIndex, top_k: int) -> BaseRetriever:
+        """Construct a PropertyGraph retriever with VectorContextRetriever and LLMSynonymRetriever traversal."""
+        if isinstance(index, PropertyGraphIndex):
+            graph_store = getattr(
+                index,
+                "property_graph_store",
+                getattr(index, "_property_graph_store", None),
+            )
+            sub_retrievers = [
+                LLMSynonymRetriever(
+                    graph_store=graph_store,
+                    include_text=True,
+                    llm=self._get_llm(),
+                    path_depth=self.config.retrieval.graph_traversal_hops,
+                ),
+                VectorContextRetriever(
+                    graph_store=graph_store,
+                    embed_model=self._get_embed_model(),
+                    similarity_top_k=top_k,
+                    path_depth=self.config.retrieval.graph_traversal_hops,
+                    include_text=True,
+                ),
+            ]
+            return index.as_retriever(
+                sub_retrievers=sub_retrievers,
+                similarity_top_k=top_k,
+            )
+        else:
+            graph_store = self._get_graph_store()
+            if graph_store is not None:
+                pg_index = PropertyGraphIndex.from_existing(
+                    property_graph_store=graph_store,
+                    embed_model=self._get_embed_model(),
+                )
+                sub_retrievers = [
+                    LLMSynonymRetriever(
+                        graph_store=graph_store,
+                        include_text=True,
+                        llm=self._get_llm(),
+                        path_depth=self.config.retrieval.graph_traversal_hops,
+                    ),
+                    VectorContextRetriever(
+                        graph_store=graph_store,
+                        embed_model=self._get_embed_model(),
+                        similarity_top_k=top_k,
+                        path_depth=self.config.retrieval.graph_traversal_hops,
+                        include_text=True,
+                    ),
+                ]
+                return pg_index.as_retriever(
+                    sub_retrievers=sub_retrievers,
+                    similarity_top_k=top_k,
+                )
+            raise ValueError(
+                f"PropertyGraphIndex or active graph store required for Graph retrieval, got {type(index)}"
+            )
+
     def _build_retriever(
         self,
-        index: VectorStoreIndex,
+        index: BaseIndex,
         top_k: int = 5,
         language: str = "german",
         use_async: bool = True,
-    ):
-        assert isinstance(index, VectorStoreIndex), f"Expected VectorStoreIndex, got {type(index)}"
-        if self.config.retrieval.backend == RetrievalBackend.DENSE:
-            return index.as_retriever(similarity_top_k=top_k)
+    ) -> BaseRetriever:
+        backend = self.config.retrieval.backend
 
-        elif self.config.retrieval.backend == RetrievalBackend.HYBRID:
-            bm25_kwargs = {}
-            if hasattr(index, "docstore") and len(index.docstore.docs) > 0:
-                bm25_kwargs["index"] = index
-            else:
-                raise ValueError("No index found for BM25Retriever")
+        if backend == RetrievalBackend.DENSE:
+            return self._get_dense_retriever(index, top_k)
 
-            bm25 = BM25Retriever.from_defaults(
+        elif backend == RetrievalBackend.BM25:
+            return self._get_bm25_retriever(index, top_k, language)
+
+        elif backend == RetrievalBackend.GRAPH:
+            return self._get_graph_retriever(index, top_k)
+
+        elif backend == RetrievalBackend.HYBRID:
+            dense_retriever = self._get_dense_retriever(index, top_k)
+            bm25_retriever = self._get_bm25_retriever(index, top_k, language)
+            fusion_mode_enum = FUSION_MODES(self.config.retrieval.fusion_mode.value)
+
+            return QueryFusionRetriever(
+                [dense_retriever, bm25_retriever],
+                llm=self._get_llm(),
+                retriever_weights=[
+                    self.config.retrieval.dense_weight,
+                    self.config.retrieval.bm25_weight,
+                ],
+                mode=fusion_mode_enum,
+                num_queries=1,
+                use_async=use_async,
                 similarity_top_k=top_k,
-                language=language,
-                stemmer=Stemmer.Stemmer(language),
-                **bm25_kwargs,
             )
-            retriever = QueryFusionRetriever(
-                    [
-                        index.as_retriever(similarity_top_k=top_k),
-                        bm25,
-                    ],
-                    llm=self._get_llm(),
-                    retriever_weights=[
-                        1 - self.config.retrieval.hybrid_alpha,
-                        self.config.retrieval.hybrid_alpha,
-                    ],
-                    num_queries=1,
-                    use_async=use_async,
-                    similarity_top_k=top_k,
+
+        elif backend == RetrievalBackend.MIXED:
+            dense_retriever = self._get_dense_retriever(index, top_k)
+            bm25_retriever = self._get_bm25_retriever(index, top_k, language)
+            graph_retriever = self._get_graph_retriever(index, top_k)
+            fusion_mode_enum = FUSION_MODES(self.config.retrieval.fusion_mode.value)
+
+            w_dense = self.config.retrieval.dense_weight
+            w_bm25 = self.config.retrieval.bm25_weight
+            w_graph = self.config.retrieval.graph_weight
+
+            total_weight = w_dense + w_bm25 + w_graph
+            if total_weight <= 0:
+                raise ValueError(
+                    "Sum of retrieval weights (dense_weight, bm25_weight, graph_weight) must be strictly positive."
                 )
+            if not (0.999 <= total_weight <= 1.001):
+                w_dense = round(w_dense / total_weight, 4)
+                w_bm25 = round(w_bm25 / total_weight, 4)
+                w_graph = round(1.0 - w_dense - w_bm25, 4)
+
+            return QueryFusionRetriever(
+                [dense_retriever, bm25_retriever, graph_retriever],
+                llm=self._get_llm(),
+                retriever_weights=[w_dense, w_bm25, w_graph],
+                mode=fusion_mode_enum,
+                num_queries=1,
+                use_async=use_async,
+                similarity_top_k=top_k,
+            )
 
         else:
-            raise ValueError(f"Invalid retrieval backend: {self.config.retrieval.backend}")
-
-        return retriever
+            raise ValueError(f"Invalid retrieval backend: {backend}")
 
     def _get_response_synthesizer(self) -> BaseSynthesizer:
         kwargs = dict(llm=self._get_llm(), streaming=False)
@@ -373,21 +540,12 @@ class RAGWorkflow(Workflow):
         LOGGER.debug(f"Query: {query}")
         await ctx.store.set("query", query)
 
-        if isinstance(index, PropertyGraphIndex):
-            kwargs = {}
-            kwargs["response_mode"] = "tree_summarize"
-            kwargs["embedding_mode"] = "hybrid"
-            retriever = index.as_retriever(
-                similarity_top_k=self.config.retrieval.top_k,
-                **kwargs,
-            )
-        elif isinstance(index, VectorStoreIndex):
-            retriever = self._build_retriever(
-                index=index,
-                top_k=self.config.retrieval.top_k,
-                language=self.config.retrieval.language,
-                use_async=True,
-            )
+        retriever = self._build_retriever(
+            index=index,
+            top_k=self.config.retrieval.top_k,
+            language=self.config.retrieval.language,
+            use_async=True,
+        )
         nodes = await retriever.aretrieve(query)
 
         LOGGER.debug(f"Retrieved {len(nodes)} nodes")

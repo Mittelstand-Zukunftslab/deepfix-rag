@@ -199,13 +199,14 @@ def eval_cmd(
     baseline_result = {k: v for k, v in baseline_summary.items() if k != "rows"}
 
     delta_keys = [
-        "faithfulness_avg",
-        "context_precision_avg",
-        "context_recall_avg",
-        "answer_relevancy_avg",
-        "ndcg_avg",
-        "recall_avg",
-        "precision_avg",
+        "faithfulness",
+        "context_precision",
+        "context_recall",
+        "answer_relevancy",
+        "contextual_relevancy",
+        "ndcg",
+        "recall",
+        "precision",
         "deflection_rate",
         "retrieval_induced_error_count",
         "retrieval_induced_error_rate",

@@ -15,7 +15,6 @@ retrieval:
   lancedb_table_name: documents
   lancedb_index_dir: s3://deepfix-index/dev
   top_k: 10
-  hybrid_alpha: 0.0
   bit_width: 4
   language: german
   load_if_exists: true

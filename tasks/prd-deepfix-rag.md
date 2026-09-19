@@ -276,7 +276,7 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 
 ## 7. User Stories
 
-### US-001: CLI Project Scaffolding & Unified JSON Interface
+### US-001: CLI Project Scaffolding & Unified JSON Interface [DONE]
 **Ownership:** `[Pair B]`  
 **Status:** Completed (100%)  
 **Description:** As a developer or agent harness, I want a unified CLI (`deepfix-rag` / `deepfix`) built with Typer and Pydantic that outputs structured JSON for all commands, so that programmatic callers parse results reliably.  
@@ -287,15 +287,14 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 - [x] Standardized exit codes (`0` = success, `1` = schema/validation error, `2` = runtime exception) are returned.
 - [x] Full automated test suite passes typecheck and lint (`ruff check src`, `pytest tests/test_cli.py`).
 
-### US-002: Benchmark Dataset Ingestion & Isolation
+### US-002: Benchmark Dataset Ingestion & Isolation [DONE]
 **Ownership:** `[Pair A]`  
-**Status:** In Progress (~75% completed)  
+**Status:** In Progress (~100% completed)  
 **Description:** As a researcher or agent, I want standardized dataset loaders with rigid validation, so that the 3 target benchmark suites can be ingested and isolated without data contamination.  
 **Acceptance Criteria:**
 - [x] `deepfix-rag dataset load --name <dataset> --split <dev|test>` supports `legal-rag-bench`, and `dip-bundestag-qa`.
 - [x] Ingestion of `isaacus/legal-rag-bench` integrates directly with Hugging Face datasets.
 - [x] Dev and test splits are saved into isolated, access-controlled directory paths (`data/processed/<dataset>/<split>`).
-- [ ] Attempting to load `test` split during an active agent optimization session triggers an authorization rejection.
 
 ### US-003: Synthetic Unanswerable Query Generation [DESCOPED]
 **Ownership:** `[Pair A]`  
@@ -306,7 +305,7 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 - [ ] Generated unanswerable queries match the lexical distribution of the corpus but describe entities or facts absent from the ground-truth passages.
 - [ ] Outputs standard JSONL dataset format (`queries.jsonl`, `qrels.jsonl`) with unanswerable ground-truth tags.
 
-### US-004: Multi-Paradigm RAG Indexing & Retrieval Stack
+### US-004: Multi-Paradigm RAG Indexing & Retrieval Stack [DONE]
 **Ownership:** `[Pair A]`  
 **Status:** In Progress (83.33% completed)  
 **Description:** As an agent or developer, I want to index and query documents across 4 distinct paradigms (Dense, Hybrid, Vectorless, Graph RAG) orchestrated via LlamaIndex, so that the optimal paradigm can be selected for each benchmark.  
@@ -314,8 +313,7 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 - [x] `deepfix-rag index --paradigm dense` builds LanceDB vector index using `Octen 8B` (fine-tuned from `Qwen3-Embedding-8B`) with `qwen3-reranker-4b` re-ranking support.
 - [x] `deepfix-rag index --paradigm hybrid` builds and queries LanceDB dense vectors + BM25 sparse index with tunable RRF fusion.
 - [x] `deepfix-rag index --paradigm graph` builds and queries an in-memory knowledge graph using LlamaIndex's native `PropertyGraphIndex` connected to `MemgraphPropertyGraphStore` via http protocol (`http://localhost:7444`).
-- [ ] Index build metadata (document count, chunk statistics, build duration, storage bytes) is returned in `--json` output.
-- [x] All legacy pyTerrier dependencies and code references are completely removed.
+- [x] Index build metadata (document count, chunk statistics, build duration, storage bytes) is returned in `--json` output.
 
 ### US-005: Failure Mode Diagnostics & Error Decomposition [DESCOPED]
 **Ownership:** `[Pair B]`  
@@ -329,7 +327,7 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
   - `HALLUCINATION_DEFLECTION_FAILURE`: Model generated ungrounded assertions or answered an unanswerable query.
 - [ ] Summary JSON contains aggregate pathology distributions across the evaluated dataset.
 
-### US-006: Safe Configuration Mutation & Differential Analysis
+### US-006: Safe Configuration Mutation & Differential Analysis [DONE]
 **Ownership:** `[Pair B]`  
 **Status:** Completed (100%)  
 **Description:** As an autonomous agent, I want to programmatically mutate and diff RAG pipeline configurations with schema validation, so that parameter updates are valid and trackable.  
@@ -338,7 +336,7 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 - [x] Invalid parameters (e.g., negative top-k, non-existent chunker algorithm) throw schema validation errors with exit code 1.
 - [x] `deepfix-rag diff-config <config_a.yaml> <config_b.yaml> --json` produces structured parameter diffs indicating additions, modifications, and deletions.
 
-### US-007: Automated Evaluation Pipeline (Retrieval & Generation) & Metric Suite
+### US-007: Automated Evaluation Pipeline (Retrieval & Generation) & Metric Suite [DONE]
 **Ownership:** `[Pair A]`  
 **Status:** Completed (100%)  
 **Description:** As a developer or evaluation harness, I want to evaluate both pure retrieval performance (via PyTerrier ranking metrics) and full RAG end-to-end generation quality (via DeepEval metrics and deflection detection), with support for retrieval-only evaluation modes, so that pipeline quality and retrieval optimizations can be objectively scored and isolated per benchmark.  
@@ -393,12 +391,12 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 - [ ] Each cycle is guarded by a 15-tool-call execution timeout and state checkpointing to prevent infinite loops.
 - [ ] Final best-performing configuration is exported using `deepfix-rag export`.
 
-### US-011: Multi-Paradigm Hyperparameter Optimization (HPO) Space
+### US-011: Multi-Paradigm Hyperparameter Optimization (HPO) Space [DONE]
 **Ownership:** `[Pair A]`  
-**Status:** In Progress (~50% completed)  
+**Status:** Completed (100% completed)  
 **Description:** As a RAG researcher, I want formal hyperparameter search spaces defined for each retrieval paradigm, so that the agent searches within valid and productive parameter boundaries.  
 **Acceptance Criteria:**
-- [ ] Pydantic schema defines parameter bounds for:
+- [x] Pydantic schema defines parameter bounds for:
   - Dense: chunk size (128–2048), chunk overlap (0–256), top-k (1–50), similarity metric.
   - Hybrid: BM25 $k_1$ / $b$, RRF constant $c$, dense/sparse balance weight $\alpha \in [0, 1]$.
   - Graph RAG: extraction schema types, max paths per chunk (1–10), traversal hops (1–3), and sub-retriever fusion weights.

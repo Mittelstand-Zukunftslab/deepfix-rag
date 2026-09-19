@@ -109,7 +109,7 @@ def classify_case_failure(
         return RAGFailureMode.DEFLECTION_FAILURE
 
     # Answerable query: resolve recall and precision
-    recall = case.metrics.get("recall_score")
+    recall = case.metrics.get("recall")
     if recall is None:
         if case.ground_truth_doc_ids:
             retrieved_set = set(case.retrieved_doc_ids)
@@ -118,7 +118,7 @@ def classify_case_failure(
         else:
             recall = 1.0
 
-    precision = case.metrics.get("precision_score")
+    precision = case.metrics.get("precision")
     if precision is None:
         if case.retrieved_doc_ids and case.ground_truth_doc_ids:
             retrieved_set = set(case.retrieved_doc_ids)
@@ -141,7 +141,7 @@ def classify_case_failure(
 
     # Check generation quality
     gen_scores: list[float] = []
-    for key in ("faithfulness_score", "answer_relevancy_score"):
+    for key in ("faithfulness", "answer_relevancy"):
         val = case.metrics.get(key)
         if isinstance(val, (int, float)):
             gen_scores.append(float(val))
@@ -334,9 +334,10 @@ class RetrievalEvaluator:
 
         for case in cases:
             q_scores = eval_result.per_query.get(case.query_id, {})
-            case.metrics["ndcg_score"] = q_scores.get(ndcg_key)
-            case.metrics["recall_score"] = q_scores.get(recall_key)
-            case.metrics["precision_score"] = q_scores.get(precision_key)
+            # Canonical names matching schema enums
+            case.metrics["ndcg"] = q_scores.get(ndcg_key)
+            case.metrics["recall"] = q_scores.get(recall_key)
+            case.metrics["precision"] = q_scores.get(precision_key)
             for m in self.resolved_measures:
                 case.metrics[str(m)] = q_scores.get(str(m))
 
@@ -357,10 +358,10 @@ class GenerationEvaluator:
             api_key=settings.LLM_API_KEY,
         )
         self.generation_metrics = generation_metrics or []
-        self._metric_classes = self._build_metric_classes(self.generation_metrics)
+        self._metric_classes = self.build_metric_classes(self.generation_metrics)
 
     @staticmethod
-    def _build_metric_classes(
+    def build_metric_classes(
         metrics: list[GenerationMetricType],
     ) -> dict[str, type[BaseMetric]]:
         metrics_map: dict[GenerationMetricType, type[BaseMetric]] = {
@@ -391,14 +392,14 @@ class GenerationEvaluator:
                 else bool(score >= getattr(metric, "threshold", 0.5))
             )
             return {
-                f"{metric_type}_score": score,
+                str(metric_type): score,
                 f"{metric_type}_pass": success,
                 f"{metric_type}_reason": reason,
             }
         except Exception as e:
             LOGGER.warning(f"Metric {metric_type} failed: {e}")
             return {
-                f"{metric_type}_score": None,
+                str(metric_type): None,
                 f"{metric_type}_pass": None,
                 f"{metric_type}_reason": str(e),
             }
@@ -454,10 +455,25 @@ class EvaluationTracker:
         workspace_env = (
             "MLFLOW_TEST_WORKSPACE" if self.workspace == "test" else "MLFLOW_DEV_WORKSPACE"
         )
-        if hasattr(mlflow, "set_workspace") and getattr(settings, workspace_env, None):
-            mlflow.set_workspace(getattr(settings, workspace_env))
+        workspace_name = getattr(settings, workspace_env, None)
+        if hasattr(mlflow, "set_workspace") and workspace_name:
+            try:
+                mlflow.set_workspace(workspace_name)
+            except Exception as e:
+                LOGGER.debug(f"Failed to set MLflow workspace: {e}")
 
-        experiment = mlflow.get_experiment_by_name(self.experiment_name)
+        try:
+            experiment = mlflow.get_experiment_by_name(self.experiment_name)
+        except Exception as e:
+            if "does not support workspaces" in str(e) and hasattr(mlflow, "set_workspace"):
+                try:
+                    mlflow.set_workspace(None)
+                except Exception:
+                    pass
+                experiment = mlflow.get_experiment_by_name(self.experiment_name)
+            else:
+                raise
+
         if experiment is None:
             raise RuntimeError(
                 f"MLflow experiment '{self.experiment_name}' does not exist in this workspace. "
@@ -514,21 +530,17 @@ class EvaluationRunner:
         tracker: EvaluationTracker | None = None,
     ) -> None:
         self.config = config
-        self.cutoff_k = (
-            config.rerank.top_n
-            if (config.rerank and config.rerank.enabled and config.rerank.top_n)
-            else (config.retrieval.top_k if (config.retrieval and config.retrieval.top_k) else 10)
-        )
+        self.cutoff_k = config.eval.cutoff_k
 
         self.retrieval_evaluator = retrieval_evaluator or RetrievalEvaluator(
-            measures=config.eval.retrieval_metrics if config.eval else None,
+            measures=config.eval.retrieval_metrics,
             cutoff_k=self.cutoff_k,
         )
 
         if not config.retrieval_only:
             self.generation_evaluator = generation_evaluator or GenerationEvaluator(
-                generation_metrics=config.eval.generation_metrics if config.eval else None,
-                threshold=config.eval.threshold if config.eval else 0.5,
+                generation_metrics=config.eval.generation_metrics,
+                threshold=config.eval.threshold,
             )
         else:
             self.generation_evaluator = None
@@ -724,18 +736,19 @@ class EvaluationRunner:
 
         if not self.config.retrieval_only and self.generation_evaluator:
             for metric_type in self.generation_evaluator._metric_classes:
-                summary_metrics[f"{metric_type}_avg"] = avg(f"{metric_type}_score")
+                val = avg(str(metric_type))
+                summary_metrics[str(metric_type)] = val
 
         for m in self.retrieval_evaluator.resolved_measures:
             m_str = str(m)
             m_val = retrieval_eval_result.aggregated.get(m_str, 0.0)
             summary_metrics[m_str] = m_val
             if "ndcg" in m_str.lower():
-                summary_metrics["ndcg_avg"] = m_val
+                summary_metrics["ndcg"] = m_val
             elif "r@" in m_str.lower() or "recall" in m_str.lower():
-                summary_metrics["recall_avg"] = m_val
+                summary_metrics["recall"] = m_val
             elif "p@" in m_str.lower() or "precision" in m_str.lower():
-                summary_metrics["precision_avg"] = m_val
+                summary_metrics["precision"] = m_val
 
         summary_metrics["retrieval_induced_error_count"] = float(retrieval_induced_error_count)
         summary_metrics["retrieval_induced_error_rate"] = float(retrieval_induced_error_rate)
@@ -796,50 +809,3 @@ async def run_evaluation(
         max_concurrency=max_concurrency,
         retrieval_only=retrieval_only,
     )
-
-
-def setup_mlflow(workspace: str) -> None:
-    """Legacy helper for configuring MLflow."""
-    EvaluationTracker(workspace=workspace).setup()
-
-
-def make_metrics(
-    generation_metrics: list[GenerationMetricType],
-    async_mode: bool,
-    threshold: float,
-    judge: ProxyJudgeLLM,
-) -> dict[GenerationMetricType, BaseMetric]:
-    """Legacy helper for instantiating DeepEval metric instances."""
-    kwargs = dict(async_mode=async_mode, include_reason=True, threshold=threshold, model=judge)
-    metrics_map = {
-        GenerationMetricType.FAITHFULNESS: FaithfulnessMetric,
-        GenerationMetricType.CONTEXT_PRECISION: ContextualPrecisionMetric,
-        GenerationMetricType.CONTEXTUAL_RELEVANCY: ContextualRelevancyMetric,
-        GenerationMetricType.CONTEXT_RECALL: ContextualRecallMetric,
-        GenerationMetricType.ANSWER_RELEVANCY: AnswerRelevancyMetric,
-    }
-    metrics_dict: dict[str, BaseMetric] = {}
-    for metric in generation_metrics:
-        if metric in metrics_map:
-            metrics_dict[metric] = metrics_map[metric](**kwargs)
-    return metrics_dict
-
-
-def _resolve_retrieval_measures(
-    metric_names: list[RetrievalMetricType | str],
-    cutoff: int,
-) -> list[Any]:
-    """Legacy helper delegating to RetrievalEvaluator._resolve_measures."""
-    return RetrievalEvaluator._resolve_measures(metric_names, cutoff=cutoff)
-
-
-def compute_retrieval_metrics(
-    res_df: pd.DataFrame,
-    qrels_df: pd.DataFrame,
-    measures: list[Any],
-) -> tuple[dict[str, dict[str, float]], dict[str, float]]:
-    """Legacy helper delegating to RetrievalEvaluator.evaluate."""
-    evaluator = RetrievalEvaluator(cutoff_k=10)
-    evaluator.resolved_measures = measures
-    result = evaluator.evaluate(res_df, qrels_df)
-    return result.per_query, result.aggregated

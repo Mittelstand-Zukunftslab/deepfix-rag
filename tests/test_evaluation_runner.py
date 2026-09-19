@@ -174,15 +174,15 @@ class TestObjectOrientedEvaluators:
             retrieved_scores=[0.95, 0.45],
             answer="The law is...",
             deflection=False,
-            metrics={"faithfulness_score": 0.85, "ndcg_score": 1.0},
+            metrics={"faithfulness": 0.85, "ndcg": 1.0},
         )
         data = case.to_dict()
         assert data["index"] == 0
         assert data["query_id"] == "q_01"
         assert data["ground_truth_doc_ids"] == ["doc_1"]
         assert data["retrieved_doc_ids"] == ["doc_1", "doc_2"]
-        assert data["faithfulness_score"] == 0.85
-        assert data["ndcg_score"] == 1.0
+        assert data["faithfulness"] == 0.85
+        assert data["ndcg"] == 1.0
 
     def test_evaluation_summary_dict_compatibility(self):
         """Verify EvaluationSummary implements dict-like access for seamless backwards compatibility."""
@@ -191,19 +191,19 @@ class TestObjectOrientedEvaluators:
             scored=5,
             errors=0,
             deflection_rate=0.2,
-            metrics={"faithfulness_avg": 0.9, "ndcg_avg": 0.85},
+            metrics={"faithfulness": 0.9, "ndcg": 0.85},
             rows=[{"query_id": "q1"}],
         )
         assert summary["total"] == 5
-        assert summary["faithfulness_avg"] == 0.9
-        assert summary["ndcg_avg"] == 0.85
+        assert summary["faithfulness"] == 0.9
+        assert summary["ndcg"] == 0.85
         assert summary.get("errors") == 0
         assert summary.get("nonexistent", "fallback") == "fallback"
         assert "deflection_rate" in summary
         assert "rows" in summary
         assert set(summary.keys()) >= {"total", "scored", "errors", "deflection_rate", "rows"}
         assert len(summary.values()) > 0
-        assert ("faithfulness_avg", 0.9) in summary.items()
+        assert ("faithfulness", 0.9) in summary.items()
 
     def test_retrieval_evaluator_evaluate_and_populate(self):
         """Verify RetrievalEvaluator evaluates dataframes and populates CaseResult metrics."""
@@ -227,20 +227,21 @@ class TestObjectOrientedEvaluators:
 
         case = CaseResult(index=0, query_id="q1", question="Q?")
         evaluator.populate_case_metrics([case], eval_result)
-        assert case.metrics["ndcg_score"] == 1.0
-        assert case.metrics["recall_score"] == 1.0
-        assert case.metrics["precision_score"] == 0.5
+        assert case.metrics["ndcg"] == 1.0
+        assert case.metrics["recall"] == 1.0
+        assert case.metrics["precision"] == 0.5
 
     def test_evaluation_tracker_sanitization(self):
         """Verify EvaluationTracker sanitizes '@' to '_at_' for MLflow key compliance."""
         assert EvaluationTracker.sanitize_metric_key("nDCG@10") == "nDCG_at_10"
         assert EvaluationTracker.sanitize_metric_key("R@5") == "R_at_5"
         assert EvaluationTracker.sanitize_metric_key("P@10") == "P_at_10"
-        assert EvaluationTracker.sanitize_metric_key("faithfulness_avg") == "faithfulness_avg"
+        assert EvaluationTracker.sanitize_metric_key("faithfulness") == "faithfulness"
 
     def test_evaluation_runner_init_defaults(self):
         """Verify EvaluationRunner configures appropriate sub-evaluators and cutoff from RAGConfig."""
         config = RAGConfig()
+        config.eval.cutoff_k = 7
         config.retrieval.top_k = 7
         config.retrieval_only = True
 
@@ -260,7 +261,7 @@ class TestObjectOrientedEvaluators:
             question="What is the statute?",
             ground_truth_doc_ids=["doc_1"],
             retrieved_doc_ids=["doc_99"],
-            metrics={"recall_score": 0.0, "precision_score": 0.0},
+            metrics={"recall": 0.0, "precision": 0.0},
         )
         assert classify_case_failure(case_miss) == RAGFailureMode.RETRIEVAL_MISS
 
@@ -272,9 +273,9 @@ class TestObjectOrientedEvaluators:
             ground_truth_doc_ids=["doc_1", "doc_2"],
             retrieved_doc_ids=["doc_1"],
             metrics={
-                "recall_score": 0.5,
-                "precision_score": 1.0,
-                "faithfulness_score": 0.4,
+                "recall": 0.5,
+                "precision": 1.0,
+                "faithfulness": 0.4,
             },
         )
         assert (
@@ -290,9 +291,9 @@ class TestObjectOrientedEvaluators:
             ground_truth_doc_ids=["doc_1"],
             retrieved_doc_ids=["doc_1", "noise_1", "noise_2", "noise_3"],
             metrics={
-                "recall_score": 1.0,
-                "precision_score": 0.25,
-                "faithfulness_score": 0.5,
+                "recall": 1.0,
+                "precision": 0.25,
+                "faithfulness": 0.5,
             },
         )
         assert (
@@ -308,9 +309,9 @@ class TestObjectOrientedEvaluators:
             ground_truth_doc_ids=["doc_1"],
             retrieved_doc_ids=["doc_1"],
             metrics={
-                "recall_score": 1.0,
-                "precision_score": 1.0,
-                "faithfulness_score": 0.45,
+                "recall": 1.0,
+                "precision": 1.0,
+                "faithfulness": 0.45,
             },
         )
         assert (
@@ -326,9 +327,9 @@ class TestObjectOrientedEvaluators:
             ground_truth_doc_ids=["doc_1"],
             retrieved_doc_ids=["doc_1"],
             metrics={
-                "recall_score": 1.0,
-                "precision_score": 1.0,
-                "faithfulness_score": 0.95,
+                "recall": 1.0,
+                "precision": 1.0,
+                "faithfulness": 0.95,
             },
         )
         assert classify_case_failure(case_success, threshold=0.7) == RAGFailureMode.SUCCESS
@@ -341,7 +342,7 @@ class TestObjectOrientedEvaluators:
             ground_truth_doc_ids=["doc_1"],
             retrieved_doc_ids=["doc_1"],
             deflection=True,
-            metrics={"recall_score": 1.0, "precision_score": 1.0},
+            metrics={"recall": 1.0, "precision": 1.0},
         )
         assert classify_case_failure(case_deflect_fail) == RAGFailureMode.DEFLECTION_FAILURE
 
@@ -385,7 +386,7 @@ class TestObjectOrientedEvaluators:
                 "llm_reasoning_failure": 1,
                 "deflection_failure": 0,
             },
-            metrics={"ndcg_avg": 0.8},
+            metrics={"ndcg": 0.8},
             rows=[{"query_id": "q1", "failure_mode": "retrieval_induced_error"}],
         )
 
@@ -472,14 +473,14 @@ class TestRunEvaluationLive:
         assert results["total"] == 3
         assert results["scored"] == 3
         assert results["errors"] == 0
-        assert "faithfulness_avg" in results
-        assert isinstance(results["faithfulness_avg"], float)
+        assert "faithfulness" in results
+        assert isinstance(results["faithfulness"], float)
         assert len(results["rows"]) == 3
 
         first_row = results["rows"][0]
         assert first_row["question"] != ""
         assert first_row["answer"] is not None
-        assert first_row["faithfulness_score"] is not None
+        assert first_row["faithfulness"] is not None
 
     @pytest.mark.asyncio
     async def test_run_evaluation_limit_slicing(

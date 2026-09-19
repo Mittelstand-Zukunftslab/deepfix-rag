@@ -63,6 +63,7 @@ def test_retrieval_backend_rejects_invalid_value():
         RetrievalBackend.DENSE,
         RetrievalBackend.HYBRID,
         RetrievalBackend.GRAPH,
+        RetrievalBackend.MIXED,
     ],
 )
 def test_retrieval_backend_accepts_declared_values(backend: RetrievalBackend):
@@ -99,3 +100,21 @@ def test_predefined_config_files_valid(config_filename: str):
     config = load_rag_config(config_path)
     assert isinstance(config, RAGConfig)
     assert config.retrieval.load_if_exists is True
+
+
+def test_mixed_backend_configuration():
+    """Verify MIXED backend configuration with custom component weights."""
+    cfg = RAGConfig.model_validate(
+        {
+            "retrieval": {
+                "backend": RetrievalBackend.MIXED,
+                "dense_weight": 0.4,
+                "bm25_weight": 0.3,
+                "graph_weight": 0.3,
+            }
+        }
+    )
+    assert cfg.retrieval.backend == RetrievalBackend.MIXED
+    assert cfg.retrieval.dense_weight == 0.4
+    assert cfg.retrieval.bm25_weight == 0.3
+    assert cfg.retrieval.graph_weight == 0.3

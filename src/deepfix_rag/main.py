@@ -9,7 +9,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 import typer
 
-from deepfix_rag.cli import config, dataset, diagnostic, eval, export, index
+from deepfix_rag.cli import config, dataset, diagnostic, eval, export, hpo, index
 
 app = typer.Typer(
     name="deepfix",
@@ -37,6 +37,9 @@ app.command(
     name="diff-config", help="Compare two RAG configuration YAMLs and output structural diff."
 )(config.diff_config_cmd)
 app.command(name="export", help="Export optimized RAG configuration bundle.")(export.export_cmd)
+app.command(
+    name="hpo", help="Execute multi-paradigm hyperparameter optimization study using Optuna."
+)(hpo.hpo_cmd)
 
 
 if __name__ == "__main__":

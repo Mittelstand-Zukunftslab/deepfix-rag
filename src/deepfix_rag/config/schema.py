@@ -13,6 +13,7 @@ class RetrievalBackend(StrEnum):
     DENSE = "dense"
     HYBRID = "hybrid"
     GRAPH = "graph"
+    MIXED = "mixed"
     # VECTORLESS = "vectorless"
 
 
@@ -39,6 +40,13 @@ class GraphStoreType(StrEnum):
     MEMGRAPH = "memgraph"
     FALKORDB = "falkordb"
     NONE = "none"
+
+
+class FusionMode(StrEnum):
+    RECIPROCAL_RANK = "reciprocal_rerank"
+    RELATIVE_SCORE = "relative_score"
+    DIST_BASED_SCORE = "dist_based_score"
+    SIMPLE = "simple"
 
 
 class DataSourceType(StrEnum):
@@ -130,6 +138,12 @@ class DataLoaderConfig(BaseModel):
         return self
 
 
+class SimilarityMetric(StrEnum):
+    COSINE = "cosine"
+    L2 = "l2"
+    DOT = "dot"
+
+
 class ChunkingConfig(BaseModel):
     """Document chunking hyperparameters."""
 
@@ -138,6 +152,14 @@ class ChunkingConfig(BaseModel):
     )
     size: int = Field(default=512, ge=64, le=4096, description="Chunk token or character size.")
     overlap: int = Field(default=64, ge=0, description="Chunk overlap size.")
+
+    @model_validator(mode="after")
+    def validate_overlap(self) -> "ChunkingConfig":
+        if self.overlap >= self.size:
+            raise ValueError(
+                f"Chunk overlap ({self.overlap}) must be strictly less than chunk size ({self.size})."
+            )
+        return self
 
 
 class EmbeddingConfig(BaseModel):
@@ -166,8 +188,69 @@ class RetrievalConfig(BaseModel):
     top_k: int = Field(
         default=10, ge=1, le=100, description="Number of retrieved documents before re-ranking."
     )
-    hybrid_alpha: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="Dense vs lexical weight for hybrid search."
+    similarity_metric: SimilarityMetric = Field(
+        default=SimilarityMetric.COSINE,
+        description="Distance/similarity metric for dense vector retrieval.",
+    )
+    fusion_mode: FusionMode = Field(
+        default=FusionMode.RECIPROCAL_RANK,
+        description="Multi-retriever fusion mode (reciprocal_rerank, relative_score, dist_based_score, simple).",
+    )
+    dense_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Dense vector retriever weight in multi-retriever fusion.",
+    )
+    bm25_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="BM25 sparse lexical retriever weight in multi-retriever fusion.",
+    )
+    graph_weight: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Property graph retriever weight in multi-retriever fusion.",
+    )
+    bm25_k1: float = Field(
+        default=1.5,
+        ge=0.0,
+        le=10.0,
+        description="BM25 term frequency saturation parameter k1.",
+    )
+    bm25_b: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="BM25 document length normalization parameter b.",
+    )
+    rrf_c: int = Field(
+        default=60,
+        ge=1,
+        le=500,
+        description="Reciprocal Rank Fusion constant c.",
+    )
+    graph_extraction_schema: str = Field(
+        default="default",
+        description="Extraction schema type for property graph RAG.",
+    )
+    graph_max_paths_per_chunk: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Maximum extraction paths per document chunk in Graph RAG.",
+    )
+    graph_traversal_hops: int = Field(
+        default=2,
+        ge=1,
+        le=3,
+        description="Number of knowledge graph traversal hops.",
+    )
+    graph_fusion_weights: list[float] = Field(
+        default_factory=lambda: [0.5, 0.5],
+        description="Sub-retriever fusion weights for Graph RAG.",
     )
     bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")
     language: str = Field(default="german", description="Language of the documents.")
@@ -175,6 +258,15 @@ class RetrievalConfig(BaseModel):
         default=True,
         description="Load existing index if present rather than re-ingesting corpus.",
     )
+
+    @model_validator(mode="after")
+    def validate_graph_fusion_weights(self) -> "RetrievalConfig":
+        if self.graph_fusion_weights:
+            if any(w < 0 for w in self.graph_fusion_weights):
+                raise ValueError("Graph fusion weights must be non-negative.")
+            if sum(self.graph_fusion_weights) <= 0:
+                raise ValueError("Graph fusion weights sum must be strictly positive.")
+        return self
 
 
 class EvalConfig(BaseModel):
@@ -198,6 +290,11 @@ class EvalConfig(BaseModel):
     threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Metrics threshold.")
     concurrency: int = Field(
         default=5, ge=1, le=50, description="Max parallel QA cases during evaluation."
+    )
+    cutoff_k: int = Field(
+        default=5,
+        ge=1,
+        description="Evaluation cutoff rank k for retrieval measures (nDCG@k, R@k). Defaults to retrieval.top_k if not specified.",
     )
 
 
