@@ -397,8 +397,8 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 **Description:** As a RAG researcher, I want formal hyperparameter search spaces defined for each retrieval paradigm, so that the agent searches within valid and productive parameter boundaries.  
 **Acceptance Criteria:**
 - [x] Pydantic schema defines parameter bounds for:
-  - Dense: chunk size (128–2048), chunk overlap (0–256), top-k (1–50), similarity metric.
-  - Hybrid: BM25 $k_1$ / $b$, RRF constant $c$, dense/sparse balance weight $\alpha \in [0, 1]$.
+  - Dense: chunk size (128–2048), chunk overlap (0–256), top-k (1–50).
+  - Hybrid: BM25 $k_1$ / $b$, dense/sparse balance weight $\alpha \in [0, 1]$.
   - Graph RAG: extraction schema types, max paths per chunk (1–10), traversal hops (1–3), and sub-retriever fusion weights.
 - [x] Invalid combinations are rejected during `mutate-config` validation.
 
