@@ -55,6 +55,7 @@ import Stemmer
 from turbovec.llama_index import TurboQuantVectorStore
 
 from deepfix_rag.config.schema import (
+    GRAPH_EXTRACTION_SCHEMAS,
     GraphStoreType,
     RAGConfig,
     ResponseSynthesizerType,
@@ -63,39 +64,6 @@ from deepfix_rag.config.schema import (
 )
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader
-
-GRAPH_EXTRACTION_SCHEMAS: dict[str, dict[str, list[str]]] = {
-    "entity_relationship": {
-        "entities": ["PERSON", "ORGANIZATION", "LOCATION", "CONCEPT", "EVENT"],
-        "relations": [
-            "RELATED_TO",
-            "PART_OF",
-            "LOCATED_IN",
-            "AFFILIATED_WITH",
-            "OCCURRED_IN",
-        ],
-    },
-    "domain_legal": {
-        "entities": [
-            "STATUTE",
-            "LAW",
-            "COURT",
-            "CASE",
-            "MINISTRY",
-            "ORGANIZATION",
-            "ARTICLE",
-            "PARAGRAPH",
-        ],
-        "relations": [
-            "CITES",
-            "AMENDS",
-            "REGULATES",
-            "DECIDED_BY",
-            "ENACTED_BY",
-            "APPLIES_TO",
-        ],
-    },
-}
 
 
 class RetrieverEvent(Event):
@@ -310,8 +278,8 @@ class RAGWorkflow(Workflow):
                 "max_triplets_per_chunk": self.config.retrieval.graph_max_paths_per_chunk,
             }
             if schema_info:
-                extractor_kwargs["possible_entities"] = schema_info["entities"]
-                extractor_kwargs["possible_relations"] = schema_info["relations"]
+                extractor_kwargs["possible_entities"] = schema_info.entities
+                extractor_kwargs["possible_relations"] = schema_info.relations
 
             index = PropertyGraphIndex.from_documents(
                 documents,

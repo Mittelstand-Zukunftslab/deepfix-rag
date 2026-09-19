@@ -22,7 +22,6 @@ from deepfix_rag.config.schema import (
     FusionMode,
     RAGConfig,
     RetrievalBackend,
-    SimilarityMetric,
 )
 from deepfix_rag.hpo import HPOResult, HyperparameterOpt
 from deepfix_rag.main import app
@@ -42,7 +41,6 @@ def test_dense_search_space_defaults():
     assert space.chunk_overlap_max == 256
     assert space.top_k_min == 1
     assert space.top_k_max == 50
-    assert SimilarityMetric.COSINE in space.similarity_metrics
 
 
 @pytest.mark.unit
@@ -105,7 +103,6 @@ def test_search_space_suggest_parameters_dense():
         trial, paradigm=RetrievalBackend.DENSE, tune_chunking=True
     )
     assert "retrieval.top_k" in params
-    assert "retrieval.similarity_metric" in params
     assert "chunking.size" in params
     assert "chunking.overlap" in params
     assert params["chunking.overlap"] < params["chunking.size"]

@@ -11,7 +11,6 @@ from deepfix_rag.config.schema import (
     FusionMode,
     RAGConfig,
     RetrievalBackend,
-    SimilarityMetric,
 )
 
 
@@ -28,14 +27,6 @@ class DenseSearchSpace(BaseModel):
 
     top_k_min: int = Field(default=1, ge=1)
     top_k_max: int = Field(default=50, ge=1)
-
-    similarity_metrics: list[SimilarityMetric] = Field(
-        default_factory=lambda: [
-            SimilarityMetric.COSINE,
-            SimilarityMetric.L2,
-            SimilarityMetric.DOT,
-        ]
-    )
 
     @model_validator(mode="after")
     def validate_bounds(self) -> "DenseSearchSpace":
@@ -72,9 +63,6 @@ class DenseSearchSpace(BaseModel):
 
         params["retrieval.top_k"] = trial.suggest_int(
             "retrieval.top_k", self.top_k_min, self.top_k_max
-        )
-        params["retrieval.similarity_metric"] = trial.suggest_categorical(
-            "retrieval.similarity_metric", [m.value for m in self.similarity_metrics]
         )
         return params
 

@@ -118,3 +118,17 @@ def test_mixed_backend_configuration():
     assert cfg.retrieval.dense_weight == 0.4
     assert cfg.retrieval.bm25_weight == 0.3
     assert cfg.retrieval.graph_weight == 0.3
+
+
+def test_graph_extraction_schemas_in_schema_module():
+    """Verify GRAPH_EXTRACTION_SCHEMAS is defined as GraphExtractionSchema BaseModel instances."""
+    from deepfix_rag.config.schema import GRAPH_EXTRACTION_SCHEMAS, GraphExtractionSchema
+
+    assert "entity_relationship" in GRAPH_EXTRACTION_SCHEMAS
+    assert "domain_legal" in GRAPH_EXTRACTION_SCHEMAS
+    assert isinstance(GRAPH_EXTRACTION_SCHEMAS["entity_relationship"], GraphExtractionSchema)
+    assert isinstance(GRAPH_EXTRACTION_SCHEMAS["domain_legal"], GraphExtractionSchema)
+    assert len(GRAPH_EXTRACTION_SCHEMAS["entity_relationship"].entities) > 0
+    assert len(GRAPH_EXTRACTION_SCHEMAS["entity_relationship"].relations) > 0
+    assert len(GRAPH_EXTRACTION_SCHEMAS["domain_legal"].entities) > 0
+    assert len(GRAPH_EXTRACTION_SCHEMAS["domain_legal"].relations) > 0

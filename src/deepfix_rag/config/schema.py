@@ -14,7 +14,6 @@ class RetrievalBackend(StrEnum):
     HYBRID = "hybrid"
     GRAPH = "graph"
     MIXED = "mixed"
-    # VECTORLESS = "vectorless"
 
 
 class GenerationMetricType(StrEnum):
@@ -166,6 +165,53 @@ class EmbeddingConfig(BaseModel):
     """Embedding model and endpoint settings."""
 
     batch_size: int = Field(default=32, ge=1, description="Embedding batch size.")
+
+
+class GraphExtractionSchema(BaseModel):
+    """Extraction schema specifying entities and relations for Property Graph RAG."""
+
+    entities: list[str] = Field(
+        default_factory=list,
+        description="Allowed entity types to extract from text chunks.",
+    )
+    relations: list[str] = Field(
+        default_factory=list,
+        description="Allowed relation/predicate types to extract between entities.",
+    )
+
+
+GRAPH_EXTRACTION_SCHEMAS: dict[str, GraphExtractionSchema] = {
+    "entity_relationship": GraphExtractionSchema(
+        entities=["PERSON", "ORGANIZATION", "LOCATION", "CONCEPT", "EVENT"],
+        relations=[
+            "RELATED_TO",
+            "PART_OF",
+            "LOCATED_IN",
+            "AFFILIATED_WITH",
+            "OCCURRED_IN",
+        ],
+    ),
+    "domain_legal": GraphExtractionSchema(
+        entities=[
+            "STATUTE",
+            "LAW",
+            "COURT",
+            "CASE",
+            "MINISTRY",
+            "ORGANIZATION",
+            "ARTICLE",
+            "PARAGRAPH",
+        ],
+        relations=[
+            "CITES",
+            "AMENDS",
+            "REGULATES",
+            "DECIDED_BY",
+            "ENACTED_BY",
+            "APPLIES_TO",
+        ],
+    ),
+}
 
 
 class RetrievalConfig(BaseModel):
