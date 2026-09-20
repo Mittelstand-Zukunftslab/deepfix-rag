@@ -101,7 +101,8 @@ def run_diagnostics(
     ir_ds = InformationRetrievalDataset(
         dataset_name=dataset_name,
         topics=topics_df,
-        enable_embedding_pca=False,
+        enable_embedding_pca=True,
+        embedding_pca_components=200,
         qrels=qrels_df,
         corpus_iter=corpus_iter,
     )
@@ -144,15 +145,10 @@ def run_diagnostics(
     target_api_url = server_url or settings.DEEPFIX_SERVER_URL
     LOGGER.info(f"Connecting to DeepFix analysis server at {target_api_url}...")
 
-    tracking_uri = settings.MLFLOW_TRACKING_URI
-    mlflow_config = MLflowConfig()
-    if tracking_uri and tracking_uri.startswith(("http://", "https://", "file://")):
-        mlflow_config.tracking_uri = tracking_uri
-
     client = DeepFixClient(
         api_url=target_api_url,
-        timeout=300,
-        mlflow_config=mlflow_config,
+        timeout=360,
+        mlflow_config=MLflowConfig(tracking_uri=settings.MLFLOW_TRACKING_URI),
     )
 
     try:
@@ -164,10 +160,7 @@ def run_diagnostics(
             language="english",
         )
     except Exception as err:
-        LOGGER.error(f"DeepFix server connection/diagnostic failure: {err}")
-        raise ConnectionError(
-            f"Failed to communicate with DeepFix server at '{target_api_url}': {err}"
-        ) from err
+        raise err
 
     return response
 
