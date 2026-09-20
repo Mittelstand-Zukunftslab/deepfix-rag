@@ -80,6 +80,11 @@ def isolated_mlflow_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     mlflow.set_tracking_uri(tracking_uri)
     monkeypatch.setattr(settings, "MLFLOW_TRACKING_URI", tracking_uri)
     monkeypatch.setattr(settings, "MLFLOW_DEV_WORKSPACE", None)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", tracking_uri)
+    monkeypatch.delenv("MLFLOW_DEV_WORKSPACE", raising=False)
+    monkeypatch.delenv("MLFLOW_TEST_WORKSPACE", raising=False)
+    monkeypatch.delenv("MLFLOW_TRACKING_USERNAME", raising=False)
+    monkeypatch.delenv("MLFLOW_TRACKING_PASSWORD", raising=False)
 
     try:
         exp = mlflow.get_experiment_by_name(settings.MLFLOW_DEV_RAG_EXPERIMENT)

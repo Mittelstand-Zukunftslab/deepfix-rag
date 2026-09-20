@@ -10,6 +10,7 @@ from deepfix_rag.data import (
     DataLoader,
     HuggingFaceLoader,
     LegalRagBenchLoader,
+    QARecord,
 )
 
 pytestmark = [pytest.mark.unit]
@@ -80,8 +81,8 @@ def test_local_file_loader(tmp_path: Path):
 
     qa = data_loader.load_qa(DataLoaderConfig(path_or_repo=str(qa_file)))
     assert len(qa) == 1
-    assert qa[0]["query"] == "Frage?"
-    assert qa[0]["answer"] == "Antwort."
+    assert qa[0].query == "Frage?"
+    assert qa[0].answer == "Antwort."
 
 
 def test_sample_benchmark_fixtures_loading(sample_corpus_path: Path, sample_qa_path: Path):
@@ -93,29 +94,28 @@ def test_sample_benchmark_fixtures_loading(sample_corpus_path: Path, sample_qa_p
 
     qa = data_loader.load_qa(DataLoaderConfig(path_or_repo=str(sample_qa_path)))
     assert len(qa) > 0
-    assert "query" in qa[0]
+    assert hasattr(qa[0], "query")
 
 
-def test_to_qrels_df_single_and_multi_doc_ids():
-    """Verify to_qrels_df handles single doc_id, doc_ids list, and relevant_doc_ids list."""
+def test_to_qrels_df_single_doc_ids():
+    """Verify to_qrels_df creates proper qrels dataframe from QARecord objects."""
     qa_records = [
-        {"query_id": "q1", "doc_id": "d1"},
-        {"query_id": "q2", "doc_ids": ["d2", "d3"]},
-        {"query_id": "q3", "relevant_doc_ids": ["d4", "d5"]},
-        {"query_id": "q4"},  # no doc_id
+        QARecord(query_id="q1", query="Q1?", answer="A1", doc_id="d1"),
+        QARecord(query_id="q2", query="Q2?", answer="A2", doc_id="d2"),
+        QARecord(query_id="q3", query="Q3?", answer="A3", doc_id="d3"),
     ]
     df = DataLoader.to_qrels_df(qa_records)
-    assert list(df.columns) == ["qid", "docno", "label"]
-    assert len(df) == 5
+    assert list(df.columns) == ["qid", "docno", "label", "rank", "query"]
+    assert len(df) == 3
     assert set(df["qid"]) == {"q1", "q2", "q3"}
-    assert set(df["docno"]) == {"d1", "d2", "d3", "d4", "d5"}
+    assert set(df["docno"]) == {"d1", "d2", "d3"}
     assert all(df["label"] == 1)
 
 
 def test_to_qrels_df_empty():
     """Verify to_qrels_df returns typed empty DataFrame for empty inputs."""
     df = DataLoader.to_qrels_df([])
-    assert list(df.columns) == ["qid", "docno", "label"]
+    assert list(df.columns) == ["qid", "docno", "label", "rank"]
     assert len(df) == 0
 
 

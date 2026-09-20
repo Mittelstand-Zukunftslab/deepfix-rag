@@ -232,14 +232,18 @@ def test_dataset_load_validation_error_split(cli_runner: CliRunner):
     assert payload["code"] == EXIT_VALIDATION_ERROR
 
 
-def test_diagnostic_stub_exit_code_and_json(cli_runner: CliRunner, default_config_path: Path):
-    """Verify run-diagnostic returns exit code 2 and structured error JSON with --config or --dataset."""
+def test_diagnostic_command_error_json(cli_runner: CliRunner, default_config_path: Path):
+    """Verify run-diagnostic returns exit code 2 and structured error JSON on server failure."""
     result = cli_runner.invoke(
         app,
         [
             "run-diagnostic",
             "--config",
             str(default_config_path),
+            "--server-url",
+            "http://localhost:59999",
+            "--limit",
+            "2",
             "--json",
         ],
     )
@@ -247,7 +251,7 @@ def test_diagnostic_stub_exit_code_and_json(cli_runner: CliRunner, default_confi
     payload = json.loads(result.stdout)
     assert payload["status"] == "error"
     assert payload["code"] == EXIT_RUNTIME_ERROR
-    assert "not implemented" in payload["error"].lower()
+    assert "error" in payload["error"].lower() or "failed" in payload["error"].lower()
 
 
 def test_eval_missing_config_fails(cli_runner: CliRunner):

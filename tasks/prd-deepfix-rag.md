@@ -315,17 +315,16 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 - [x] `deepfix-rag index --paradigm graph` builds and queries an in-memory knowledge graph using LlamaIndex's native `PropertyGraphIndex` connected to `MemgraphPropertyGraphStore` via http protocol (`http://localhost:7444`).
 - [x] Index build metadata (document count, chunk statistics, build duration, storage bytes) is returned in `--json` output.
 
-### US-005: Failure Mode Diagnostics & Error Decomposition [DESCOPED]
+### US-005: Failure Mode Diagnostics & DeepFix Service Integration [DONE]
 **Ownership:** `[Pair B]`  
-**Status:** Not Started (Stubbed with `NotImplementedError`)  
-**Description:** As an autonomous agent, I want a diagnostic command that categorizes query failures into retrieval miss, reasoning error, or hallucination, so that I can select the correct remediation skill.  
+**Status:** Completed (100%)  
+**Description:** As an autonomous agent, I want a diagnostic command that runs retrieval evaluation and delegates diagnostics to the DeepFix analysis service (`deepfix-sdk` / `DeepFixClient`), returning multi-agent diagnostic findings and actionable recommendations.  
 **Acceptance Criteria:**
-- [ ] `deepfix-rag run-diagnostic --dataset <path> --config <config.yaml> --json` evaluates sample queries.
-- [ ] Diagnostic categorizes each query failure unambiguously:
-  - `RETRIEVAL_MISS`: Target gold passage not retrieved in top-k.
-  - `REASONING_FAILURE`: Target passage retrieved, but LLM response does not match ground truth.
-  - `HALLUCINATION_DEFLECTION_FAILURE`: Model generated ungrounded assertions or answered an unanswerable query.
-- [ ] Summary JSON contains aggregate pathology distributions across the evaluated dataset.
+- [x] `deepfix-rag run-diagnostic --dataset <path> --config <config.yaml> --json` evaluates sample queries and returns structured `APIResponse`.
+- [x] Transforms retrieval predictions and ground truth into DeepFix `InformationRetrievalDataset` and `IRLookupModel`.
+- [x] Dispatches diagnosis to `DeepFixClient` connected to live DeepFix analysis server (`http://localhost:8844`).
+- [x] Emits machine-readable `APIResponse` JSON on `--json` and formatted text report with severity breakdown and findings when run interactively.
+- [x] Standardized exit codes (`0` = success, `1` = validation error, `2` = server/runtime error).
 
 ### US-006: Safe Configuration Mutation & Differential Analysis [DONE]
 **Ownership:** `[Pair B]`  

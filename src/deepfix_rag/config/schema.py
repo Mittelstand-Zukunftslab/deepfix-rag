@@ -4,6 +4,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field, model_validator
+import yaml
 
 from .settings import settings
 
@@ -377,3 +378,18 @@ class RAGConfig(BaseModel):
     eval: EvalConfig = Field(default_factory=EvalConfig)
 
     retrieval_only: bool = Field(default=False, description="Whether retrieval only is active.")
+
+    @classmethod
+    def from_yaml(cls, path_or_str: str | Path) -> "RAGConfig":
+        """Load RAGConfig from a YAML file path or YAML string."""
+        path = Path(path_or_str)
+        if path.exists() and path.is_file():
+            content = path.read_text(encoding="utf-8")
+        else:
+            content = str(path_or_str)
+        data = yaml.safe_load(content) or {}
+        return cls.model_validate(data)
+
+    def to_yaml(self) -> str:
+        """Serialize RAGConfig to a YAML string."""
+        return yaml.safe_dump(self.model_dump(mode="json"), sort_keys=False)

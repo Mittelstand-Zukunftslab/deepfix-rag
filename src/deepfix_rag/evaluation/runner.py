@@ -36,7 +36,7 @@ from deepfix_rag.config.schema import (
     RetrievalMetricType,
 )
 from deepfix_rag.config.settings import LOGGER, settings
-from deepfix_rag.data import DataLoader
+from deepfix_rag.data import DataLoader, QARecord
 from deepfix_rag.evaluation.llm import ProxyJudgeLLM
 from deepfix_rag.pipeline import RAGWorkflow, RetrievalResult
 
@@ -65,7 +65,7 @@ def is_deflection(answer: str) -> bool:
     return any(phrase in lowered for phrase in DEFLECTION_PHRASES)
 
 
-def load_qa_dataset(dataset_path: Path | str, split: str = "test") -> list[dict]:
+def load_qa_dataset(dataset_path: Path | str, split: str = "test") -> list[QARecord]:
     return DataLoader().load_qa(dataset_path, split=split)
 
 
@@ -82,87 +82,6 @@ class RAGFailureMode(StrEnum):
     RETRIEVAL_INDUCED_ERROR = "retrieval_induced_error"
     LLM_REASONING_FAILURE = "llm_reasoning_failure"
     DEFLECTION_FAILURE = "deflection_failure"
-
-
-def classify_case_failure(
-    case: "CaseResult",
-    threshold: float = 0.7,
-) -> RAGFailureMode:
-    """Classify the failure mode of a single QA case result.
-
-    Decomposes upstream retrieval failures from downstream LLM synthesis/reasoning:
-    - SUCCESS: Ground truth document retrieved (recall == 1.0) and generation passed (score >= threshold),
-      or appropriate deflection on an unanswerable query.
-    - RETRIEVAL_MISS: Ground truth document completely missed by the retriever (recall == 0.0).
-    - RETRIEVAL_INDUCED_ERROR: Relevant document only partially retrieved (0.0 < recall < 1.0)
-      or buried by noise distractors (precision < 0.5), directly inducing generation failure.
-    - LLM_REASONING_FAILURE: All relevant context retrieved (recall == 1.0, precision >= 0.5),
-      but LLM hallucinated, misread the statute, or failed faithfulness/relevancy.
-    - DEFLECTION_FAILURE: Model inappropriately deflected on an answerable query with retrieved context,
-      or failed to deflect on an unanswerable query.
-    """
-    # Check for unanswerable query
-    is_unanswerable = not bool(case.ground_truth_doc_ids) or bool(case.metrics.get("unanswerable"))
-    if is_unanswerable:
-        if case.deflection:
-            return RAGFailureMode.SUCCESS
-        return RAGFailureMode.DEFLECTION_FAILURE
-
-    # Answerable query: resolve recall and precision
-    recall = case.metrics.get("recall")
-    if recall is None:
-        if case.ground_truth_doc_ids:
-            retrieved_set = set(case.retrieved_doc_ids)
-            gt_set = set(case.ground_truth_doc_ids)
-            recall = len(retrieved_set & gt_set) / len(gt_set)
-        else:
-            recall = 1.0
-
-    precision = case.metrics.get("precision")
-    if precision is None:
-        if case.retrieved_doc_ids and case.ground_truth_doc_ids:
-            retrieved_set = set(case.retrieved_doc_ids)
-            gt_set = set(case.ground_truth_doc_ids)
-            precision = len(retrieved_set & gt_set) / len(case.retrieved_doc_ids)
-        else:
-            precision = 1.0 if recall == 1.0 else 0.0
-
-    # If model deflected on an answerable query
-    if case.deflection:
-        if recall == 0.0:
-            return RAGFailureMode.RETRIEVAL_MISS
-        if recall < 1.0:
-            return RAGFailureMode.RETRIEVAL_INDUCED_ERROR
-        return RAGFailureMode.DEFLECTION_FAILURE
-
-    # Complete retrieval miss
-    if recall == 0.0:
-        return RAGFailureMode.RETRIEVAL_MISS
-
-    # Check generation quality
-    gen_scores: list[float] = []
-    for key in ("faithfulness", "answer_relevancy"):
-        val = case.metrics.get(key)
-        if isinstance(val, (int, float)):
-            gen_scores.append(float(val))
-
-    # If generation scores exist, check whether any failed the threshold
-    if gen_scores:
-        generation_failed = any(score < threshold for score in gen_scores)
-    else:
-        generation_failed = bool(case.error)
-
-    if recall >= 1.0:
-        if generation_failed:
-            if precision < 0.5:
-                return RAGFailureMode.RETRIEVAL_INDUCED_ERROR
-            return RAGFailureMode.LLM_REASONING_FAILURE
-        return RAGFailureMode.SUCCESS
-
-    # 0.0 < recall < 1.0
-    if generation_failed or not gen_scores:
-        return RAGFailureMode.RETRIEVAL_INDUCED_ERROR
-    return RAGFailureMode.SUCCESS
 
 
 # =========================================================================
@@ -267,6 +186,85 @@ class EvaluationSummary:
 # =========================================================================
 # Specialized Evaluator Classes
 # =========================================================================
+def classify_case_failure(
+    case: CaseResult,
+    threshold: float = 0.7,
+) -> RAGFailureMode:
+    """Classify the failure mode of a single QA case result.
+
+    Decomposes upstream retrieval failures from downstream LLM synthesis/reasoning:
+    - SUCCESS: Ground truth document retrieved (recall == 1.0) and generation passed (score >= threshold),
+      or appropriate deflection on an unanswerable query.
+    - RETRIEVAL_MISS: Ground truth document completely missed by the retriever (recall == 0.0).
+    - RETRIEVAL_INDUCED_ERROR: Relevant document only partially retrieved (0.0 < recall < 1.0)
+      or buried by noise distractors (precision < 0.5), directly inducing generation failure.
+    - LLM_REASONING_FAILURE: All relevant context retrieved (recall == 1.0, precision >= 0.5),
+      but LLM hallucinated, misread the statute, or failed faithfulness/relevancy.
+    - DEFLECTION_FAILURE: Model inappropriately deflected on an answerable query with retrieved context,
+      or failed to deflect on an unanswerable query.
+    """
+    # Check for unanswerable query
+    is_unanswerable = not bool(case.ground_truth_doc_ids) or bool(case.metrics.get("unanswerable"))
+    if is_unanswerable:
+        if case.deflection:
+            return RAGFailureMode.SUCCESS
+        return RAGFailureMode.DEFLECTION_FAILURE
+
+    # Answerable query: resolve recall and precision
+    recall = case.metrics.get("recall")
+    if recall is None:
+        if case.ground_truth_doc_ids:
+            retrieved_set = set(case.retrieved_doc_ids)
+            gt_set = set(case.ground_truth_doc_ids)
+            recall = len(retrieved_set & gt_set) / len(gt_set)
+        else:
+            recall = 1.0
+
+    precision = case.metrics.get("precision")
+    if precision is None:
+        if case.retrieved_doc_ids and case.ground_truth_doc_ids:
+            retrieved_set = set(case.retrieved_doc_ids)
+            gt_set = set(case.ground_truth_doc_ids)
+            precision = len(retrieved_set & gt_set) / len(case.retrieved_doc_ids)
+        else:
+            precision = 1.0 if recall == 1.0 else 0.0
+
+    # If model deflected on an answerable query
+    if case.deflection:
+        if recall == 0.0:
+            return RAGFailureMode.RETRIEVAL_MISS
+        if recall < 1.0:
+            return RAGFailureMode.RETRIEVAL_INDUCED_ERROR
+        return RAGFailureMode.DEFLECTION_FAILURE
+
+    # Complete retrieval miss
+    if recall == 0.0:
+        return RAGFailureMode.RETRIEVAL_MISS
+
+    # Check generation quality
+    gen_scores: list[float] = []
+    for key in ("faithfulness", "answer_relevancy"):
+        val = case.metrics.get(key)
+        if isinstance(val, (int, float)):
+            gen_scores.append(float(val))
+
+    # If generation scores exist, check whether any failed the threshold
+    if gen_scores:
+        generation_failed = any(score < threshold for score in gen_scores)
+    else:
+        generation_failed = bool(case.error)
+
+    if recall >= 1.0:
+        if generation_failed:
+            if precision < 0.5:
+                return RAGFailureMode.RETRIEVAL_INDUCED_ERROR
+            return RAGFailureMode.LLM_REASONING_FAILURE
+        return RAGFailureMode.SUCCESS
+
+    # 0.0 < recall < 1.0
+    if generation_failed or not gen_scores:
+        return RAGFailureMode.RETRIEVAL_INDUCED_ERROR
+    return RAGFailureMode.SUCCESS
 
 
 class RetrievalEvaluator:
@@ -549,21 +547,14 @@ class EvaluationRunner:
 
     async def _execute_case(
         self,
-        qa: dict[str, Any],
+        qa: QARecord,
         i: int,
         workflow: RAGWorkflow,
     ) -> CaseResult:
-        query_id = str(qa.get("query_id") or qa.get("id") or f"q_{i}")
-        query = qa.get("question") or qa.get("query", "")
-        expected_output = qa.get("answer") or qa.get("expected_output", "N/A")
-
-        gt_doc_ids: list[str] = []
-        if "relevant_doc_ids" in qa and isinstance(qa["relevant_doc_ids"], list):
-            gt_doc_ids.extend(str(d) for d in qa["relevant_doc_ids"] if d)
-        elif "doc_ids" in qa and isinstance(qa["doc_ids"], list):
-            gt_doc_ids.extend(str(d) for d in qa["doc_ids"] if d)
-        elif "doc_id" in qa and qa["doc_id"]:
-            gt_doc_ids.append(str(qa["doc_id"]))
+        query_id = qa.query_id
+        query = qa.query
+        expected_output = qa.answer or "N/A"
+        gt_doc_ids: list[str] = [qa.doc_id] if qa.doc_id else []
 
         deflection = False
         retrieved_results: list[RetrievalResult] = []
@@ -674,7 +665,7 @@ class EvaluationRunner:
         workflow = RAGWorkflow(config=self.config)
         await workflow.run(ingest=True)
 
-        async def _run(qa: dict, i: int) -> CaseResult:
+        async def _run(qa: QARecord, i: int) -> CaseResult:
             async with semaphore:
                 return await self._execute_case(qa=qa, i=i, workflow=workflow)
 

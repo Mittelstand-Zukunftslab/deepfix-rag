@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     FALKORDB_PASSWORD: str | None = None
     FALKORDB_DATABASE: str = "my_knowledge_graph"
 
+    # DeepFix Service
+    DEEPFIX_SERVER_URL: str = "http://localhost:8844"
+    DEEPFIX_HOME: str = os.path.join(Path(__file__).parents[3], ".deepfix")
+    DEEPFIX_API_KEY: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

@@ -1,6 +1,14 @@
-"""Deterministic diagnostic engine and reporting."""
+"""DeepFix diagnostic engine and reporting."""
 
-from deepfix_rag.diagnostics.engine import diagnose_failures
-from deepfix_rag.diagnostics.reporter import DiagnosticReport
+from deepfix_core.models.api import APIResponse
 
-__all__ = ["DiagnosticReport", "diagnose_failures"]
+from deepfix_rag.diagnostics.engine import (
+    run_diagnostics,
+    run_diagnostics_async,
+)
+
+__all__ = [
+    "APIResponse",
+    "run_diagnostics",
+    "run_diagnostics_async",
+]

@@ -21,9 +21,7 @@ from deepfix_rag.evaluation.runner import (
     EvaluationSummary,
     EvaluationTracker,
     GenerationEvaluator,
-    RAGFailureMode,
     RetrievalEvaluator,
-    classify_case_failure,
     count_tokens,
     is_deflection,
     run_evaluation,
@@ -251,124 +249,6 @@ class TestObjectOrientedEvaluators:
         assert runner.retrieval_evaluator.cutoff_k == 7
         assert runner.generation_evaluator is None
         assert runner.tracker is not None
-
-    def test_classify_case_failure_scenarios(self):
-        """Verify deterministic decomposition of all RAG failure modes."""
-        # 1. Pure retrieval miss: R@k = 0.0
-        case_miss = CaseResult(
-            index=0,
-            query_id="q1",
-            question="What is the statute?",
-            ground_truth_doc_ids=["doc_1"],
-            retrieved_doc_ids=["doc_99"],
-            metrics={"recall": 0.0, "precision": 0.0},
-        )
-        assert classify_case_failure(case_miss) == RAGFailureMode.RETRIEVAL_MISS
-
-        # 2. Retrieval-induced reasoning error: 0 < R@k < 1.0 with generation failure
-        case_partial = CaseResult(
-            index=1,
-            query_id="q2",
-            question="Analyze section 1 and 2.",
-            ground_truth_doc_ids=["doc_1", "doc_2"],
-            retrieved_doc_ids=["doc_1"],
-            metrics={
-                "recall": 0.5,
-                "precision": 1.0,
-                "faithfulness": 0.4,
-            },
-        )
-        assert (
-            classify_case_failure(case_partial, threshold=0.7)
-            == RAGFailureMode.RETRIEVAL_INDUCED_ERROR
-        )
-
-        # 3. Retrieval-induced reasoning error: R@k = 1.0 but P@k < 0.5 (distractor noise) with generation failure
-        case_noisy = CaseResult(
-            index=2,
-            query_id="q3",
-            question="What is the penalty?",
-            ground_truth_doc_ids=["doc_1"],
-            retrieved_doc_ids=["doc_1", "noise_1", "noise_2", "noise_3"],
-            metrics={
-                "recall": 1.0,
-                "precision": 0.25,
-                "faithfulness": 0.5,
-            },
-        )
-        assert (
-            classify_case_failure(case_noisy, threshold=0.7)
-            == RAGFailureMode.RETRIEVAL_INDUCED_ERROR
-        )
-
-        # 4. LLM reasoning failure: R@k = 1.0, clean context (P@k >= 0.5), but low faithfulness
-        case_reasoning_fail = CaseResult(
-            index=3,
-            query_id="q4",
-            question="Interpret paragraph 3.",
-            ground_truth_doc_ids=["doc_1"],
-            retrieved_doc_ids=["doc_1"],
-            metrics={
-                "recall": 1.0,
-                "precision": 1.0,
-                "faithfulness": 0.45,
-            },
-        )
-        assert (
-            classify_case_failure(case_reasoning_fail, threshold=0.7)
-            == RAGFailureMode.LLM_REASONING_FAILURE
-        )
-
-        # 5. Success case: R@k = 1.0 with high faithfulness
-        case_success = CaseResult(
-            index=4,
-            query_id="q5",
-            question="What is the definition?",
-            ground_truth_doc_ids=["doc_1"],
-            retrieved_doc_ids=["doc_1"],
-            metrics={
-                "recall": 1.0,
-                "precision": 1.0,
-                "faithfulness": 0.95,
-            },
-        )
-        assert classify_case_failure(case_success, threshold=0.7) == RAGFailureMode.SUCCESS
-
-        # 6. Deflection failure: answerable query with full retrieval, but model deflected
-        case_deflect_fail = CaseResult(
-            index=5,
-            query_id="q6",
-            question="Explain the statute.",
-            ground_truth_doc_ids=["doc_1"],
-            retrieved_doc_ids=["doc_1"],
-            deflection=True,
-            metrics={"recall": 1.0, "precision": 1.0},
-        )
-        assert classify_case_failure(case_deflect_fail) == RAGFailureMode.DEFLECTION_FAILURE
-
-        # 7. Appropriate deflection on unanswerable query
-        case_unanswerable_ok = CaseResult(
-            index=6,
-            query_id="q7",
-            question="What is Martian law?",
-            ground_truth_doc_ids=[],
-            deflection=True,
-        )
-        assert classify_case_failure(case_unanswerable_ok) == RAGFailureMode.SUCCESS
-
-        # 8. Deflection failure on unanswerable query (model hallucinated answer instead of deflecting)
-        case_unanswerable_hallucinated = CaseResult(
-            index=7,
-            query_id="q8",
-            question="What is Martian law?",
-            ground_truth_doc_ids=[],
-            deflection=False,
-            answer="Martian law requires helmets.",
-        )
-        assert (
-            classify_case_failure(case_unanswerable_hallucinated)
-            == RAGFailureMode.DEFLECTION_FAILURE
-        )
 
     def test_evaluation_summary_error_decomposition(self):
         """Verify EvaluationSummary records and exposes error decomposition fields."""

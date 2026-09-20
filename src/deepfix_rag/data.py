@@ -1,6 +1,5 @@
-"""Data loading and ingestion strategies for RAG."""
-
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,25 @@ from .config.schema import DataLoaderConfig, DataPreset, DataSourceType
 from .config.settings import LOGGER, settings
 
 
+@dataclass
+class QARecord:
+    """Normalized QA evaluation record loaded across benchmark datasets."""
+
+    query_id: str
+    query: str
+    answer: str
+    doc_id: str
+
+    def to_pyterrier(self) -> dict[str, Any]:
+        return {
+            "qid": self.query_id,
+            "docno": self.doc_id,
+            "label": 1,
+            "rank": 1,
+            "query": self.query,
+        }
+
+
 class BaseLoaderStrategy(ABC):
     """Abstract interface for all data loaders."""
 
@@ -23,7 +41,7 @@ class BaseLoaderStrategy(ABC):
         raise NotImplementedError("Subclasses must implement load_corpus()")
 
     @abstractmethod
-    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+    def load_qa(self, config: DataLoaderConfig) -> list[QARecord]:
         """Load and return QA pairs."""
         raise NotImplementedError("Subclasses must implement load_qa()")
 
@@ -44,20 +62,24 @@ class BundestagLoader(BaseLoaderStrategy):
 
         docs_list = []
         for i, row in enumerate(hf_data):
-            text = row.get("text") or row.get("content") or ""
-            if not text:
-                continue
-            doc_id = str(row.get("id") or row.get("doc_id") or row.get("index") or f"doc_{i}")
-            metadata = {"source": repo, "split": split, "doc_id": doc_id}
-            if row.get("title"):
-                metadata["title"] = row["title"]
-            if row.get("footnotes"):
-                metadata["footnotes"] = row["footnotes"]
+            text = row["text"]
+            doc_id = str(row["doc_id"])
+            metadata = {"source": repo, "split": split}
             docs_list.append(Document(text=text, id_=doc_id, metadata=metadata))
 
         return docs_list
 
-    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+    @staticmethod
+    def make_qa_record(row: dict) -> QARecord:
+        """Normalize and construct a benchmark QA record from arbitrary source mappings."""
+        return QARecord(
+            query_id=str(row["index"]),
+            query=str(row["question"]),
+            answer=str(row["answer"]),
+            doc_id=str(row["doc_id"]),
+        )
+
+    def load_qa(self, config: DataLoaderConfig) -> list[QARecord]:
         repo = self.QA_REPO
         split = config.split or "train"
         LOGGER.info(f"Downloading HuggingFace Bundestag QA '{repo}' (split: {split})...")
@@ -65,21 +87,7 @@ class BundestagLoader(BaseLoaderStrategy):
         if config.limit is not None and hasattr(ds, "select"):
             ds = ds.select(range(min(len(ds), config.limit)))
 
-        qa_list = []
-        for i, row in enumerate(ds):
-            query_id = str(row.get("query_id") or row.get("index") or row.get("id") or f"q_{i}")
-            query = row.get("question") or row.get("query") or ""
-            answer = row.get("answer") or ""
-            doc_id = str(row.get("doc_id") or "")
-            qa_list.append(
-                {
-                    "query_id": query_id,
-                    "query": query,
-                    "answer": answer,
-                    "doc_id": doc_id,
-                }
-            )
-        return qa_list
+        return [self.make_qa_record(row) for row in ds]
 
 
 class LegalRagBenchLoader(BaseLoaderStrategy):
@@ -88,7 +96,7 @@ class LegalRagBenchLoader(BaseLoaderStrategy):
     REPO = "isaacus/legal-rag-bench"
 
     def load_corpus(self, config: DataLoaderConfig) -> list[Document]:
-        split = config.split if (config.split and config.split != "train") else "test"
+        split = "test"
         subset = "corpus"
         LOGGER.info(
             f"Downloading HuggingFace Legal RAG Bench corpus '{self.REPO}' (subset: {subset}, split: {split})..."
@@ -103,20 +111,26 @@ class LegalRagBenchLoader(BaseLoaderStrategy):
 
         docs_list = []
         for i, row in enumerate(hf_data):
-            text = row.get("text") or row.get("content") or ""
-            if not text:
-                continue
-            doc_id = str(row.get("id") or row.get("doc_id") or row.get("index") or f"doc_{i}")
+            text = row["text"]
+            doc_id = str(row["id"])
             metadata = {"source": self.REPO, "split": split, "doc_id": doc_id}
-            if row.get("title"):
-                metadata["title"] = row["title"]
-            if row.get("footnotes"):
-                metadata["footnotes"] = row["footnotes"]
+            metadata["title"] = row["title"]
+            metadata["footnotes"] = row["footnotes"]
             docs_list.append(Document(text=text, id_=doc_id, metadata=metadata))
 
         return docs_list
 
-    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+    @staticmethod
+    def make_qa_record(row: dict) -> QARecord:
+        """Normalize and construct a benchmark QA record from arbitrary source mappings."""
+        return QARecord(
+            query_id=str(row["id"]),
+            query=str(row["question"]),
+            answer=str(row["answer"]),
+            doc_id=str(row["relevant_passage_id"]),
+        )
+
+    def load_qa(self, config: DataLoaderConfig) -> list[QARecord]:
         split = "test"
         subset = "qa"
         LOGGER.info(
@@ -130,21 +144,7 @@ class LegalRagBenchLoader(BaseLoaderStrategy):
         if config.limit is not None and hasattr(ds, "select"):
             ds = ds.select(range(min(len(ds), config.limit)))
 
-        qa_list = []
-        for i, row in enumerate(ds):
-            query_id = str(row.get("query_id") or row.get("index") or row.get("id") or f"q_{i}")
-            query = row.get("question") or row.get("query") or ""
-            answer = row.get("answer") or ""
-            doc_id = str(row.get("doc_id") or "")
-            qa_list.append(
-                {
-                    "query_id": query_id,
-                    "query": query,
-                    "answer": answer,
-                    "doc_id": doc_id,
-                }
-            )
-        return qa_list
+        return [self.make_qa_record(row) for row in ds]
 
 
 class HuggingFaceLoader(BaseLoaderStrategy):
@@ -163,7 +163,7 @@ class HuggingFaceLoader(BaseLoaderStrategy):
     def load_corpus(self, config: DataLoaderConfig) -> list[Document]:
         return self._resolve_loader(config).load_corpus(config)
 
-    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+    def load_qa(self, config: DataLoaderConfig) -> list[QARecord]:
         return self._resolve_loader(config).load_qa(config)
 
 
@@ -190,7 +190,17 @@ class LocalFileLoader(BaseLoaderStrategy):
                 )
         return docs_list
 
-    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+    @staticmethod
+    def make_qa_record(row: dict) -> QARecord:
+        """Normalize and construct a benchmark QA record from arbitrary source mappings."""
+        return QARecord(
+            query_id=str(row["query_id"]),
+            query=str(row["query"]),
+            answer=str(row["answer"]),
+            doc_id=str(row["doc_id"]),
+        )
+
+    def load_qa(self, config: DataLoaderConfig) -> list[QARecord]:
         LOGGER.info(f"Loading local QA file '{config.path_or_repo}'...")
         with open(config.path_or_repo, "r", encoding="utf-8-sig") as f:
             content = f.read().strip()
@@ -202,31 +212,16 @@ class LocalFileLoader(BaseLoaderStrategy):
             try:
                 data = json.loads(content)
                 if isinstance(data, list):
-                    return [
-                        {
-                            "query_id": str(r.get("query_id") or r.get("id") or f"q_{i}"),
-                            "query": r.get("query") or r.get("question") or "",
-                            "answer": r.get("answer") or "",
-                            "doc_id": str(r.get("doc_id") or ""),
-                        }
-                        for i, r in enumerate(data)
-                    ]
+                    return [self.make_qa_record(r) for r in data]
             except json.JSONDecodeError:
                 pass
 
-        rows = []
-        for i, line in enumerate(content.splitlines()):
+        rows: list[QARecord] = []
+        for line in content.splitlines():
             line_str = line.strip()
             if line_str:
                 r = json.loads(line_str)
-                rows.append(
-                    {
-                        "query_id": str(r.get("query_id") or r.get("id") or f"q_{i}"),
-                        "query": r.get("query") or r.get("question") or "",
-                        "answer": r.get("answer") or "",
-                        "doc_id": str(r.get("doc_id") or ""),
-                    }
-                )
+                rows.append(self.make_qa_record(r))
         return rows
 
 
@@ -237,7 +232,7 @@ class DirectoryLoader(BaseLoaderStrategy):
         LOGGER.info(f"Scanning local directory '{config.path_or_repo}'...")
         return SimpleDirectoryReader(config.path_or_repo).load_data()
 
-    def load_qa(self, config: DataLoaderConfig) -> list[dict]:
+    def load_qa(self, config: DataLoaderConfig) -> list[QARecord]:
         dir_path = Path(config.path_or_repo)
         LOGGER.info(f"Scanning local directory '{dir_path}' for QA dataset...")
 
@@ -295,7 +290,7 @@ class DataLoader:
         split: str = "test",
         limit: int | None = None,
         **kwargs,
-    ) -> list[dict]:
+    ) -> list[QARecord]:
         """Main entry point to load QA pairs."""
         if isinstance(config_or_target, DataLoaderConfig):
             config = config_or_target
@@ -317,39 +312,22 @@ class DataLoader:
         return qa_pairs
 
     @staticmethod
-    def to_qrels_df(qa_pairs: list[dict[str, Any]]) -> pd.DataFrame:
-        """Convert a list of QA pair dicts to a PyTerrier-compatible qrels DataFrame.
+    def to_qrels_df(qa_pairs: list[QARecord]) -> pd.DataFrame:
+        """Convert a list of QARecord objects to a PyTerrier-compatible qrels DataFrame.
 
-        Supports records with:
-        - "doc_id": single document ID (str)
-        - "doc_ids" / "relevant_doc_ids": list of document IDs (list[str])
-
-        Returns DataFrame with columns: ['qid', 'docno', 'label'] where label=1.
+        Returns DataFrame with columns: ['qid', 'docno', 'label', 'rank', 'query'] where label=1.
         """
-        rows = []
-        for r in qa_pairs:
-            qid = str(r.get("query_id") or r.get("id") or "")
-            if not qid:
-                continue
-            doc_ids: list[str] = []
-            if "relevant_doc_ids" in r and isinstance(r["relevant_doc_ids"], list):
-                doc_ids.extend(str(d) for d in r["relevant_doc_ids"] if d)
-            elif "doc_ids" in r and isinstance(r["doc_ids"], list):
-                doc_ids.extend(str(d) for d in r["doc_ids"] if d)
-            elif "doc_id" in r and r["doc_id"]:
-                doc_ids.append(str(r["doc_id"]))
-
-            for did in doc_ids:
-                rows.append({"qid": str(qid), "docno": str(did), "label": 1})
+        rows: list[dict[str, Any]] = [r.to_pyterrier() for r in qa_pairs]
 
         if not rows:
-            return pd.DataFrame(columns=["qid", "docno", "label"]).astype(
-                {"qid": "str", "docno": "str", "label": "int64"}
+            return pd.DataFrame(columns=["qid", "docno", "label", "rank"]).astype(
+                {"qid": "str", "docno": "str", "label": "int8", "rank": "int8"}
             )
         df = pd.DataFrame(rows)
         df["qid"] = df["qid"].astype(str)
         df["docno"] = df["docno"].astype(str)
-        df["label"] = df["label"].astype(int)
+        df["label"] = df["label"].astype("int8")
+        df["rank"] = df["rank"].astype("int8")
         return df
 
     def load_qrels(
@@ -455,4 +433,5 @@ __all__ = [
     "DataLoaderConfig",
     "DataSourceType",
     "DataPreset",
+    "QARecord",
 ]
