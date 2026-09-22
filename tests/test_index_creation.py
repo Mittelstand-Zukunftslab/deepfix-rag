@@ -350,7 +350,7 @@ def test_cli_index_graph_config_json_and_retrieve(
     workflow = RAGWorkflow(config=cfg)
     graph_store = workflow._get_graph_store()
     assert graph_store is not None
-    assert type(graph_store).__name__ == "FalkorDBHostPortPropertyGraphStore"
+    assert type(graph_store).__name__ == "FalkorDBPropertyGraphStore"
 
     async def _query_existing():
         index = workflow._load_existing_index()
