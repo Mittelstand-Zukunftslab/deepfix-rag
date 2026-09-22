@@ -129,8 +129,12 @@ class DataLoaderConfig(BaseModel):
     source_type: DataSourceType | None = Field(
         default=None, description="Inferred automatically from path_or_repo if not provided."
     )
-    enable_embedding_pca: bool = Field(default=True, description="Whether to enable PCA for embedding.")
-    embedding_pca_components: int = Field(default=200, ge=1, le=1000, description="Number of PCA components for embedding.")
+    enable_embedding_pca: bool = Field(
+        default=True, description="Whether to enable PCA for embedding."
+    )
+    embedding_pca_components: int = Field(
+        default=200, ge=1, le=1000, description="Number of PCA components for embedding."
+    )
 
     @model_validator(mode="after")
     def infer_source_type(self) -> "DataLoaderConfig":
@@ -317,25 +321,12 @@ class RetrievalConfig(BaseModel):
         le=3,
         description="Number of knowledge graph traversal hops.",
     )
-    graph_fusion_weights: list[float] = Field(
-        default_factory=lambda: [0.5, 0.5],
-        description="Sub-retriever fusion weights for Graph RAG.",
-    )
     bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")
     language: str = Field(default="german", description="Language of the documents.")
     load_if_exists: bool = Field(
         default=True,
         description="Load existing index if present rather than re-ingesting corpus.",
     )
-
-    @model_validator(mode="after")
-    def validate_graph_fusion_weights(self) -> "RetrievalConfig":
-        if self.graph_fusion_weights:
-            if any(w < 0 for w in self.graph_fusion_weights):
-                raise ValueError("Graph fusion weights must be non-negative.")
-            if sum(self.graph_fusion_weights) <= 0:
-                raise ValueError("Graph fusion weights sum must be strictly positive.")
-        return self
 
 
 class EvalConfig(BaseModel):

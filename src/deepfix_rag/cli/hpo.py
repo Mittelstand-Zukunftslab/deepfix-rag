@@ -70,7 +70,10 @@ def hpo_cmd(
     tune_chunking: bool = typer.Option(
         False,
         "--tune-chunking",
-        help="Sample and optimize document chunk size and overlap across trials.",
+        help=(
+            "Sample and optimize chunking strategy and strategy-specific hyperparameters "
+            "(size, overlap, semantic buffer/percentile) across trials."
+        ),
     ),
     output: Path | None = typer.Option(
         None,

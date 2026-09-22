@@ -19,6 +19,7 @@ from deepfix_rag.config.hpo import (
 )
 from deepfix_rag.config.mutator import apply_mutation
 from deepfix_rag.config.schema import (
+    ChunkingStrategy,
     FusionMode,
     RAGConfig,
     RetrievalBackend,
@@ -39,6 +40,9 @@ def test_dense_search_space_defaults():
     assert space.chunk_size_max == 2048
     assert space.chunk_overlap_min == 0
     assert space.chunk_overlap_max == 256
+    assert ChunkingStrategy.HIERARCHICAL in space.strategies
+    assert space.semantic_buffer_size_min == 1
+    assert space.semantic_buffer_size_max == 3
     assert space.top_k_min == 1
     assert space.top_k_max == 50
 
@@ -67,6 +71,9 @@ def test_graph_search_space_defaults():
     assert space.traversal_hops_max == 3
     assert space.dense_weight_min == 0.0
     assert space.dense_weight_max == 1.0
+    assert space.graph_weight_min == 0.0
+    assert space.graph_weight_max == 1.0
+    assert ChunkingStrategy.HIERARCHICAL not in space.strategies
     assert FusionMode.RECIPROCAL_RANK in space.fusion_modes
 
 
@@ -87,30 +94,48 @@ def test_invalid_combinations_rejected():
     with pytest.raises(ValueError):
         GraphSearchSpace(dense_weight_min=0.8, dense_weight_max=0.2)
 
-    # Invalid graph fusion weights (negative)
-    with pytest.raises(ValueError, match="Graph fusion weights must be non-negative"):
-        apply_mutation(RAGConfig(), {"retrieval.graph_fusion_weights": [-0.5, 1.5]})
+    with pytest.raises(ValueError, match="incompatible with complementary fusion"):
+        GraphSearchSpace(
+            dense_weight_min=0.9,
+            dense_weight_max=1.0,
+            graph_weight_min=0.9,
+            graph_weight_max=1.0,
+        )
+
+
+def _assert_chunking_params(params: dict[str, object], *, strategy: ChunkingStrategy) -> None:
+    assert params["chunking.strategy"] == strategy.value
+    if strategy in (ChunkingStrategy.SENTENCE, ChunkingStrategy.FIXED):
+        assert "chunking.size" in params
+        assert "chunking.overlap" in params
+        assert params["chunking.overlap"] < params["chunking.size"]
+        assert "chunking.semantic_buffer_size" not in params
+    elif strategy in (ChunkingStrategy.RECURSIVE, ChunkingStrategy.HIERARCHICAL):
+        assert "chunking.size" in params
+        assert "chunking.overlap" not in params
+        assert "chunking.semantic_buffer_size" not in params
+    elif strategy == ChunkingStrategy.SEMANTIC:
+        assert "chunking.size" not in params
+        assert "chunking.overlap" not in params
+        assert "chunking.semantic_buffer_size" in params
+        assert "chunking.semantic_breakpoint_percentile" in params
 
 
 @pytest.mark.unit
 def test_search_space_suggest_parameters_dense():
-    """Verify Optuna suggestion generation for dense paradigm."""
-    hpo_space = HPOSearchSpace()
-    study = optuna.create_study(direction="maximize")
-    trial = study.ask()
-
-    params = hpo_space.suggest_parameters(
-        trial, paradigm=RetrievalBackend.DENSE, tune_chunking=True
-    )
-    assert "retrieval.top_k" in params
-    assert "chunking.size" in params
-    assert "chunking.overlap" in params
-    assert params["chunking.overlap"] < params["chunking.size"]
-
-    # Applying to base RAGConfig must succeed without validation errors
-    cfg = apply_mutation(RAGConfig(), params)
-    assert cfg.retrieval.top_k == params["retrieval.top_k"]
-    assert cfg.chunking.size == params["chunking.size"]
+    """Verify Optuna suggestion generation for dense paradigm across chunking strategies."""
+    for strategy in ChunkingStrategy:
+        hpo_space = HPOSearchSpace(dense=DenseSearchSpace(strategies=[strategy]))
+        study = optuna.create_study(direction="maximize")
+        trial = study.ask()
+        params = hpo_space.suggest_parameters(
+            trial, paradigm=RetrievalBackend.DENSE, tune_chunking=True
+        )
+        assert "retrieval.top_k" in params
+        _assert_chunking_params(params, strategy=strategy)
+        cfg = apply_mutation(RAGConfig(), params)
+        assert cfg.retrieval.top_k == params["retrieval.top_k"]
+        assert cfg.chunking.strategy == strategy
 
 
 @pytest.mark.unit
@@ -151,13 +176,12 @@ def test_search_space_suggest_parameters_graph():
     assert "retrieval.fusion_mode" in params
     assert "retrieval.dense_weight" in params
     assert "retrieval.graph_weight" in params
-    assert "retrieval.graph_fusion_weights" in params
 
     cfg = apply_mutation(RAGConfig(), params)
     assert cfg.retrieval.graph_traversal_hops == params["retrieval.graph_traversal_hops"]
     assert cfg.retrieval.dense_weight == params["retrieval.dense_weight"]
     assert cfg.retrieval.graph_weight == params["retrieval.graph_weight"]
-    assert len(cfg.retrieval.graph_fusion_weights) == 2
+    assert abs(params["retrieval.dense_weight"] + params["retrieval.graph_weight"] - 1.0) < 1e-3
 
 
 @pytest.mark.unit
@@ -186,6 +210,42 @@ def test_search_space_suggest_parameters_mixed():
     assert cfg.retrieval.dense_weight == params["retrieval.dense_weight"]
     assert cfg.retrieval.bm25_weight == params["retrieval.bm25_weight"]
     assert cfg.retrieval.graph_weight == params["retrieval.graph_weight"]
+
+
+@pytest.mark.unit
+def test_graph_tune_chunking_excludes_hierarchical():
+    """Graph chunking HPO must never sample hierarchical strategy."""
+    hpo_space = HPOSearchSpace(
+        graph=GraphSearchSpace(
+            strategies=[ChunkingStrategy.HIERARCHICAL, ChunkingStrategy.RECURSIVE]
+        )
+    )
+    study = optuna.create_study(direction="maximize")
+    trial = study.ask()
+    params = hpo_space.suggest_parameters(
+        trial, paradigm=RetrievalBackend.GRAPH, tune_chunking=True
+    )
+    assert "chunking.strategy" in params
+    assert params["chunking.strategy"] != ChunkingStrategy.HIERARCHICAL.value
+    _assert_chunking_params(params, strategy=ChunkingStrategy(params["chunking.strategy"]))
+    apply_mutation(RAGConfig(), params)
+
+
+@pytest.mark.unit
+def test_mixed_tune_chunking_excludes_hierarchical():
+    """Mixed retrieval must drop hierarchical even when dense space includes it."""
+    hpo_space = HPOSearchSpace(
+        dense=DenseSearchSpace(
+            strategies=[ChunkingStrategy.HIERARCHICAL, ChunkingStrategy.SENTENCE]
+        )
+    )
+    study = optuna.create_study(direction="maximize")
+    trial = study.ask()
+    params = hpo_space.suggest_parameters(
+        trial, paradigm=RetrievalBackend.MIXED, tune_chunking=True
+    )
+    assert params["chunking.strategy"] == ChunkingStrategy.SENTENCE.value
+    _assert_chunking_params(params, strategy=ChunkingStrategy.SENTENCE)
 
 
 @pytest.mark.unit
@@ -298,6 +358,10 @@ def test_load_hpo_config_declarative_yaml():
     assert hpo_cfg.study_name == "deepfix_hpo_study"
     assert hpo_cfg.n_trials == 10
     assert hpo_cfg.search_space.hybrid.bm25_k1_min == 0.5
+    assert hpo_cfg.search_space.graph.graph_weight_min == 0.0
+    assert hpo_cfg.search_space.graph.graph_weight_max == 1.0
+    assert ChunkingStrategy.HIERARCHICAL not in hpo_cfg.search_space.graph.strategies
+    assert ChunkingStrategy.SEMANTIC in hpo_cfg.search_space.dense.strategies
 
 
 @pytest.mark.unit

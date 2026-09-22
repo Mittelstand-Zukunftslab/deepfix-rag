@@ -2,8 +2,11 @@ version: "1.0"
 
 chunking:
   strategy: recursive
-  size: 512
+  size: 1024
   overlap: 64
+  semantic_buffer_size: 1
+  semantic_breakpoint_percentile: 95
+  hierarchical_chunk_sizes: null
 
 embedding:
   batch_size: 32
@@ -25,7 +28,7 @@ rerank:
 
 generation:
   temperature: 0.0
-  max_tokens: 1024
+  max_tokens: 4096
   system_prompt: null
   response_synthesizer: simple_summarize
 

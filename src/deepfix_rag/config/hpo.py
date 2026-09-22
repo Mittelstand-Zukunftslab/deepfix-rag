@@ -8,47 +8,107 @@ from pydantic import BaseModel, Field, model_validator
 import yaml
 
 from deepfix_rag.config.schema import (
+    ChunkingStrategy,
     FusionMode,
     RAGConfig,
     RetrievalBackend,
 )
 
+_DEFAULT_CHUNKING_STRATEGIES: list[ChunkingStrategy] = [
+    ChunkingStrategy.RECURSIVE,
+    ChunkingStrategy.SENTENCE,
+    ChunkingStrategy.FIXED,
+    ChunkingStrategy.SEMANTIC,
+    ChunkingStrategy.HIERARCHICAL,
+]
 
-class DenseSearchSpace(BaseModel):
-    """Parameter bounds for Dense vector retrieval paradigm."""
+_GRAPH_CHUNKING_STRATEGIES: list[ChunkingStrategy] = [
+    ChunkingStrategy.RECURSIVE,
+    ChunkingStrategy.SENTENCE,
+    ChunkingStrategy.FIXED,
+    ChunkingStrategy.SEMANTIC,
+]
 
-    chunk_size_min: int = Field(default=128, ge=64, le=4096)
-    chunk_size_max: int = Field(default=2048, ge=64, le=4096)
+
+class ChunkingSearchSpace(BaseModel):
+    """Parameter bounds for strategy-conditional document chunking."""
+
+    strategies: list[ChunkingStrategy] = Field(
+        default_factory=lambda: list(_DEFAULT_CHUNKING_STRATEGIES),
+        description="Chunking strategies eligible for sampling when tune_chunking is enabled.",
+    )
+    chunk_size_min: int = Field(default=512, ge=64, le=16000)
+    chunk_size_max: int = Field(default=4096, ge=64, le=16000)
     chunk_size_step: int = Field(default=64, ge=1)
 
     chunk_overlap_min: int = Field(default=0, ge=0)
     chunk_overlap_max: int = Field(default=256, ge=0)
     chunk_overlap_step: int = Field(default=16, ge=1)
 
-    top_k_min: int = Field(default=1, ge=1)
-    top_k_max: int = Field(default=50, ge=1)
+    semantic_buffer_size_min: int = Field(default=1, ge=1)
+    semantic_buffer_size_max: int = Field(default=3, ge=1)
+    semantic_breakpoint_percentile_min: int = Field(default=80, ge=0, le=100)
+    semantic_breakpoint_percentile_max: int = Field(default=99, ge=0, le=100)
 
     @model_validator(mode="after")
-    def validate_bounds(self) -> "DenseSearchSpace":
+    def validate_chunking_bounds(self) -> "ChunkingSearchSpace":
+        if not self.strategies:
+            raise ValueError("strategies must contain at least one chunking strategy")
         if self.chunk_size_min >= self.chunk_size_max:
             raise ValueError("chunk_size_min must be strictly less than chunk_size_max")
         if self.chunk_overlap_min > self.chunk_overlap_max:
             raise ValueError("chunk_overlap_min must be <= chunk_overlap_max")
-        if self.top_k_min > self.top_k_max:
-            raise ValueError("top_k_min must be <= top_k_max")
+        if self.semantic_buffer_size_min > self.semantic_buffer_size_max:
+            raise ValueError("semantic_buffer_size_min must be <= semantic_buffer_size_max")
+        if self.semantic_breakpoint_percentile_min > self.semantic_breakpoint_percentile_max:
+            raise ValueError(
+                "semantic_breakpoint_percentile_min must be <= semantic_breakpoint_percentile_max"
+            )
         return self
 
-    def suggest_dense(self, trial: optuna.Trial, tune_chunking: bool = False) -> dict[str, Any]:
-        """Sample trial parameters for dense retrieval."""
-        params: dict[str, Any] = {}
+    def suggest_chunking(
+        self,
+        trial: optuna.Trial,
+        *,
+        allow_hierarchical: bool = True,
+    ) -> dict[str, Any]:
+        """Sample strategy-specific chunking overrides for a trial."""
+        choices = [
+            strategy.value if isinstance(strategy, ChunkingStrategy) else str(strategy)
+            for strategy in self.strategies
+        ]
+        if not allow_hierarchical:
+            choices = [
+                choice for choice in choices if choice != ChunkingStrategy.HIERARCHICAL.value
+            ]
+        if not choices:
+            raise ValueError("No chunking strategies available for this retrieval paradigm.")
 
-        if tune_chunking:
-            chunk_size = trial.suggest_int(
-                "chunking.size",
-                self.chunk_size_min,
-                self.chunk_size_max,
-                step=self.chunk_size_step,
+        strategy = trial.suggest_categorical("chunking.strategy", choices)
+        params: dict[str, Any] = {"chunking.strategy": strategy}
+
+        if strategy == ChunkingStrategy.SEMANTIC.value:
+            params["chunking.semantic_buffer_size"] = trial.suggest_int(
+                "chunking.semantic_buffer_size",
+                self.semantic_buffer_size_min,
+                self.semantic_buffer_size_max,
             )
+            params["chunking.semantic_breakpoint_percentile"] = trial.suggest_int(
+                "chunking.semantic_breakpoint_percentile",
+                self.semantic_breakpoint_percentile_min,
+                self.semantic_breakpoint_percentile_max,
+            )
+            return params
+
+        chunk_size = trial.suggest_int(
+            "chunking.size",
+            self.chunk_size_min,
+            self.chunk_size_max,
+            step=self.chunk_size_step,
+        )
+        params["chunking.size"] = chunk_size
+
+        if strategy in (ChunkingStrategy.SENTENCE.value, ChunkingStrategy.FIXED.value):
             raw_max = min(self.chunk_overlap_max, chunk_size - 1)
             step = self.chunk_overlap_step
             max_overlap = max(self.chunk_overlap_min, (raw_max // step) * step)
@@ -58,9 +118,34 @@ class DenseSearchSpace(BaseModel):
                 max_overlap,
                 step=step,
             )
-            params["chunking.size"] = chunk_size
             params["chunking.overlap"] = trial.params["chunking.overlap"]
 
+        return params
+
+
+class DenseSearchSpace(ChunkingSearchSpace):
+    """Parameter bounds for Dense vector retrieval paradigm."""
+
+    top_k_min: int = Field(default=1, ge=1)
+    top_k_max: int = Field(default=50, ge=1)
+
+    @model_validator(mode="after")
+    def validate_dense_bounds(self) -> "DenseSearchSpace":
+        if self.top_k_min > self.top_k_max:
+            raise ValueError("top_k_min must be <= top_k_max")
+        return self
+
+    def suggest_dense(
+        self,
+        trial: optuna.Trial,
+        tune_chunking: bool = False,
+        *,
+        allow_hierarchical: bool = True,
+    ) -> dict[str, Any]:
+        """Sample trial parameters for dense retrieval."""
+        params: dict[str, Any] = {}
+        if tune_chunking:
+            params.update(self.suggest_chunking(trial, allow_hierarchical=allow_hierarchical))
         params["retrieval.top_k"] = trial.suggest_int(
             "retrieval.top_k", self.top_k_min, self.top_k_max
         )
@@ -117,9 +202,13 @@ class HybridSearchSpace(DenseSearchSpace):
         return params
 
 
-class GraphSearchSpace(BaseModel):
+class GraphSearchSpace(ChunkingSearchSpace):
     """Parameter bounds for Property Graph RAG retrieval paradigm."""
 
+    strategies: list[ChunkingStrategy] = Field(
+        default_factory=lambda: list(_GRAPH_CHUNKING_STRATEGIES),
+        description="Chunking strategies eligible for graph HPO; hierarchical is excluded.",
+    )
     extraction_schemas: list[str] = Field(
         default_factory=lambda: ["default", "entity_relationship", "domain_legal"]
     )
@@ -131,6 +220,8 @@ class GraphSearchSpace(BaseModel):
 
     dense_weight_min: float = Field(default=0.0, ge=0.0, le=1.0)
     dense_weight_max: float = Field(default=1.0, ge=0.0, le=1.0)
+    graph_weight_min: float = Field(default=0.0, ge=0.0, le=1.0)
+    graph_weight_max: float = Field(default=1.0, ge=0.0, le=1.0)
 
     fusion_modes: list[FusionMode] = Field(
         default_factory=lambda: [
@@ -144,6 +235,12 @@ class GraphSearchSpace(BaseModel):
     top_k_min: int = Field(default=1, ge=1)
     top_k_max: int = Field(default=50, ge=1)
 
+    def complementary_dense_range(self) -> tuple[float, float]:
+        """Return the feasible dense_weight interval under dense + graph = 1."""
+        low = max(self.dense_weight_min, 1.0 - self.graph_weight_max)
+        high = min(self.dense_weight_max, 1.0 - self.graph_weight_min)
+        return low, high
+
     @model_validator(mode="after")
     def validate_graph_bounds(self) -> "GraphSearchSpace":
         if self.max_paths_per_chunk_min > self.max_paths_per_chunk_max:
@@ -152,42 +249,52 @@ class GraphSearchSpace(BaseModel):
             raise ValueError("traversal_hops_min must be <= traversal_hops_max")
         if self.dense_weight_min > self.dense_weight_max:
             raise ValueError("dense_weight_min must be <= dense_weight_max")
+        if self.graph_weight_min > self.graph_weight_max:
+            raise ValueError("graph_weight_min must be <= graph_weight_max")
         if self.top_k_min > self.top_k_max:
             raise ValueError("top_k_min must be <= top_k_max")
+        low, high = self.complementary_dense_range()
+        if low > high:
+            raise ValueError(
+                "dense_weight and graph_weight bounds are incompatible with complementary fusion "
+                f"(dense in [{self.dense_weight_min}, {self.dense_weight_max}], "
+                f"graph in [{self.graph_weight_min}, {self.graph_weight_max}])."
+            )
         return self
 
     def suggest_graph(self, trial: optuna.Trial, tune_chunking: bool = False) -> dict[str, Any]:
         """Sample trial parameters for graph retrieval."""
-        params: dict[str, Any] = {
-            "retrieval.graph_extraction_schema": trial.suggest_categorical(
-                "retrieval.graph_extraction_schema", self.extraction_schemas
-            ),
-            "retrieval.graph_max_paths_per_chunk": trial.suggest_int(
-                "retrieval.graph_max_paths_per_chunk",
-                self.max_paths_per_chunk_min,
-                self.max_paths_per_chunk_max,
-            ),
-            "retrieval.graph_traversal_hops": trial.suggest_int(
-                "retrieval.graph_traversal_hops",
-                self.traversal_hops_min,
-                self.traversal_hops_max,
-            ),
-            "retrieval.top_k": trial.suggest_int(
-                "retrieval.top_k", self.top_k_min, self.top_k_max
-            ),
-            "retrieval.fusion_mode": trial.suggest_categorical(
-                "retrieval.fusion_mode", [m.value for m in self.fusion_modes]
-            ),
-        }
-        dense_w = trial.suggest_float(
-            "retrieval.dense_weight",
-            self.dense_weight_min,
-            self.dense_weight_max,
+        params: dict[str, Any] = {}
+        if tune_chunking:
+            params.update(self.suggest_chunking(trial, allow_hierarchical=False))
+        params.update(
+            {
+                "retrieval.graph_extraction_schema": trial.suggest_categorical(
+                    "retrieval.graph_extraction_schema", self.extraction_schemas
+                ),
+                "retrieval.graph_max_paths_per_chunk": trial.suggest_int(
+                    "retrieval.graph_max_paths_per_chunk",
+                    self.max_paths_per_chunk_min,
+                    self.max_paths_per_chunk_max,
+                ),
+                "retrieval.graph_traversal_hops": trial.suggest_int(
+                    "retrieval.graph_traversal_hops",
+                    self.traversal_hops_min,
+                    self.traversal_hops_max,
+                ),
+                "retrieval.top_k": trial.suggest_int(
+                    "retrieval.top_k", self.top_k_min, self.top_k_max
+                ),
+                "retrieval.fusion_mode": trial.suggest_categorical(
+                    "retrieval.fusion_mode", [m.value for m in self.fusion_modes]
+                ),
+            }
         )
+        dense_low, dense_high = self.complementary_dense_range()
+        dense_w = trial.suggest_float("retrieval.dense_weight", dense_low, dense_high)
         graph_w = 1.0 - dense_w
         params["retrieval.dense_weight"] = round(dense_w, 4)
         params["retrieval.graph_weight"] = round(graph_w, 4)
-        params["retrieval.graph_fusion_weights"] = [round(dense_w, 4), round(graph_w, 4)]
         return params
 
 
@@ -261,7 +368,9 @@ class HPOSearchSpace(BaseModel):
         elif paradigm_str == RetrievalBackend.GRAPH.value:
             return self.graph.suggest_graph(trial, tune_chunking=tune_chunking)
         elif paradigm_str == RetrievalBackend.MIXED.value:
-            dense_params = self.dense.suggest_dense(trial, tune_chunking=tune_chunking)
+            dense_params = self.dense.suggest_dense(
+                trial, tune_chunking=tune_chunking, allow_hierarchical=False
+            )
             params = {**dense_params}
             params["retrieval.bm25_k1"] = trial.suggest_float(
                 "retrieval.bm25_k1", self.hybrid.bm25_k1_min, self.hybrid.bm25_k1_max
@@ -282,9 +391,17 @@ class HPOSearchSpace(BaseModel):
                 self.graph.traversal_hops_min,
                 self.graph.traversal_hops_max,
             )
-            dense_w = trial.suggest_float("retrieval.dense_weight", 0.0, 1.0)
+            dense_w = trial.suggest_float(
+                "retrieval.dense_weight",
+                self.hybrid.dense_weight_min,
+                self.hybrid.dense_weight_max,
+            )
             bm25_w = trial.suggest_float("retrieval.bm25_weight", 0.0, 1.0)
-            graph_w = trial.suggest_float("retrieval.graph_weight", 0.0, 1.0)
+            graph_w = trial.suggest_float(
+                "retrieval.graph_weight",
+                self.graph.graph_weight_min,
+                self.graph.graph_weight_max,
+            )
             params["retrieval.dense_weight"] = round(dense_w, 4)
             params["retrieval.bm25_weight"] = round(bm25_w, 4)
             params["retrieval.graph_weight"] = round(graph_w, 4)
@@ -312,7 +429,11 @@ class HPOConfig(BaseModel):
         default=10, ge=1, description="Number of Optuna optimization trials to execute."
     )
     tune_chunking: bool = Field(
-        default=False, description="Whether to optimize chunk size & overlap across trials."
+        default=False,
+        description=(
+            "Whether to optimize chunking strategy and strategy-specific hyperparameters "
+            "(size, overlap, semantic buffer/percentile) across trials."
+        ),
     )
     retrieval_only: bool = Field(
         default=False,
