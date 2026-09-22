@@ -87,7 +87,7 @@ def test_retrieval_bit_width_validation():
 
 @pytest.mark.parametrize(
     "config_filename",
-    ["default.yaml", "dense.yaml", "graph.yaml", "rerank.yaml"],
+    ["default.yaml", "dense.yaml", "graph.yaml", "graph_falkordb.yml", "rerank.yaml"],
 )
 def test_predefined_config_files_valid(config_filename: str):
     """Verify all repository configuration templates match RAGConfig schema."""

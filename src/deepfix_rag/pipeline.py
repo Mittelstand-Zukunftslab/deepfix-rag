@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 from pathlib import Path
+import time
 from typing import Any
 
 import lancedb
@@ -13,13 +14,14 @@ from llama_index.core import (
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
-from llama_index.core.graph_stores.types import GraphStore
+from llama_index.core.graph_stores.types import GraphStore, PropertyGraphStore
 from llama_index.core.indices.base import BaseIndex
 from llama_index.core.indices.property_graph import (
     LLMSynonymRetriever,
     SchemaLLMPathExtractor,
     VectorContextRetriever,
 )
+from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.response_synthesizers import (
     CompactAndRefine,
     Refine,
@@ -33,7 +35,7 @@ from llama_index.core.retrievers.fusion_retriever import (
     FUSION_MODES,
     QueryFusionRetriever,
 )
-from llama_index.core.schema import NodeWithScore
+from llama_index.core.schema import BaseNode, NodeWithScore
 from llama_index.core.vector_stores.types import BasePydanticVectorStore
 from llama_index.core.workflow import (
     Context,
@@ -44,7 +46,7 @@ from llama_index.core.workflow import (
     step,
 )
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.graph_stores.falkordb import FalkorDBGraphStore
+from llama_index.graph_stores.falkordb import FalkorDBGraphStore, FalkorDBPropertyGraphStore
 from llama_index.graph_stores.memgraph import MemgraphPropertyGraphStore
 from llama_index.llms.litellm import LiteLLM
 from llama_index.postprocessor.cohere_rerank import CohereRerank
@@ -86,6 +88,62 @@ class RetrievalResult(BaseModel):
     text: str = Field(..., description="The text of the document")
 
 
+class ChunkStatistics(BaseModel):
+    """Chunking statistics captured during index build."""
+
+    count: int = Field(..., ge=0, description="Number of chunks written to the index.")
+    strategy: str = Field(..., description="Chunking strategy name.")
+    size: int = Field(..., ge=0, description="Configured chunk size.")
+    overlap: int = Field(..., ge=0, description="Configured chunk overlap.")
+
+
+class IndexBuildMetadata(BaseModel):
+    """Structured metadata returned by index builds."""
+
+    document_count: int = Field(..., ge=0, description="Number of source documents ingested.")
+    chunk_statistics: ChunkStatistics
+    build_duration_seconds: float = Field(
+        ..., ge=0.0, description="Wall-clock duration of the index build."
+    )
+    storage_bytes: int = Field(
+        ..., ge=0, description="On-disk footprint of the local index directory."
+    )
+    paradigm: str = Field(..., description="Retrieval backend used for the build.")
+    embedding_model: str = Field(..., description="Embedding model identifier.")
+    reranker_model: str = Field(..., description="Configured re-ranker model identifier.")
+
+
+class ConfigurableRRFFusionRetriever(QueryFusionRetriever):
+    """QueryFusionRetriever that applies configurable reciprocal-rank fusion constant c."""
+
+    def __init__(self, *args: Any, rrf_c: int = 60, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.rrf_c = rrf_c
+
+    def _reciprocal_rerank_fusion(
+        self, results: dict[tuple[str, int], list[NodeWithScore]]
+    ) -> list[NodeWithScore]:
+        """Apply reciprocal rank fusion using the configured constant c."""
+        k = float(self.rrf_c)
+        fused_scores: dict[str, float] = {}
+        hash_to_node: dict[str, NodeWithScore] = {}
+
+        for nodes_with_scores in results.values():
+            for rank, node_with_score in enumerate(
+                sorted(nodes_with_scores, key=lambda x: x.score or 0.0, reverse=True)
+            ):
+                node_hash = node_with_score.node.hash
+                hash_to_node[node_hash] = node_with_score
+                fused_scores[node_hash] = fused_scores.get(node_hash, 0.0) + 1.0 / (rank + k)
+
+        reranked_results = dict(sorted(fused_scores.items(), key=lambda x: x[1], reverse=True))
+        reranked_nodes: list[NodeWithScore] = []
+        for node_hash, score in reranked_results.items():
+            reranked_nodes.append(hash_to_node[node_hash])
+            reranked_nodes[-1].score = score
+        return reranked_nodes
+
+
 class CustomLiteLLM(LiteLLM):
     custom_context_window: int = settings.LLM_CONTEXT_WINDOW
 
@@ -110,13 +168,15 @@ class RAGWorkflow(Workflow):
         config: RAGConfig | None = None,
         llm: BaseLLM | None = None,
         embed_model: BaseEmbedding | None = None,
+        timeout: float | None = 600.0,
         **kwargs: Any,
     ):
-        super().__init__(**kwargs)
+        super().__init__(timeout=timeout, **kwargs)
         self.config = config or RAGConfig()
         self.llm = llm
         self.embed_model = embed_model
         self._index: BaseIndex | None = None
+        self.last_build_metadata: IndexBuildMetadata | None = None
 
     def _get_embed_model(self) -> BaseEmbedding:
         if self.embed_model is not None:
@@ -179,35 +239,57 @@ class RAGWorkflow(Workflow):
         else:
             raise ValueError("Invalid vector store")
 
-    def _get_graph_store(self) -> GraphStore:
+    def _normalize_memgraph_url(self, url: str) -> str:
+        """Normalize configured Memgraph URLs to a neo4j-driver compatible scheme.
+
+        Settings and the PRD expose an HTTP(S) Memgraph endpoint. LlamaIndex's
+        ``MemgraphPropertyGraphStore`` uses the Neo4j/Bolt driver, which only
+        accepts ``bolt`` / ``neo4j`` schemes, so map http(s) to bolt(+s).
+        """
+        normalized = url.strip()
+        lower = normalized.lower()
+        if lower.startswith("https://"):
+            return "bolt+s://" + normalized[len("https://") :]
+        if lower.startswith("http://"):
+            return "bolt://" + normalized[len("http://") :]
+        return normalized
+
+    def _falkordb_url(self) -> str:
+        """Build a Redis-compatible FalkorDB URL from host/port settings."""
+        return f"redis://{settings.FALKORDB_HOST}:{settings.FALKORDB_PORT}"
+
+    def _get_graph_store(self) -> GraphStore | PropertyGraphStore | None:
         if self.config.retrieval.graph_store == GraphStoreType.MEMGRAPH:
             return MemgraphPropertyGraphStore(
-                url=settings.MEMGRAPH_URL,
+                url=self._normalize_memgraph_url(settings.MEMGRAPH_URL),
                 username=settings.MEMGRAPH_USERNAME,
                 password=settings.MEMGRAPH_PASSWORD,
             )
-        elif self.config.retrieval.graph_store == GraphStoreType.FALKORDB:
-            return FalkorDBGraphStore(
-                hostname=settings.FALKORDB_HOST,
-                port=settings.FALKORDB_PORT,
-                username=settings.FALKORDB_USERNAME,
-                password=settings.FALKORDB_PASSWORD,
+        if self.config.retrieval.graph_store == GraphStoreType.FALKORDB:
+            falkor_kwargs: dict[str, Any] = {}
+            if settings.FALKORDB_USERNAME:
+                falkor_kwargs["username"] = settings.FALKORDB_USERNAME
+            if settings.FALKORDB_PASSWORD:
+                falkor_kwargs["password"] = settings.FALKORDB_PASSWORD
+            return FalkorDBPropertyGraphStore(
+                url=self._falkordb_url(),
                 database=settings.FALKORDB_DATABASE,
+                **falkor_kwargs,
             )
         return None
 
     def _get_storage_context(self, persist_dir=None) -> StorageContext:
         graph_store = self._get_graph_store()
+        uses_property_graph = self.config.retrieval.graph_store in (
+            GraphStoreType.MEMGRAPH,
+            GraphStoreType.FALKORDB,
+        )
         return StorageContext.from_defaults(
             persist_dir=persist_dir,
-            graph_store=graph_store
-            if self.config.retrieval.graph_store == GraphStoreType.FALKORDB
-            else None,
+            graph_store=graph_store if isinstance(graph_store, FalkorDBGraphStore) else None,
             index_store=None,
             vector_store=self._get_vector_store(),
-            property_graph_store=graph_store
-            if self.config.retrieval.graph_store == GraphStoreType.MEMGRAPH
-            else None,
+            property_graph_store=graph_store if uses_property_graph else None,
             image_store=None,  # images of scanned PDFs
         )
 
@@ -255,6 +337,7 @@ class RAGWorkflow(Workflow):
             return PropertyGraphIndex.from_existing(
                 property_graph_store=graph_store,
                 embed_model=self._get_embed_model(),
+                llm=self._get_llm(),
             )
         else:
             vector_store = self._get_vector_store()
@@ -263,9 +346,18 @@ class RAGWorkflow(Workflow):
                 embed_model=self._get_embed_model(),
             )
 
+    def _get_node_parser(self) -> SentenceSplitter:
+        """Build a SentenceSplitter from the configured chunking parameters."""
+        return SentenceSplitter(
+            chunk_size=self.config.chunking.size,
+            chunk_overlap=self.config.chunking.overlap,
+        )
+
     def _build_index(self, documents: list[Document], storage_context=None, **kwargs) -> BaseIndex:
         if storage_context is None:
             storage_context = self._get_storage_context()
+
+        transformations = [self._get_node_parser()]
 
         if (
             self.config.retrieval.graph_store != GraphStoreType.NONE
@@ -286,6 +378,7 @@ class RAGWorkflow(Workflow):
                 storage_context=storage_context,
                 embed_model=self._get_embed_model(),
                 kg_extractors=[SchemaLLMPathExtractor(**extractor_kwargs)],
+                transformations=transformations,
                 show_progress=True,
             )
         else:
@@ -293,6 +386,7 @@ class RAGWorkflow(Workflow):
                 documents,
                 storage_context=storage_context,
                 embed_model=self._get_embed_model(),
+                transformations=transformations,
             )
         return index
 
@@ -309,17 +403,32 @@ class RAGWorkflow(Workflow):
         else:
             raise ValueError(f"Unsupported index type for dense retriever: {type(index)}")
 
+    def _load_nodes_from_vector_store(self) -> list[BaseNode]:
+        """Load node text from the configured LanceDB vector store for BM25 rebuild."""
+        vector_store = self._get_vector_store()
+        if not hasattr(vector_store, "get_nodes"):
+            return []
+        try:
+            nodes = vector_store.get_nodes()
+            return list(nodes) if nodes else []
+        except Exception as e:
+            LOGGER.debug(f"Failed to load nodes from vector store for BM25: {e}")
+            return []
+
     def _get_bm25_retriever(
         self, index: BaseIndex, top_k: int, language: str = "german"
     ) -> BaseRetriever:
         """Construct a BM25 sparse lexical retriever."""
-        bm25_kwargs = {}
+        bm25_kwargs: dict[str, Any] = {}
         if hasattr(index, "docstore") and len(index.docstore.docs) > 0:
             bm25_kwargs["index"] = index
         elif hasattr(index, "nodes") and len(index.nodes) > 0:
             bm25_kwargs["nodes"] = index.nodes
         else:
-            raise ValueError("No index or docstore found for BM25Retriever")
+            nodes = self._load_nodes_from_vector_store()
+            if not nodes:
+                raise ValueError("No index or docstore found for BM25Retriever")
+            bm25_kwargs["nodes"] = nodes
 
         bm25 = BM25Retriever.from_defaults(
             similarity_top_k=top_k,
@@ -412,7 +521,7 @@ class RAGWorkflow(Workflow):
             bm25_retriever = self._get_bm25_retriever(index, top_k, language)
             fusion_mode_enum = FUSION_MODES(self.config.retrieval.fusion_mode.value)
 
-            return QueryFusionRetriever(
+            return ConfigurableRRFFusionRetriever(
                 [dense_retriever, bm25_retriever],
                 llm=self._get_llm(),
                 retriever_weights=[
@@ -423,6 +532,7 @@ class RAGWorkflow(Workflow):
                 num_queries=1,
                 use_async=use_async,
                 similarity_top_k=top_k,
+                rrf_c=self.config.retrieval.rrf_c,
             )
 
         elif backend == RetrievalBackend.MIXED:
@@ -445,7 +555,7 @@ class RAGWorkflow(Workflow):
                 w_bm25 = round(w_bm25 / total_weight, 4)
                 w_graph = round(1.0 - w_dense - w_bm25, 4)
 
-            return QueryFusionRetriever(
+            return ConfigurableRRFFusionRetriever(
                 [dense_retriever, bm25_retriever, graph_retriever],
                 llm=self._get_llm(),
                 retriever_weights=[w_dense, w_bm25, w_graph],
@@ -453,6 +563,7 @@ class RAGWorkflow(Workflow):
                 num_queries=1,
                 use_async=use_async,
                 similarity_top_k=top_k,
+                rrf_c=self.config.retrieval.rrf_c,
             )
 
         else:
@@ -476,19 +587,94 @@ class RAGWorkflow(Workflow):
         else:
             raise ValueError("Invalid response synthesizer")
 
+    def _count_index_chunks(self, index: BaseIndex) -> int:
+        """Count chunks stored in the built index."""
+        if hasattr(index, "docstore") and len(index.docstore.docs) > 0:
+            return len(index.docstore.docs)
+        if hasattr(index, "nodes") and index.nodes is not None:
+            return len(index.nodes)
+        nodes = self._load_nodes_from_vector_store()
+        if nodes:
+            return len(nodes)
+        try:
+            if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
+                vector_store = self._get_vector_store()
+                conn = getattr(vector_store, "_connection", None)
+                table_name = getattr(vector_store, "_table_name", None)
+                if conn is not None and table_name is not None:
+                    tables_res = (
+                        conn.list_tables() if hasattr(conn, "list_tables") else conn.table_names()
+                    )
+                    tables = getattr(tables_res, "tables", tables_res)
+                    tables = list(tables) if not isinstance(tables, list) else tables
+                    if table_name in tables:
+                        tbl = conn.open_table(table_name)
+                        return int(tbl.count_rows() if hasattr(tbl, "count_rows") else len(tbl))
+        except Exception as e:
+            LOGGER.debug(f"Failed to count LanceDB rows for chunk statistics: {e}")
+        return 0
+
+    def _compute_storage_bytes(self) -> int:
+        """Sum on-disk bytes for a local LanceDB index directory."""
+        uri = self.config.retrieval.lancedb_index_dir
+        if str(uri).startswith("s3://"):
+            return 0
+        path = Path(uri)
+        if not path.exists():
+            return 0
+        return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+    def _record_build_metadata(
+        self,
+        *,
+        document_count: int,
+        chunk_count: int,
+        build_duration_seconds: float,
+    ) -> IndexBuildMetadata:
+        """Persist and return index build metadata for CLI consumers."""
+        backend = self.config.retrieval.backend
+        paradigm = backend.value if hasattr(backend, "value") else str(backend)
+        metadata = IndexBuildMetadata(
+            document_count=document_count,
+            chunk_statistics=ChunkStatistics(
+                count=chunk_count,
+                strategy=self.config.chunking.strategy,
+                size=self.config.chunking.size,
+                overlap=self.config.chunking.overlap,
+            ),
+            build_duration_seconds=build_duration_seconds,
+            storage_bytes=self._compute_storage_bytes(),
+            paradigm=paradigm,
+            embedding_model=settings.EMBEDDING_MODEL,
+            reranker_model=settings.COHERE_MODEL,
+        )
+        self.last_build_metadata = metadata
+        return metadata
+
     @step
     async def ingestion(self, ctx: Context, ev: StartEvent) -> StopEvent | None:
         """Entry point for Ingestion."""
         ingest: bool = ev.get("ingest", False)
         if ingest:
+            started = time.perf_counter()
+            document_count = 0
             if self.config.retrieval.load_if_exists and self._index_exists():
                 LOGGER.info("Existing index detected. Loading pre-built index...")
                 index = self._load_existing_index()
+                document_count = self._count_index_chunks(index)
             else:
                 LOGGER.info("Ingesting corpus documents...")
                 documents = DataLoader().load_corpus(self.config.data)
-                index = self._build_index(documents)
+                document_count = len(documents)
+                # PropertyGraph extraction and some LLM clients call asyncio.run()
+                # internally; run the sync build off the workflow event loop.
+                index = await asyncio.to_thread(self._build_index, documents)
             self._index = index
+            self._record_build_metadata(
+                document_count=document_count,
+                chunk_count=self._count_index_chunks(index),
+                build_duration_seconds=time.perf_counter() - started,
+            )
             return StopEvent(result=index)
         else:
             return None

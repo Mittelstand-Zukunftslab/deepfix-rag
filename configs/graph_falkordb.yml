@@ -1,0 +1,51 @@
+version: "1.0"
+
+chunking:
+  strategy: recursive
+  size: 512
+  overlap: 64
+
+embedding:
+  batch_size: 32
+
+retrieval:
+  backend: graph
+  vector_store: lancedb
+  graph_store: falkordb
+  lancedb_table_name: documents
+  lancedb_index_dir: s3://deepfix-index/dev
+  top_k: 10
+  bit_width: 4
+  language: german
+  load_if_exists: true
+
+rerank:
+  enabled: false
+  top_n: 5
+
+generation:
+  temperature: 0.0
+  max_tokens: 4096
+  system_prompt: null
+  response_synthesizer: simple_summarize
+
+data:
+  path_or_repo: HF:wirthual/dip-bundestag
+  split: train
+  limit: null
+  source_type: huggingface
+
+eval:
+  retrieval_metrics:
+    - ndcg
+    - recall
+  generation_metrics:
+    - faithfulness
+    - context_precision
+    - context_recall
+    - answer_relevancy
+    - contextual_relevancy
+  threshold: 0.7
+  concurrency: 5
+
+retrieval_only: false

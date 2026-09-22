@@ -15,6 +15,7 @@ from deepfix_rag.cli.ui import (
     print_success,
 )
 from deepfix_rag.cli.utils import load_rag_config
+from deepfix_rag.config.settings import settings
 from deepfix_rag.data import DataLoaderConfig
 from deepfix_rag.pipeline import RAGWorkflow
 
@@ -113,8 +114,18 @@ def index_cmd(
             json_output=json_output,
         )
 
+    metadata = workflow.last_build_metadata
     if json_output:
-        print_json({"status": "success", "index_path": str(target_index_dir)})
+        payload: dict = {
+            "status": "success",
+            "index_path": str(target_index_dir),
+            "paradigm": rag_config.retrieval.backend.value,
+            "embedding_model": settings.EMBEDDING_MODEL,
+            "reranker_model": settings.COHERE_MODEL,
+        }
+        if metadata is not None:
+            payload.update(metadata.model_dump(mode="json"))
+        print_json(payload)
     else:
         print_success(
             f"Indexed documents successfully via Workflow into LanceDB at {target_index_dir}."

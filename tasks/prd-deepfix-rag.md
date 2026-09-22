@@ -312,7 +312,7 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 **Acceptance Criteria:**
 - [x] `deepfix-rag index --paradigm dense` builds LanceDB vector index using `Octen 8B` (fine-tuned from `Qwen3-Embedding-8B`) with `qwen3-reranker-4b` re-ranking support.
 - [x] `deepfix-rag index --paradigm hybrid` builds and queries LanceDB dense vectors + BM25 sparse index with tunable RRF fusion.
-- [x] `deepfix-rag index --paradigm graph` builds and queries an in-memory knowledge graph using LlamaIndex's native `PropertyGraphIndex` connected to `MemgraphPropertyGraphStore` via http protocol (`http://localhost:7444`).
+- [x] `deepfix-rag index --paradigm graph` builds and queries an in-memory knowledge graph using LlamaIndex's native `PropertyGraphIndex` connected to `MemgraphPropertyGraphStore` via bolt protocol.
 - [x] Index build metadata (document count, chunk statistics, build duration, storage bytes) is returned in `--json` output.
 
 ### US-005: Failure Mode Diagnostics & DeepFix Service Integration [DONE]
