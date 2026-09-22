@@ -21,7 +21,7 @@ from llama_index.core.indices.property_graph import (
     SchemaLLMPathExtractor,
     VectorContextRetriever,
 )
-from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.node_parser import NodeParser, get_leaf_nodes
 from llama_index.core.response_synthesizers import (
     CompactAndRefine,
     Refine,
@@ -31,6 +31,7 @@ from llama_index.core.response_synthesizers import (
 from llama_index.core.response_synthesizers.base import (
     BaseSynthesizer,
 )
+from llama_index.core.retrievers.auto_merging_retriever import AutoMergingRetriever
 from llama_index.core.retrievers.fusion_retriever import (
     FUSION_MODES,
     QueryFusionRetriever,
@@ -58,6 +59,7 @@ from turbovec.llama_index import TurboQuantVectorStore
 
 from deepfix_rag.config.schema import (
     GRAPH_EXTRACTION_SCHEMAS,
+    ChunkingStrategy,
     GraphStoreType,
     RAGConfig,
     ResponseSynthesizerType,
@@ -65,7 +67,7 @@ from deepfix_rag.config.schema import (
     VectorStoreType,
 )
 from deepfix_rag.config.settings import LOGGER, settings
-from deepfix_rag.data import DataLoader
+from deepfix_rag.data import DataLoader, build_node_parser
 
 
 class RetrieverEvent(Event):
@@ -111,37 +113,6 @@ class IndexBuildMetadata(BaseModel):
     paradigm: str = Field(..., description="Retrieval backend used for the build.")
     embedding_model: str = Field(..., description="Embedding model identifier.")
     reranker_model: str = Field(..., description="Configured re-ranker model identifier.")
-
-
-class ConfigurableRRFFusionRetriever(QueryFusionRetriever):
-    """QueryFusionRetriever that applies configurable reciprocal-rank fusion constant c."""
-
-    def __init__(self, *args: Any, rrf_c: int = 60, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.rrf_c = rrf_c
-
-    def _reciprocal_rerank_fusion(
-        self, results: dict[tuple[str, int], list[NodeWithScore]]
-    ) -> list[NodeWithScore]:
-        """Apply reciprocal rank fusion using the configured constant c."""
-        k = float(self.rrf_c)
-        fused_scores: dict[str, float] = {}
-        hash_to_node: dict[str, NodeWithScore] = {}
-
-        for nodes_with_scores in results.values():
-            for rank, node_with_score in enumerate(
-                sorted(nodes_with_scores, key=lambda x: x.score or 0.0, reverse=True)
-            ):
-                node_hash = node_with_score.node.hash
-                hash_to_node[node_hash] = node_with_score
-                fused_scores[node_hash] = fused_scores.get(node_hash, 0.0) + 1.0 / (rank + k)
-
-        reranked_results = dict(sorted(fused_scores.items(), key=lambda x: x[1], reverse=True))
-        reranked_nodes: list[NodeWithScore] = []
-        for node_hash, score in reranked_results.items():
-            reranked_nodes.append(hash_to_node[node_hash])
-            reranked_nodes[-1].score = score
-        return reranked_nodes
 
 
 class CustomLiteLLM(LiteLLM):
@@ -346,23 +317,40 @@ class RAGWorkflow(Workflow):
                 embed_model=self._get_embed_model(),
             )
 
-    def _get_node_parser(self) -> SentenceSplitter:
-        """Build a SentenceSplitter from the configured chunking parameters."""
-        return SentenceSplitter(
-            chunk_size=self.config.chunking.size,
-            chunk_overlap=self.config.chunking.overlap,
-        )
+    def _get_node_parser(self) -> NodeParser:
+        """Build a node parser from the configured chunking strategy."""
+        embed_model = None
+        if self.config.chunking.strategy == ChunkingStrategy.SEMANTIC:
+            embed_model = self._get_embed_model()
+        return build_node_parser(self.config.chunking, embed_model=embed_model)
 
     def _build_index(self, documents: list[Document], storage_context=None, **kwargs) -> BaseIndex:
+        uses_graph = (
+            self.config.retrieval.graph_store != GraphStoreType.NONE
+            or self.config.retrieval.backend in (RetrievalBackend.GRAPH, RetrievalBackend.MIXED)
+        )
+        if self.config.chunking.strategy == ChunkingStrategy.HIERARCHICAL and uses_graph:
+            raise ValueError(
+                "Hierarchical chunking is not supported with graph or mixed retrieval backends."
+            )
+
         if storage_context is None:
             storage_context = self._get_storage_context()
 
+        if self.config.chunking.strategy == ChunkingStrategy.HIERARCHICAL:
+            parser = self._get_node_parser()
+            all_nodes = parser.get_nodes_from_documents(documents)
+            leaf_nodes = get_leaf_nodes(all_nodes)
+            storage_context.docstore.add_documents(all_nodes)
+            return VectorStoreIndex(
+                leaf_nodes,
+                storage_context=storage_context,
+                embed_model=self._get_embed_model(),
+            )
+
         transformations = [self._get_node_parser()]
 
-        if (
-            self.config.retrieval.graph_store != GraphStoreType.NONE
-            or self.config.retrieval.backend in (RetrievalBackend.GRAPH, RetrievalBackend.MIXED)
-        ):
+        if uses_graph:
             schema_key = str(self.config.retrieval.graph_extraction_schema).lower().strip()
             schema_info = GRAPH_EXTRACTION_SCHEMAS.get(schema_key)
             extractor_kwargs: dict[str, Any] = {
@@ -508,20 +496,20 @@ class RAGWorkflow(Workflow):
         backend = self.config.retrieval.backend
 
         if backend == RetrievalBackend.DENSE:
-            return self._get_dense_retriever(index, top_k)
+            retriever: BaseRetriever = self._get_dense_retriever(index, top_k)
 
         elif backend == RetrievalBackend.BM25:
-            return self._get_bm25_retriever(index, top_k, language)
+            retriever = self._get_bm25_retriever(index, top_k, language)
 
         elif backend == RetrievalBackend.GRAPH:
-            return self._get_graph_retriever(index, top_k)
+            retriever = self._get_graph_retriever(index, top_k)
 
         elif backend == RetrievalBackend.HYBRID:
             dense_retriever = self._get_dense_retriever(index, top_k)
             bm25_retriever = self._get_bm25_retriever(index, top_k, language)
             fusion_mode_enum = FUSION_MODES(self.config.retrieval.fusion_mode.value)
 
-            return ConfigurableRRFFusionRetriever(
+            retriever = QueryFusionRetriever(
                 [dense_retriever, bm25_retriever],
                 llm=self._get_llm(),
                 retriever_weights=[
@@ -532,7 +520,6 @@ class RAGWorkflow(Workflow):
                 num_queries=1,
                 use_async=use_async,
                 similarity_top_k=top_k,
-                rrf_c=self.config.retrieval.rrf_c,
             )
 
         elif backend == RetrievalBackend.MIXED:
@@ -555,7 +542,7 @@ class RAGWorkflow(Workflow):
                 w_bm25 = round(w_bm25 / total_weight, 4)
                 w_graph = round(1.0 - w_dense - w_bm25, 4)
 
-            return ConfigurableRRFFusionRetriever(
+            retriever = QueryFusionRetriever(
                 [dense_retriever, bm25_retriever, graph_retriever],
                 llm=self._get_llm(),
                 retriever_weights=[w_dense, w_bm25, w_graph],
@@ -563,11 +550,16 @@ class RAGWorkflow(Workflow):
                 num_queries=1,
                 use_async=use_async,
                 similarity_top_k=top_k,
-                rrf_c=self.config.retrieval.rrf_c,
             )
 
         else:
             raise ValueError(f"Invalid retrieval backend: {backend}")
+
+        if self.config.chunking.strategy == ChunkingStrategy.HIERARCHICAL and isinstance(
+            index, VectorStoreIndex
+        ):
+            retriever = AutoMergingRetriever(retriever, storage_context=index.storage_context)
+        return retriever
 
     def _get_response_synthesizer(self) -> BaseSynthesizer:
         kwargs = dict(llm=self._get_llm(), streaming=False)
@@ -664,10 +656,9 @@ class RAGWorkflow(Workflow):
                 document_count = self._count_index_chunks(index)
             else:
                 LOGGER.info("Ingesting corpus documents...")
-                documents = DataLoader().load_corpus(self.config.data)
+                documents = DataLoader(self.config.data).load_corpus()
                 document_count = len(documents)
                 # PropertyGraph extraction and some LLM clients call asyncio.run()
-                # internally; run the sync build off the workflow event loop.
                 index = await asyncio.to_thread(self._build_index, documents)
             self._index = index
             self._record_build_metadata(
@@ -723,15 +714,17 @@ class RAGWorkflow(Workflow):
         return RerankEvent(nodes=nodes)
 
     def convert_nodes_to_results(self, nodes: list[NodeWithScore]) -> list[RetrievalResult]:
-        """Convert a list of NodeWithScore objects to standardized RetrievalResult models."""
-        results = []
+        """Convert retrieved nodes to results keyed by parent `doc_id`, never `chunk_id`."""
+        results: list[RetrievalResult] = []
         for node in nodes:
-            doc_id_val = node.node.metadata.get("doc_id", node.node.node_id)
+            inner = node.node
+            metadata: dict = inner.metadata or {}
+            raw_id = metadata.get("doc_id", inner.node_id)
             results.append(
                 RetrievalResult(
-                    doc_id=str(doc_id_val),
-                    score=node.score or 0.0,
-                    text=node.node.get_content(),
+                    doc_id=DataLoader.parent_doc_id(str(raw_id)),
+                    score=node.score,
+                    text=inner.get_content(),
                 )
             )
         return results

@@ -4,7 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from llama_index.core.schema import NodeWithScore, TextNode
+from llama_index.core.retrievers.fusion_retriever import QueryFusionRetriever
 import pytest
 from typer.testing import CliRunner
 import yaml
@@ -14,7 +14,7 @@ from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.config.schema import FusionMode, RAGConfig, RetrievalBackend
 from deepfix_rag.config.settings import settings
 from deepfix_rag.main import app
-from deepfix_rag.pipeline import ConfigurableRRFFusionRetriever, RAGWorkflow
+from deepfix_rag.pipeline import RAGWorkflow
 
 pytestmark = [pytest.mark.cli, pytest.mark.integration]
 
@@ -281,8 +281,7 @@ def test_cli_index_hybrid_default_config_retrieve_and_rrf(
             language=cfg.retrieval.language,
             use_async=True,
         )
-        assert isinstance(retriever, ConfigurableRRFFusionRetriever)
-        assert retriever.rrf_c == cfg.retrieval.rrf_c
+        assert isinstance(retriever, QueryFusionRetriever)
         mode_value = getattr(retriever.mode, "value", retriever.mode)
         assert mode_value == "reciprocal_rerank"
         return await workflow.run(
@@ -293,22 +292,6 @@ def test_cli_index_hybrid_default_config_retrieve_and_rrf(
     nodes = asyncio.run(_ingest_and_query())
     assert nodes
     assert len(nodes) > 0
-
-    # Fast unit-style check that rrf_c changes fused scores without another embed call.
-    node_a = TextNode(text="alpha", id_="a")
-    node_b = TextNode(text="beta", id_="b")
-    ranked = {
-        ("q", 0): [NodeWithScore(node=node_a, score=1.0), NodeWithScore(node=node_b, score=0.5)],
-        ("q", 1): [NodeWithScore(node=node_b, score=1.0), NodeWithScore(node=node_a, score=0.5)],
-    }
-    fusion_low = object.__new__(ConfigurableRRFFusionRetriever)
-    fusion_low.rrf_c = 1
-    fusion_high = object.__new__(ConfigurableRRFFusionRetriever)
-    fusion_high.rrf_c = 100
-    scores_low = {n.node.node_id: n.score for n in fusion_low._reciprocal_rerank_fusion(ranked)}
-    scores_high = {n.node.node_id: n.score for n in fusion_high._reciprocal_rerank_fusion(ranked)}
-    assert scores_low["a"] != scores_high["a"]
-    assert scores_low["b"] != scores_high["b"]
 
 
 def test_cli_index_graph_config_json_and_retrieve(

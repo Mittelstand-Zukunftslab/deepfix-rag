@@ -11,65 +11,77 @@ from deepfix_sdk.ir import InformationRetrievalDataset, LlamaindexModel
 from llama_index.core.schema import Document
 import pandas as pd
 
-from deepfix_rag.config.schema import DataLoaderConfig, RAGConfig
+from deepfix_rag.config.schema import ChunkingConfig, DataLoaderConfig, RAGConfig
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader
 
 
-def run_diagnostics(
-    dataset: str | Path | None = None,
-    config: RAGConfig | Path | str | None = None,
-    server_url: str | None = None,
-    limit: int | None = None,
-) -> APIResponse:
-    """Synchronously run RAG retrieval evaluation and diagnose failures via DeepFixClient following IR tutorial."""
-    # 1. Resolve configuration
-    if isinstance(config, (str, Path)):
-        resolved_config = RAGConfig.from_yaml(config)
-    elif config is None:
-        resolved_config = RAGConfig()
-    else:
-        resolved_config = config.model_copy(deep=True)
+def prepare_ir_dataset(
+    dataset_name: str, chunking_config: ChunkingConfig, data_loader_config: DataLoaderConfig
+) -> InformationRetrievalDataset:
 
-    effective_limit = limit if limit is not None else resolved_config.data.limit
-    if effective_limit is None:
-        effective_limit = 50
-    resolved_config.data.limit = effective_limit
-
-    # 2. Resolve dataset & QA pairs
-    if dataset is None:
-        dataset = resolved_config.data.path_or_repo
-    dataset_path_str = str(dataset)
-
-    dataset_name = Path(dataset_path_str).stem or "rag_benchmark"
-    qa_cfg = DataLoaderConfig(path_or_repo=dataset_path_str, limit=effective_limit)
-    qa_data = DataLoader().load_qa(qa_cfg)
+    loader = DataLoader(data_loader_config)
+    qa_data = loader.load_qa()
     if not qa_data:
-        raise ValueError(f"Dataset '{dataset_path_str}' returned no QA pairs to evaluate.")
+        raise ValueError(
+            f"Dataset '{data_loader_config.path_or_repo}' returned no QA pairs to evaluate."
+        )
 
-    # 3. Resolve corpus
-    corpus_docs = DataLoader().load_corpus(resolved_config.data)
+    gold_ids = list(dict.fromkeys(r.doc_id for r in qa_data))
+
+    # 3. Resolve corpus and chunk for embed-size, keeping parent doc_id on Document.id_
+    corpus_docs = DataLoader.chunk_docs(
+        loader.load_corpus(doc_ids=gold_ids),
+        chunking_config,
+    )
+
+    def _chunk_id(doc: Document) -> str:
+        return str(doc.metadata.get("chunk_id") or f"{doc.id_}::chunk_0")
+
+    def _parent_id(doc: Document) -> str:
+        return DataLoader.parent_doc_id(str(doc.metadata.get("doc_id") or doc.id_))
 
     def corpus_iter():
         for doc in corpus_docs:
-            yield {"docno": doc.id_, "text": doc.text}
+            yield {"docno": _chunk_id(doc), "text": doc.text}
 
-    # 4. Prepare topics and qrels DataFrames (with positive and negative samples)
-    qrels_df: pd.DataFrame = DataLoader.to_qrels_df(qa_data)
-    topics_df = qrels_df[["qid", "query"]].drop_duplicates().reset_index(drop=True)
+    # 4. Prepare topics and qrels DataFrames (positives at parent doc_id, IR rows at chunk_id)
+    gold_qrels_df: pd.DataFrame = DataLoader.to_qrels_df(qa_data)
+    topics_df = gold_qrels_df[["qid", "query"]].drop_duplicates().reset_index(drop=True)
     rng = random.Random(42)
 
-    # Sample negative documents per query from corpus
-    all_corpus_ids = sorted({doc.id_ for doc in corpus_docs})
-    pos_by_qid: dict[str, set[str]] = qrels_df.groupby("qid")["docno"].apply(set).to_dict()
+    chunk_to_parent: dict[str, str] = {_chunk_id(doc): _parent_id(doc) for doc in corpus_docs}
+    parent_to_chunks: dict[str, list[str]] = {}
+    for cid, pid in chunk_to_parent.items():
+        parent_to_chunks.setdefault(pid, []).append(cid)
+
+    expanded_rows: list[dict[str, Any]] = []
+    for row in gold_qrels_df.itertuples(index=False):
+        parent_docno = str(row.docno)
+        for cid in parent_to_chunks.get(parent_docno, []):
+            expanded_rows.append(
+                {
+                    "qid": row.qid,
+                    "docno": cid,
+                    "label": 1,
+                    "rank": row.rank,
+                    "query": row.query,
+                }
+            )
+    qrels_df = pd.DataFrame(expanded_rows, columns=["qid", "docno", "label", "rank", "query"])
+
+    pos_parents_by_qid: dict[str, set[str]] = (
+        gold_qrels_df.groupby("qid")["docno"].apply(set).to_dict()
+    )
+    all_chunk_ids = sorted(chunk_to_parent)
     negatives_per_query = 2
     neg_rows: list[dict[str, Any]] = []
 
     for _, row in topics_df.iterrows():
         qid = row["qid"]
         query = row["query"]
-        pos_ids = pos_by_qid.get(qid, set())
-        candidates = [did for did in all_corpus_ids if did not in pos_ids]
+        pos_parents = pos_parents_by_qid.get(qid, set())
+        candidates = [cid for cid in all_chunk_ids if chunk_to_parent[cid] not in pos_parents]
         if candidates:
             sampled = rng.sample(candidates, min(negatives_per_query, len(candidates)))
             for neg_id in sampled:
@@ -80,37 +92,78 @@ def run_diagnostics(
     # Fallback: ensure at least 2 negatives exist for stratified split
     if len(neg_rows) < 2:
         for i in range(2 - len(neg_rows)):
-            fallback_id = f"neg_fallback_{i}"
-            corpus_docs.append(Document(text="Irrelevant baseline document.", id_=fallback_id))
+            fallback_parent = f"neg_fallback_{i}"
+            fallback_chunk = f"{fallback_parent}::chunk_0"
+            corpus_docs.append(
+                Document(
+                    text="Irrelevant baseline document.",
+                    id_=fallback_parent,
+                    metadata={"doc_id": fallback_parent, "chunk_id": fallback_chunk},
+                )
+            )
+            chunk_to_parent[fallback_chunk] = fallback_parent
             neg_rows.append(
                 {
                     "qid": topics_df.iloc[0]["qid"],
-                    "docno": fallback_id,
+                    "docno": fallback_chunk,
                     "label": 0,
                     "rank": 0,
                     "query": topics_df.iloc[0]["query"],
                 }
             )
 
-    qrels_df = pd.concat([qrels_df, pd.DataFrame(neg_rows)], ignore_index=True)
+    if neg_rows:
+        LOGGER.info(f"Adding {len(neg_rows)} negative rows to qrels DataFrame.")
+        qrels_df = pd.concat([qrels_df, pd.DataFrame(neg_rows)], ignore_index=True)
+
+    assert set(qrels_df["label"]) == {0, 1}, (
+        f"Qrels DataFrame must contain only 0 and 1 labels. Found {set(qrels_df['label'])}."
+    )
 
     # 5. Build InformationRetrievalDataset and split into train and test splits
     LOGGER.info(
         f"Building InformationRetrievalDataset for '{dataset_name}' ({len(topics_df)} topics, {len(qrels_df)} qrels)..."
     )
-    ir_ds = InformationRetrievalDataset(
+    return InformationRetrievalDataset(
         dataset_name=dataset_name,
         topics=topics_df,
-        enable_embedding_pca=True,
-        embedding_pca_components=200,
+        enable_embedding_pca=data_loader_config.enable_embedding_pca,
+        embedding_pca_components=data_loader_config.embedding_pca_components,
         qrels=qrels_df,
         corpus_iter=corpus_iter,
     )
 
-    try:
-        train_ir_ds, test_ir_ds = ir_ds.split(train_size=0.7, random_state=42)
-    except Exception as exc:
-        raise ValueError(f"Failed to split dataset into train and test sets: {exc}")
+
+def run_diagnostics(
+    dataset: str | Path | None = None,
+    config: RAGConfig | Path | str | None = None,
+    server_url: str | None = None,
+    limit: int | None = None,
+) -> APIResponse:
+    """Synchronously run RAG retrieval evaluation and diagnose failures via DeepFixClient following IR tutorial."""
+
+    # 1. Resolve configuration
+    if isinstance(config, (str, Path)):
+        resolved_config = RAGConfig.from_yaml(config)
+    elif config is None:
+        resolved_config = RAGConfig()
+    else:
+        resolved_config = config.model_copy(deep=True)
+
+    data_updates: dict[str, Any] = {}
+    if limit is not None:
+        data_updates["limit"] = limit
+    if dataset is not None:
+        data_updates["path_or_repo"] = str(dataset)
+        data_updates["source_type"] = None
+    if data_updates:
+        resolved_config.data = resolved_config.data.model_copy(update=data_updates)
+
+    ir_ds: InformationRetrievalDataset = prepare_ir_dataset(
+        dataset_name=Path(resolved_config.data.path_or_repo).stem or "rag_benchmark",
+        chunking_config=resolved_config.chunking,
+        data_loader_config=resolved_config.data,
+    )
 
     # 6. Initialize and fit LlamaindexModel
     backend_val = (
@@ -134,12 +187,9 @@ def run_diagnostics(
     )
     model.fit()
 
-    LOGGER.info("Generating predictions and embeddings across train and test partitions...")
-    train_ir_ds.set_predictions(model.retrieve_dataframe(train_ir_ds))
-    test_ir_ds.set_predictions(model.retrieve_dataframe(test_ir_ds))
-
-    train_ir_ds.set_embeddings(model.get_embedding)
-    test_ir_ds.set_embeddings(model.get_embedding)
+    LOGGER.info("Generating predictions and embeddings...")
+    ir_ds.set_predictions(model.retrieve_dataframe(ir_ds))
+    ir_ds.set_embeddings(model.get_embedding)
 
     # 7. Connect to DeepFix server and run diagnosis
     target_api_url = server_url or settings.DEEPFIX_SERVER_URL
@@ -153,8 +203,7 @@ def run_diagnostics(
 
     try:
         response: APIResponse = client.get_diagnosis(
-            train_data=train_ir_ds,
-            test_data=test_ir_ds,
+            train_data=ir_ds,
             model=model,
             model_name="llamaindex",
             language="english",

@@ -31,6 +31,7 @@ from pyterrier.measures import AP, RR, P, R, nDCG
 import tiktoken
 
 from deepfix_rag.config.schema import (
+    DataLoaderConfig,
     GenerationMetricType,
     RAGConfig,
     RetrievalMetricType,
@@ -66,7 +67,8 @@ def is_deflection(answer: str) -> bool:
 
 
 def load_qa_dataset(dataset_path: Path | str, split: str = "test") -> list[QARecord]:
-    return DataLoader().load_qa(dataset_path, split=split)
+    config = DataLoaderConfig(path_or_repo=str(dataset_path), split=split)
+    return DataLoader(config).load_qa()
 
 
 # =========================================================================

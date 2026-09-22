@@ -2,16 +2,27 @@
 
 from pathlib import Path
 
+from llama_index.core.schema import Document, NodeWithScore, TextNode
 import pytest
 
-from deepfix_rag.config.schema import DataLoaderConfig, DataPreset, DataSourceType
+from deepfix_rag.config.schema import (
+    ChunkingConfig,
+    ChunkingStrategy,
+    DataLoaderConfig,
+    DataPreset,
+    DataSourceType,
+    RAGConfig,
+    RetrievalBackend,
+)
 from deepfix_rag.data import (
     BundestagLoader,
     DataLoader,
     HuggingFaceLoader,
     LegalRagBenchLoader,
     QARecord,
+    build_node_parser,
 )
+from deepfix_rag.pipeline import RAGWorkflow
 
 pytestmark = [pytest.mark.unit]
 
@@ -73,13 +84,13 @@ def test_local_file_loader(tmp_path: Path):
         encoding="utf-8",
     )
 
-    data_loader = DataLoader()
-    docs = data_loader.load_corpus(corpus_file)
+    data_loader = DataLoader(DataLoaderConfig(path_or_repo=str(corpus_file)))
+    docs = data_loader.load_corpus()
     assert len(docs) == 1
     assert docs[0].id_ == "c1"
     assert docs[0].text == "Corpus document text."
 
-    qa = data_loader.load_qa(DataLoaderConfig(path_or_repo=str(qa_file)))
+    qa = DataLoader(DataLoaderConfig(path_or_repo=str(qa_file))).load_qa()
     assert len(qa) == 1
     assert qa[0].query == "Frage?"
     assert qa[0].answer == "Antwort."
@@ -87,12 +98,12 @@ def test_local_file_loader(tmp_path: Path):
 
 def test_sample_benchmark_fixtures_loading(sample_corpus_path: Path, sample_qa_path: Path):
     """Verify shared sample fixtures can be loaded via DataLoader."""
-    data_loader = DataLoader()
-    docs = data_loader.load_corpus(sample_corpus_path)
+    data_loader = DataLoader(DataLoaderConfig(path_or_repo=str(sample_corpus_path)))
+    docs = data_loader.load_corpus()
     assert len(docs) > 0
     assert docs[0].id_ is not None
 
-    qa = data_loader.load_qa(DataLoaderConfig(path_or_repo=str(sample_qa_path)))
+    qa = DataLoader(DataLoaderConfig(path_or_repo=str(sample_qa_path))).load_qa()
     assert len(qa) > 0
     assert hasattr(qa[0], "query")
 
@@ -121,9 +132,198 @@ def test_to_qrels_df_empty():
 
 def test_load_qrels_from_sample_qa(sample_qa_path: Path):
     """Verify load_qrels produces valid PyTerrier qrels DataFrame from sample QA file."""
-    data_loader = DataLoader()
-    qrels = data_loader.load_qrels(sample_qa_path)
+    data_loader = DataLoader(DataLoaderConfig(path_or_repo=str(sample_qa_path)))
+    qrels = data_loader.load_qrels()
     assert len(qrels) == 3
     assert set(qrels["qid"]) == {"q_de_001", "q_de_002", "q_de_003"}
     assert set(qrels["docno"]) == {"doc_de_001", "doc_de_004", "doc_de_003"}
     assert all(qrels["label"] == 1)
+
+
+def test_load_corpus_includes_gold_ids_when_limit_is_smaller(
+    sample_corpus_path: Path, sample_qa_path: Path
+) -> None:
+    """Verify required gold documents are kept even when limit is below the gold set size."""
+    qa = DataLoader(DataLoaderConfig(path_or_repo=str(sample_qa_path), limit=2)).load_qa()
+    gold_ids = list(dict.fromkeys(r.doc_id for r in qa))
+    assert len(gold_ids) == 2
+
+    corpus_loader = DataLoader(DataLoaderConfig(path_or_repo=str(sample_corpus_path), limit=1))
+    docs = corpus_loader.load_corpus(doc_ids=gold_ids)
+    loaded_ids = {doc.id_ for doc in docs}
+    assert set(gold_ids) <= loaded_ids
+    assert len(docs) >= len(gold_ids)
+
+
+def test_load_corpus_adds_filler_docs_when_limit_exceeds_gold(
+    sample_corpus_path: Path,
+) -> None:
+    """Verify extra non-gold documents fill remaining slots up to limit."""
+    gold_ids = ["doc_de_005"]
+    docs = DataLoader(DataLoaderConfig(path_or_repo=str(sample_corpus_path), limit=4)).load_corpus(
+        doc_ids=gold_ids
+    )
+    loaded_ids = [doc.id_ for doc in docs]
+    assert loaded_ids[0] == "doc_de_005"
+    assert len(docs) == 4
+    assert set(loaded_ids) > set(gold_ids)
+
+
+def test_load_corpus_missing_doc_ids_raises(sample_corpus_path: Path) -> None:
+    """Verify a required doc_id that is absent from the corpus raises ValueError."""
+    loader = DataLoader(DataLoaderConfig(path_or_repo=str(sample_corpus_path)))
+    with pytest.raises(ValueError, match="missing 1/1 required doc_ids"):
+        loader.load_corpus(doc_ids=["missing_doc"])
+
+
+def test_load_qa_limit_and_doc_id_filter(sample_qa_path: Path) -> None:
+    """Verify QA limit and gold-doc filtering are applied independently."""
+    limited = DataLoader(DataLoaderConfig(path_or_repo=str(sample_qa_path), limit=2)).load_qa()
+    assert len(limited) == 2
+
+    filtered = DataLoader(DataLoaderConfig(path_or_repo=str(sample_qa_path))).load_qa(
+        doc_ids=["doc_de_004"]
+    )
+    assert len(filtered) == 1
+    assert filtered[0].query_id == "q_de_002"
+
+
+def test_parent_doc_id_strips_chunk_suffix():
+    """Verify parent_doc_id strips `::chunk_{n}` and leaves unsuffixed ids unchanged."""
+    assert DataLoader.parent_doc_id("doc123::chunk_2") == "doc123"
+    assert DataLoader.parent_doc_id("doc123") == "doc123"
+    assert DataLoader.parent_doc_id("doc::with::colons") == "doc::with::colons"
+    assert DataLoader.parent_doc_id("") == ""
+
+
+def test_chunk_docs_preserves_parent_ids_and_unique_chunk_ids():
+    """Verify chunk_docs keeps parent id_ / metadata.doc_id and unique chunk_id metadata."""
+
+    text_a = " ".join(["alpha"] * 200)
+    text_b = " ".join(["bravo"] * 200)
+    docs = [
+        Document(text=text_a, id_="doc_a", metadata={"source": "unit"}),
+        Document(text=text_b, id_="doc_b"),
+    ]
+    chunks = DataLoader.chunk_docs(docs, ChunkingConfig(size=64, overlap=0))
+    assert len(chunks) > len(docs)
+
+    chunk_ids = [c.metadata["chunk_id"] for c in chunks]
+    assert len(chunk_ids) == len(set(chunk_ids))
+    for chunk in chunks:
+        assert chunk.id_ in {"doc_a", "doc_b"}
+        assert chunk.metadata["doc_id"] == chunk.id_
+        assert chunk.metadata["chunk_id"].startswith(f"{chunk.id_}::chunk_")
+
+
+def test_chunk_docs_empty_input():
+    """Verify chunk_docs returns an empty list for empty input."""
+    assert DataLoader.chunk_docs([]) == []
+
+
+def test_convert_nodes_to_results_uses_parent_doc_id_not_chunk_id():
+    """Verify retrieval results report parent doc_id even when chunk_id is present."""
+
+    workflow = RAGWorkflow(config=RAGConfig())
+    node = TextNode(
+        text="chunk text",
+        id_="ignored-node-id",
+        metadata={"doc_id": "doc_a", "chunk_id": "doc_a::chunk_0"},
+    )
+    results = workflow.convert_nodes_to_results([NodeWithScore(node=node, score=0.9)])
+    assert len(results) == 1
+    assert results[0].doc_id == "doc_a"
+
+
+def test_convert_nodes_to_results_strips_leaked_chunk_suffix():
+    """Verify a leaked `::chunk_n` node id is stripped when metadata.doc_id is absent."""
+    workflow = RAGWorkflow(config=RAGConfig())
+    node = TextNode(text="x", id_="parent::chunk_3")
+    results = workflow.convert_nodes_to_results([NodeWithScore(node=node, score=0.1)])
+    assert results[0].doc_id == "parent"
+
+
+def test_chunking_overlap_validation_skipped_for_semantic_and_hierarchical():
+    """Verify overlap >= size is allowed for semantic and hierarchical strategies."""
+    semantic = ChunkingConfig(strategy=ChunkingStrategy.SEMANTIC, size=64, overlap=64)
+    assert semantic.strategy == ChunkingStrategy.SEMANTIC
+    hierarchical = ChunkingConfig(strategy=ChunkingStrategy.HIERARCHICAL, size=64, overlap=64)
+    assert hierarchical.resolved_hierarchical_chunk_sizes() == [256, 64, 64]
+    recursive = ChunkingConfig(strategy=ChunkingStrategy.RECURSIVE, size=64, overlap=64)
+    assert recursive.strategy == ChunkingStrategy.RECURSIVE
+
+
+def test_chunking_overlap_validation_still_applies_to_sentence():
+    """Verify sentence chunking still rejects overlap >= size."""
+    with pytest.raises(ValueError, match="Chunk overlap"):
+        ChunkingConfig(strategy=ChunkingStrategy.SENTENCE, size=64, overlap=64)
+
+
+def test_build_node_parser_routes_strategies():
+    """Verify build_node_parser maps each strategy to the expected LlamaIndex parser."""
+    from llama_index.core.node_parser import (
+        HierarchicalNodeParser,
+        SemanticSplitterNodeParser,
+        SentenceSplitter,
+        TokenTextSplitter,
+    )
+    from llama_index.embeddings.openai import OpenAIEmbedding
+
+    from deepfix_rag.data import RecursiveChonkieParser
+
+    recursive = build_node_parser(ChunkingConfig(strategy=ChunkingStrategy.RECURSIVE))
+    assert isinstance(recursive, RecursiveChonkieParser)
+
+    sentence = build_node_parser(ChunkingConfig(strategy=ChunkingStrategy.SENTENCE))
+    assert isinstance(sentence, SentenceSplitter)
+
+    fixed = build_node_parser(
+        ChunkingConfig(strategy=ChunkingStrategy.FIXED, size=128, overlap=16)
+    )
+    assert isinstance(fixed, TokenTextSplitter)
+
+    hierarchical = build_node_parser(ChunkingConfig(strategy=ChunkingStrategy.HIERARCHICAL))
+    assert isinstance(hierarchical, HierarchicalNodeParser)
+
+    embed = OpenAIEmbedding(model_name="test-embed", api_key="sk-test")
+    semantic = build_node_parser(
+        ChunkingConfig(strategy=ChunkingStrategy.SEMANTIC),
+        embed_model=embed,
+    )
+    assert isinstance(semantic, SemanticSplitterNodeParser)
+
+
+def test_chunk_docs_fixed_and_hierarchical_preserve_parent_ids():
+    """Verify fixed and hierarchical chunk_docs keep parent doc_id and unique chunk_id."""
+    text = " ".join(["lorem"] * 400)
+    docs = [Document(text=text, id_="doc_h", metadata={"doc_id": "doc_h"})]
+
+    fixed_chunks = DataLoader.chunk_docs(
+        docs, ChunkingConfig(strategy=ChunkingStrategy.FIXED, size=64, overlap=0)
+    )
+    assert len(fixed_chunks) > 1
+    assert {c.id_ for c in fixed_chunks} == {"doc_h"}
+    assert len({c.metadata["chunk_id"] for c in fixed_chunks}) == len(fixed_chunks)
+
+    hier_chunks = DataLoader.chunk_docs(
+        docs,
+        ChunkingConfig(
+            strategy=ChunkingStrategy.HIERARCHICAL,
+            hierarchical_chunk_sizes=[256, 64],
+        ),
+    )
+    assert len(hier_chunks) >= 1
+    for chunk in hier_chunks:
+        assert chunk.id_ == "doc_h"
+        assert chunk.metadata["doc_id"] == "doc_h"
+        assert chunk.metadata["chunk_id"].startswith("doc_h::chunk_")
+
+
+def test_hierarchical_chunking_rejected_with_graph_backend():
+    """Verify hierarchical ingest raises when combined with graph retrieval."""
+    cfg = RAGConfig()
+    cfg.chunking.strategy = ChunkingStrategy.HIERARCHICAL
+    cfg.retrieval.backend = RetrievalBackend.GRAPH
+    workflow = RAGWorkflow(config=cfg)
+    with pytest.raises(ValueError, match="Hierarchical chunking is not supported"):
+        workflow._build_index([Document(text="hello world", id_="d1")])

@@ -55,8 +55,7 @@ def load_dataset(
         err_console.print(f"Loading dataset '{name}' (split: {split})...")
 
     try:
-        loader = DataLoader()
-        corpus_file, qa_file = loader.load_and_save(
+        corpus_file, qa_file = DataLoader.load_and_save(
             name_or_repo=name,
             split=split,
             data_root=data_root,

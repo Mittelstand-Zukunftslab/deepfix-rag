@@ -53,6 +53,7 @@ dependencies = [
     "textblob>=0.20.1",
     "numba>=0.67.0",
     "umap-learn>=0.5.12",
+    "chonkie==1.3.1",
 ]
 requires-python = "~=3.12.0"
 

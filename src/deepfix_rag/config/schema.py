@@ -129,6 +129,8 @@ class DataLoaderConfig(BaseModel):
     source_type: DataSourceType | None = Field(
         default=None, description="Inferred automatically from path_or_repo if not provided."
     )
+    enable_embedding_pca: bool = Field(default=True, description="Whether to enable PCA for embedding.")
+    embedding_pca_components: int = Field(default=200, ge=1, le=1000, description="Number of PCA components for embedding.")
 
     @model_validator(mode="after")
     def infer_source_type(self) -> "DataLoaderConfig":
@@ -138,28 +140,58 @@ class DataLoaderConfig(BaseModel):
         return self
 
 
-class SimilarityMetric(StrEnum):
-    COSINE = "cosine"
-    L2 = "l2"
-    DOT = "dot"
+class ChunkingStrategy(StrEnum):
+    RECURSIVE = "recursive"
+    FIXED = "fixed"
+    SEMANTIC = "semantic"
+    HIERARCHICAL = "hierarchical"
+    SENTENCE = "sentence"
 
 
 class ChunkingConfig(BaseModel):
     """Document chunking hyperparameters."""
 
-    strategy: str = Field(
-        default="recursive", description="Chunking strategy (recursive, fixed, semantic, etc.)."
+    strategy: ChunkingStrategy = Field(
+        default=ChunkingStrategy.SENTENCE,
+        description="Chunking strategy (recursive, sentence, fixed, semantic, hierarchical).",
     )
-    size: int = Field(default=512, ge=64, le=4096, description="Chunk token or character size.")
+    size: int = Field(default=1024, ge=64, le=16000, description="Chunk token or character size.")
     overlap: int = Field(default=64, ge=0, description="Chunk overlap size.")
+    semantic_buffer_size: int = Field(
+        default=1,
+        ge=1,
+        description="Number of sentences buffered by SemanticSplitterNodeParser.",
+    )
+    semantic_breakpoint_percentile: int = Field(
+        default=95,
+        ge=0,
+        le=100,
+        description="Percentile threshold for semantic split breakpoints.",
+    )
+    hierarchical_chunk_sizes: list[int] | None = Field(
+        default=None,
+        description="Optional hierarchical sizes largest-to-smallest; derived from size if unset.",
+    )
 
     @model_validator(mode="after")
     def validate_overlap(self) -> "ChunkingConfig":
+        if self.strategy in (
+            ChunkingStrategy.SEMANTIC,
+            ChunkingStrategy.HIERARCHICAL,
+            ChunkingStrategy.RECURSIVE,
+        ):
+            return self
         if self.overlap >= self.size:
             raise ValueError(
                 f"Chunk overlap ({self.overlap}) must be strictly less than chunk size ({self.size})."
             )
         return self
+
+    def resolved_hierarchical_chunk_sizes(self) -> list[int]:
+        """Return configured hierarchical sizes or derive them from `size`."""
+        if self.hierarchical_chunk_sizes:
+            return list(self.hierarchical_chunk_sizes)
+        return [self.size * 4, self.size, max(self.size // 4, 64)]
 
 
 class EmbeddingConfig(BaseModel):
@@ -235,10 +267,6 @@ class RetrievalConfig(BaseModel):
     top_k: int = Field(
         default=10, ge=1, le=100, description="Number of retrieved documents before re-ranking."
     )
-    similarity_metric: SimilarityMetric = Field(
-        default=SimilarityMetric.COSINE,
-        description="Distance/similarity metric for dense vector retrieval.",
-    )
     fusion_mode: FusionMode = Field(
         default=FusionMode.RECIPROCAL_RANK,
         description="Multi-retriever fusion mode (reciprocal_rerank, relative_score, dist_based_score, simple).",
@@ -272,12 +300,6 @@ class RetrievalConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description="BM25 document length normalization parameter b.",
-    )
-    rrf_c: int = Field(
-        default=60,
-        ge=1,
-        le=500,
-        description="Reciprocal Rank Fusion constant c.",
     )
     graph_extraction_schema: str = Field(
         default="default",
