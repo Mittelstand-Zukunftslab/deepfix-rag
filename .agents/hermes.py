@@ -4,6 +4,7 @@ import os
 import subprocess
 import json
 import logging
+import re
 from typing import Any
 
 import mlflow
@@ -17,7 +18,47 @@ SYSTEM_PROMPT = """You are Hermes, an autonomous AI harness engineer.
 You are tasked with diagnosing, evaluating, and optimizing the RAG pipeline using the deepfix CLI.
 A plugin manifest exists at plugins/deepfix-rag/plugin.yaml which points to skills in .agents/skills/.
 Use the run_shell_command tool to execute deepfix commands and read files.
+For best results, append `--json` to deepfix commands so you receive structured output.
 """
+
+def _extract_metric_deltas(stdout: str, span: Any):
+    """Parse structured metric deltas from CLI stdout and log them to MLflow span."""
+    # 1. Try parsing full JSON (if the agent used --json)
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, dict):
+            # Extract explicitly labeled deltas from eval commands
+            if "delta" in data and isinstance(data["delta"], dict):
+                for k, v in data["delta"].items():
+                    if isinstance(v, (int, float)):
+                        span.set_attribute(f"metric_delta.{k}", v)
+            # Extract error reduction explicitly
+            if "retrieval_induced_error_reduction_pct" in data:
+                val = data.get("retrieval_induced_error_reduction_pct")
+                if isinstance(val, (int, float)):
+                    span.set_attribute("metric_delta.error_reduction_pct", val)
+            return
+    except json.JSONDecodeError:
+        pass
+        
+    # 2. Regex fallback for standard readable text output (if the agent omitted --json)
+    reduction_match = re.search(r"error reduction:\s*([\-\.\d]+)%", stdout, re.IGNORECASE)
+    if reduction_match:
+        try:
+            span.set_attribute("metric_delta.error_reduction_pct", float(reduction_match.group(1)))
+        except ValueError:
+            pass
+            
+    # Regex fallback for DeepFix diff output (e.g. "- faithfulness: 0.6 -> 0.75")
+    diff_matches = re.finditer(r"-\s([a-zA-Z0-9_]+):\s([\-\.\d]+)\s->\s([\-\.\d]+)", stdout)
+    for match in diff_matches:
+        try:
+            metric_name = match.group(1)
+            old_val = float(match.group(2))
+            new_val = float(match.group(3))
+            span.set_attribute(f"metric_delta.{metric_name}", round(new_val - old_val, 4))
+        except ValueError:
+            continue
 
 @mlflow.trace(name="execute_shell_command", span_type="TOOL")
 def run_shell_command(command: str) -> dict[str, Any]:
@@ -55,6 +96,10 @@ def run_shell_command(command: str) -> dict[str, Any]:
         span.set_attribute("stdout", payload["stdout"])
         span.set_attribute("stderr", payload["stderr"])
         span.set_attribute("exit_code", payload["exit_code"])
+        
+        # Explicitly extract metric deltas into the Span Tree per US-009 requirements
+        if payload["stdout"]:
+            _extract_metric_deltas(payload["stdout"], span)
         
     return payload
 
@@ -161,7 +206,7 @@ if __name__ == "__main__":
     print("Hermes Agent Harness initialized. Target: Qwen 3.8 27B")
     
     # Execute a sample agent loop kickoff
-    user_task = "Diagnose the RAG system performance using deepfix run-diagnostic."
+    user_task = "Diagnose the RAG system performance by comparing candidate.yaml to baseline.yaml."
     
     # Outer run context encapsulates all span traces
     with mlflow.start_run(run_name="hermes_session_1"):
