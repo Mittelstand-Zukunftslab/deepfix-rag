@@ -18,6 +18,11 @@ retrieval:
   lancedb_table_name: documents
   lancedb_index_dir: s3://deepfix-index/dev
   top_k: 15
+  query_expansion_num: 1
+  query_gen_prompt: |
+    You are a helpful assistant that generates multiple search queries based on a single input query. Generate {num_queries} search queries, one on each line, related to the following input query:
+    Query: {query}
+    Queries:
   bit_width: 4
   language: german
   load_if_exists: true

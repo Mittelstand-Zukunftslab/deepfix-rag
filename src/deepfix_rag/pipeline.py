@@ -517,9 +517,10 @@ class RAGWorkflow(Workflow):
                     self.config.retrieval.bm25_weight,
                 ],
                 mode=fusion_mode_enum,
-                num_queries=1,
+                num_queries=self.config.retrieval.query_expansion_num,
                 use_async=use_async,
                 similarity_top_k=top_k,
+                query_gen_prompt=self.config.retrieval.query_gen_prompt,
             )
 
         elif backend == RetrievalBackend.MIXED:
@@ -547,9 +548,10 @@ class RAGWorkflow(Workflow):
                 llm=self._get_llm(),
                 retriever_weights=[w_dense, w_bm25, w_graph],
                 mode=fusion_mode_enum,
-                num_queries=1,
+                num_queries=self.config.retrieval.query_expansion_num,
                 use_async=use_async,
                 similarity_top_k=top_k,
+                query_gen_prompt=self.config.retrieval.query_gen_prompt
             )
 
         else:

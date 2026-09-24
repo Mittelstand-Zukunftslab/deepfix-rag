@@ -43,6 +43,8 @@ search_space:
     semantic_breakpoint_percentile_max: 99
     top_k_min: 1
     top_k_max: 50
+    query_expansion_num_min: 1
+    query_expansion_num_max: 5
   hybrid:
     strategies:
       - recursive
@@ -62,6 +64,8 @@ search_space:
     semantic_breakpoint_percentile_max: 99
     top_k_min: 1
     top_k_max: 50
+    query_expansion_num_min: 1
+    query_expansion_num_max: 5
     bm25_k1_min: 0.5
     bm25_k1_max: 3.0
     bm25_b_min: 0.1
@@ -108,3 +112,5 @@ search_space:
       - simple
     top_k_min: 1
     top_k_max: 50
+    query_expansion_num_min: 1
+    query_expansion_num_max: 5

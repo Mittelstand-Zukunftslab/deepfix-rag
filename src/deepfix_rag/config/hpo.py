@@ -128,11 +128,15 @@ class DenseSearchSpace(ChunkingSearchSpace):
 
     top_k_min: int = Field(default=1, ge=1)
     top_k_max: int = Field(default=50, ge=1)
+    query_expansion_num_min: int = Field(default=1, ge=1)
+    query_expansion_num_max: int = Field(default=5, ge=1)
 
     @model_validator(mode="after")
     def validate_dense_bounds(self) -> "DenseSearchSpace":
         if self.top_k_min > self.top_k_max:
             raise ValueError("top_k_min must be <= top_k_max")
+        if self.query_expansion_num_min > self.query_expansion_num_max:
+            raise ValueError("query_expansion_num_min must be <= query_expansion_num_max")
         return self
 
     def suggest_dense(
@@ -148,6 +152,11 @@ class DenseSearchSpace(ChunkingSearchSpace):
             params.update(self.suggest_chunking(trial, allow_hierarchical=allow_hierarchical))
         params["retrieval.top_k"] = trial.suggest_int(
             "retrieval.top_k", self.top_k_min, self.top_k_max
+        )
+        params["retrieval.query_expansion_num"] = trial.suggest_int(
+            "retrieval.query_expansion_num",
+            self.query_expansion_num_min,
+            self.query_expansion_num_max,
         )
         return params
 
@@ -234,6 +243,8 @@ class GraphSearchSpace(ChunkingSearchSpace):
 
     top_k_min: int = Field(default=1, ge=1)
     top_k_max: int = Field(default=50, ge=1)
+    query_expansion_num_min: int = Field(default=1, ge=1)
+    query_expansion_num_max: int = Field(default=5, ge=1)
 
     def complementary_dense_range(self) -> tuple[float, float]:
         """Return the feasible dense_weight interval under dense + graph = 1."""
@@ -253,6 +264,8 @@ class GraphSearchSpace(ChunkingSearchSpace):
             raise ValueError("graph_weight_min must be <= graph_weight_max")
         if self.top_k_min > self.top_k_max:
             raise ValueError("top_k_min must be <= top_k_max")
+        if self.query_expansion_num_min > self.query_expansion_num_max:
+            raise ValueError("query_expansion_num_min must be <= query_expansion_num_max")
         low, high = self.complementary_dense_range()
         if low > high:
             raise ValueError(
@@ -295,6 +308,11 @@ class GraphSearchSpace(ChunkingSearchSpace):
         graph_w = 1.0 - dense_w
         params["retrieval.dense_weight"] = round(dense_w, 4)
         params["retrieval.graph_weight"] = round(graph_w, 4)
+        params["retrieval.query_expansion_num"] = trial.suggest_int(
+            "retrieval.query_expansion_num",
+            self.query_expansion_num_min,
+            self.query_expansion_num_max,
+        )
         return params
 
 

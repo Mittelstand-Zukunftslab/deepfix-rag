@@ -275,6 +275,14 @@ class RetrievalConfig(BaseModel):
         default=FusionMode.RECIPROCAL_RANK,
         description="Multi-retriever fusion mode (reciprocal_rerank, relative_score, dist_based_score, simple).",
     )
+    query_expansion_num: int = Field(
+        default=1,
+        ge=0,
+        description="Number of queries to expand for retrieval.",
+    )
+    query_gen_prompt: str = Field(
+        default="You are a helpful assistant that generates multiple search queries based on a single input query. Generate {num_queries} search queries, one on each line, related to the following input query:\nQuery: {query}\nQueries:\n",
+    )
     dense_weight: float = Field(
         default=0.5,
         ge=0.0,
