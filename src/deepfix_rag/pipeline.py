@@ -414,12 +414,16 @@ class RAGWorkflow(Workflow):
             bm25_kwargs["index"] = index
         elif hasattr(index, "nodes") and len(index.nodes) > 0:
             bm25_kwargs["nodes"] = index.nodes
-        elif hasattr(index, "docstore"):
-            LOGGER.warning("BM25Retriever docstore has 0 documents; falling back to dense retriever.")
-            return self._get_dense_retriever(index, top_k)
         else:
+            # Persisted-only indexes (e.g. VectorStoreIndex.from_vector_store) have an empty
+            # docstore; recover node text from the vector store before giving up on BM25.
             nodes = self._load_nodes_from_vector_store()
             if not nodes:
+                if hasattr(index, "docstore"):
+                    LOGGER.warning(
+                        "BM25Retriever docstore has 0 documents; falling back to dense retriever."
+                    )
+                    return self._get_dense_retriever(index, top_k)
                 raise ValueError("No index or docstore found for BM25Retriever")
             bm25_kwargs["nodes"] = nodes
 
