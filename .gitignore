@@ -203,3 +203,9 @@ real_index/
 knowledge/
 
 
+
+# Agent logs and DBs
+*.err
+*.db
+.env.bak*
+.agents/runs/
