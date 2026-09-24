@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # Reranker (Cohere-compatible)
     COHERE_API_KEY: str | None = None
     COHERE_MODEL: str = "qwen3-reranker-4b"
-    COHERE_BASE_URL: str = "https://api.aisc.hpi.de/v1"
+    COHERE_BASE_URL: str = "https://api.aisc.hpi.de"
 
     # Memgraph
     MEMGRAPH_URL: str = "bolt://localhost:7687"
