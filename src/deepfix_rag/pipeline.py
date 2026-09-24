@@ -431,13 +431,8 @@ class RAGWorkflow(Workflow):
 
     def _get_graph_retriever(self, index: BaseIndex, top_k: int) -> BaseRetriever:
         """Construct a PropertyGraph retriever with VectorContextRetriever and LLMSynonymRetriever traversal."""
-        if isinstance(index, PropertyGraphIndex):
-            graph_store = getattr(
-                index,
-                "property_graph_store",
-                getattr(index, "_property_graph_store", None),
-            )
-            sub_retrievers = [
+
+        sub_retrievers = [
                 LLMSynonymRetriever(
                     graph_store=graph_store,
                     include_text=True,
@@ -452,6 +447,12 @@ class RAGWorkflow(Workflow):
                     include_text=True,
                 ),
             ]
+        if isinstance(index, PropertyGraphIndex):
+            graph_store = getattr(
+                index,
+                "property_graph_store",
+                getattr(index, "_property_graph_store", None),
+            )            
             return index.as_retriever(
                 sub_retrievers=sub_retrievers,
                 similarity_top_k=top_k,
@@ -463,21 +464,6 @@ class RAGWorkflow(Workflow):
                     property_graph_store=graph_store,
                     embed_model=self._get_embed_model(),
                 )
-                sub_retrievers = [
-                    LLMSynonymRetriever(
-                        graph_store=graph_store,
-                        include_text=True,
-                        llm=self._get_llm(),
-                        path_depth=self.config.retrieval.graph_traversal_hops,
-                    ),
-                    VectorContextRetriever(
-                        graph_store=graph_store,
-                        embed_model=self._get_embed_model(),
-                        similarity_top_k=top_k,
-                        path_depth=self.config.retrieval.graph_traversal_hops,
-                        include_text=True,
-                    ),
-                ]
                 return pg_index.as_retriever(
                     sub_retrievers=sub_retrievers,
                     similarity_top_k=top_k,
