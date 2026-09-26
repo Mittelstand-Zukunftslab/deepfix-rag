@@ -122,33 +122,8 @@ services:
       - mlflow_artifacts:/opt/mlflow/data
     environment:
       MLFLOW_BACKEND_STORE_URI: sqlite:////opt/mlflow/data/mlflow.db
-      MLFLOW_AUTH_CONFIG_PATH: /opt/mlflow/data/basic_auth.ini
-      MLFLOW_ALLOWED_HOSTS: ${MLFLOW_ALLOWED_HOSTS:-localhost,mlflow,hermes}
-      MLFLOW_CORS_ALLOWED_ORIGINS: ${MLFLOW_CORS_ALLOWED_ORIGINS:-http://localhost:5000,http://hermes:9119,http://mlflow:5000}
-      MLFLOW_WORKERS: "1"
     mem_limit: 1G
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        umask 077
-
-        cat > "$${MLFLOW_AUTH_CONFIG_PATH}" <<EOF
-        [mlflow]
-        default_permission = READ
-        database_uri = $${MLFLOW_BACKEND_STORE_URI}
-        grant_default_workspace_access = false
-        workspace_cache_max_size = 10000
-        workspace_cache_ttl_seconds = 3600
-        EOF
-
-        exec mlflow server \
-          --host 0.0.0.0 \
-          --port 5000 \
-          --artifacts-destination /opt/mlflow/data/artifacts \
-          --default-artifact-root mlflow-artifacts:/ \
-          --allowed-hosts "$${MLFLOW_ALLOWED_HOSTS}" \
-          --cors-allowed-origins "$${MLFLOW_CORS_ALLOWED_ORIGINS}"
+    command: mlflow server --host 0.0.0.0 --port 5000 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/ --allowed-hosts "*" --cors-allowed-origins "*"
     healthcheck:
       test:
         - CMD
