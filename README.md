@@ -216,11 +216,6 @@ API_SERVER_KEY=
 # MLflow Server (docker compose)
 # The tracking client above still uses MLFLOW_TRACKING_URI.
 # Point that URI at http://localhost:5000 to use this local server.
-# ------------------------------------------------------------------------------
-MLFLOW_BACKEND_STORE_URI=sqlite:////opt/mlflow/data/mlflow.db
-MLFLOW_AUTH_CONFIG_PATH=/opt/mlflow/data/basic_auth.ini
-MLFLOW_FLASK_SERVER_SECRET_KEY=change-me
-MLFLOW_ADMIN_PASSWORD=change-me
 MLFLOW_ALLOWED_HOSTS=localhost,127.0.0.1
 MLFLOW_CORS_ALLOWED_ORIGINS=http://localhost:5000
 ```
