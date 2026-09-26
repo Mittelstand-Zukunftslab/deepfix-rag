@@ -179,6 +179,7 @@ services:
       DEEPFIX_SERVER_DATABASE_URL: ${DEEPFIX_SERVER_DATABASE_URL:-sqlite:////root/.deepfix/deepfix_server.db}
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
       MLFLOW_EXP_NAME: ${MLFLOW_EXP_NAME:-Deepfix-diagnostic-agent}
+      UV_TOOL_BIN_DIR: /root/.local/bin
     volumes:
       - deepfix_tool_data:/root/.local
       - deepfix_server_data:/root/.deepfix
