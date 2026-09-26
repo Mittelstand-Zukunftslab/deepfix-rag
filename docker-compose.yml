@@ -24,18 +24,6 @@ services:
     command: ["--log-level=TRACE"]
     restart: unless-stopped
 
-  memgraph-lab:
-    image: memgraph/lab:3.13.1
-    container_name: memgraph-lab
-    ports:
-      - "3000:3000"
-    depends_on:
-      - memgraph
-    environment:
-      QUICK_CONNECT_MG_HOST: memgraph
-      QUICK_CONNECT_MG_PORT: "7687"
-    restart: unless-stopped
-
   falkordb:
     image: falkordb/falkordb:v4.20.3-alpine
     container_name: falkordb
