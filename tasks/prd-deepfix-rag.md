@@ -353,9 +353,9 @@ DeepFix focuses on standardized domain benchmark suites covering distinct RAG ch
 - [x] **Comparative Baseline Differential Analysis:** `deepfix-rag eval --baseline <config.yaml>` automatically calculates metric deltas across both retrieval metrics (`ndcg_avg`, `recall_avg`, `precision_avg`) and generation metrics.
 - [x] **Observability & MLflow Integration:** Metric results (with compliant key sanitization e.g., `P_at_10`, `nDCG_at_10`), configuration parameters, and per-query evaluation result tables automatically recorded in the central MLflow tracking server.
 
-### US-008: Problem-Driven Workspace Skills (.agents/skills/) & Plugin Manifest
+### US-008: Problem-Driven Workspace Skills (.agents/skills/) & Plugin Manifest [DONE]
 **Ownership:** `[Pair B]`  
-**Status:** Not Started (0%)  
+**Status:** Completed (100%)  
 **Description:** As an AI agent or harness engineer, I want modular `SKILL.md` files created under `.agents/skills/` targeting key retrieval pathologies and packaged under a declarative manifest (`plugin.json` / `plugin.yaml`) following Claude Code, Hermes, and Codex specifications, so that skills are directly accessible in the workspace and easily installable across coding harnesses.  
 **Acceptance Criteria:**
 - [ ] Declarative manifest file (`plugin.json` or `plugin.yaml`) authored in `plugins/deepfix-rag/` following Claude Code, Hermes, and Codex plugin schemas.

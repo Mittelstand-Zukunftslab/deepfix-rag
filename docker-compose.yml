@@ -5,6 +5,8 @@
 #   HERMES_DASHBOARD, HERMES_DASHBOARD_BASIC_AUTH_*, API_SERVER_*
 #   MLFLOW_BACKEND_STORE_URI, MLFLOW_AUTH_CONFIG_PATH,
 #   MLFLOW_ALLOWED_HOSTS, MLFLOW_CORS_ALLOWED_ORIGINS
+#   DEEPFIX_LLM_API_KEY, DEEPFIX_LLM_BASE_URL, DEEPFIX_LLM_MODEL_NAME, etc.
+#   DEEPFIX_SERVER_DATABASE_URL
 #
 #   docker compose up -d
 
@@ -17,16 +19,17 @@ services:
       MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-neo4j}
     ports:
       - "7687:7687"
-      - "7444:7444"
+    mem_limit: 1G
     volumes:
       - memgraph_lib:/var/lib/memgraph
       - memgraph_log:/var/log/memgraph
-    command: ["--log-level=TRACE"]
+    command: [ "--log-level=TRACE" ]
     restart: unless-stopped
 
   falkordb:
     image: falkordb/falkordb:v4.20.3-alpine
     container_name: falkordb
+    mem_limit: 1G
     ports:
       - "6379:6379"
     environment:
@@ -41,18 +44,66 @@ services:
   hermes:
     image: nousresearch/hermes-agent:v2026.6.19
     container_name: hermes
-    command: ["gateway", "run"]
     ports:
       - "9119:9119" # dashboard
       - "8642:8642" # OpenAI-compatible API
     environment:
-      HERMES_DASHBOARD: ${HERMES_DASHBOARD:-}
-      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}
-      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
-      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
-      API_SERVER_ENABLED: ${API_SERVER_ENABLED:-}
-      API_SERVER_HOST: ${API_SERVER_HOST:-}
-      API_SERVER_KEY: ${API_SERVER_KEY:-}
+      HERMES_DASHBOARD: "1"
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-change-me-please}
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-change-me++7iYYwx7Vdbz1MF+EPXeechLYLxPDFhKb0tuw4eSzspA}
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_KEY: ${API_SERVER_KEY:-change-me-please}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_OTLP_ENDPOINT: http://mlflow:5000/v1/traces
+      MLFLOW_EXPERIMENT_ID: "0"
+      DEEPFIX_SERVER_URL: http://diagnostic-agent:8844
+      PYTHONPATH: /opt/data/.python-packages
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        echo "==> Setting up Hermes OpenTelemetry plugin..."
+        if [ ! -d "/opt/data/.python-packages/opentelemetry" ]; then
+          mkdir -p /opt/data/.python-packages
+          uv pip install --target /opt/data/.python-packages 'opentelemetry-api<2' 'opentelemetry-sdk<2' 'opentelemetry-exporter-otlp-proto-http<2' || true
+        fi
+        export PYTHONPATH="/opt/data/.python-packages:$${PYTHONPATH}"
+
+        if [ ! -d "/opt/data/plugins/hermes-otel" ]; then
+          hermes plugins install briancaffey/hermes-otel || true
+        fi
+        hermes plugins enable hermes_otel 2>/dev/null || true
+
+        CONFIG_DIR="$${HOME:-/opt/data}/.hermes/plugins/hermes_otel"
+        mkdir -p "$$CONFIG_DIR" "/opt/data/plugins/hermes_otel"
+        cat <<EOF | sed 's/^ *|//' > "$$CONFIG_DIR/config.yaml"
+        |enabled: true
+        |force_flush_on_session_end: true
+        |capture_sender_id: true
+        |capture_conversation_history: true
+        |
+        |backends:
+        |  - type: otlp
+        |    name: mlflow
+        |    endpoint: $${MLFLOW_OTLP_ENDPOINT}
+        |    metrics: false
+        |    logs: false
+        |    headers:
+        |      x-mlflow-experiment-id: "$${MLFLOW_EXPERIMENT_ID}"
+        EOF
+
+        cp "$$CONFIG_DIR/config.yaml" "/opt/data/plugins/hermes_otel/config.yaml" 2>/dev/null || true
+        if [ -d "/opt/data/plugins/hermes-otel" ]; then
+          cp "$$CONFIG_DIR/config.yaml" "/opt/data/plugins/hermes-otel/config.yaml" 2>/dev/null || true
+        fi
+
+        echo "==> Starting Hermes gateway..."
+        exec hermes gateway run --accept-hooks
     volumes:
       - hermes_data:/opt/data
     deploy:
@@ -72,11 +123,10 @@ services:
     environment:
       MLFLOW_BACKEND_STORE_URI: sqlite:////opt/mlflow/data/mlflow.db
       MLFLOW_AUTH_CONFIG_PATH: /opt/mlflow/data/basic_auth.ini
-      MLFLOW_ALLOWED_HOSTS: ${MLFLOW_ALLOWED_HOSTS}
-      MLFLOW_CORS_ALLOWED_ORIGINS: ${MLFLOW_CORS_ALLOWED_ORIGINS}
+      MLFLOW_ALLOWED_HOSTS: ${MLFLOW_ALLOWED_HOSTS:-localhost,mlflow,hermes}
+      MLFLOW_CORS_ALLOWED_ORIGINS: ${MLFLOW_CORS_ALLOWED_ORIGINS:-http://localhost:5000,http://hermes:9119,http://mlflow:5000}
       MLFLOW_WORKERS: "1"
     mem_limit: 1G
-    pids_limit: 64
     command:
       - /bin/sh
       - -ec
@@ -111,9 +161,60 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  diagnostic-agent:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm
+    container_name: diagnostic-agent
+    ports:
+      - "8844:8844"
+    environment:
+      DEEPFIX_LLM_API_KEY: ${DEEPFIX_LLM_API_KEY:-}
+      DEEPFIX_LLM_BASE_URL: ${DEEPFIX_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      DEEPFIX_LLM_MODEL_NAME: ${DEEPFIX_LLM_MODEL_NAME:-qwen/qwen3.8-flash}
+      DEEPFIX_LLM_TEMPERATURE: ${DEEPFIX_LLM_TEMPERATURE:-0.7}
+      DEEPFIX_LLM_MAX_TOKENS: ${DEEPFIX_LLM_MAX_TOKENS:-8000}
+      DEEPFIX_LLM_CACHE: ${DEEPFIX_LLM_CACHE:-1}
+      DEEPFIX_LLM_TRACK_USAGE: ${DEEPFIX_LLM_TRACK_USAGE:-1}
+      DEEPFIX_SEARCH_PROVIDER: ${DEEPFIX_SEARCH_PROVIDER:-duckduckgo}
+      NUM_REASONING_CHAINS: ${NUM_REASONING_CHAINS:-1}
+      DEEPFIX_SERVER_DATABASE_URL: ${DEEPFIX_SERVER_DATABASE_URL:-sqlite:////root/.deepfix/deepfix_server.db}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MLFLOW_EXP_NAME: ${MLFLOW_EXP_NAME:-Deepfix-diagnostic-agent}
+    volumes:
+      - deepfix_tool_data:/root/.local
+      - deepfix_server_data:/root/.deepfix
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    mem_limit: 1G
+    command:
+      - /bin/bash
+      - -ec
+      - |
+        export PATH="/root/.local/bin:$${PATH}"
+        if ! command -v deepfix-server >/dev/null 2>&1; then
+          echo "==> Installing deepfix-server tool via uv..."
+          uv tool install "git+https://github.com/delcaux-labs/deepfix.git#subdirectory=packages/deepfix-server"
+        fi
+        mkdir -p /root/.deepfix
+        echo "==> Starting deepfix-server on 0.0.0.0:8844..."
+        exec deepfix-server launch -host 0.0.0.0 -port 8844
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - "http://127.0.0.1:8844/health"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
 volumes:
   memgraph_lib:
   memgraph_log:
   falkordb_data:
   hermes_data:
   mlflow_artifacts:
+  deepfix_tool_data:
+  deepfix_server_data:
