@@ -83,33 +83,123 @@ Alternatively, use the provided `Makefile`:
 make create_environment
 make requirements
 ```
+
+### Install the DeepFix Diagnostic Server
+
+`deepfix run-diagnostic` delegates agentic failure analysis to the separate [DeepFix diagnostic server](https://github.com/delcaux-labs/deepfix/tree/main/packages/deepfix-server). Install its `deepfix-server` command in an isolated environment with [`uv tool install`](https://docs.astral.sh/uv/guides/tools/#installing-tools):
+
+```bash
+uv tool install "git+https://github.com/delcaux-labs/deepfix.git#subdirectory=packages/deepfix-server"
+deepfix-server version
+```
+
+If the executable is not available in a new terminal, add uv's tool directory to your shell's `PATH`, then restart the terminal:
+
+```bash
+uv tool update-shell
+```
+
+Configure the server's model providers before launching it. The server reads these variables from the process environment or from a `.env` file in the directory where it is launched. The server CLI does not currently accept an env-file option, so either launch it from the directory containing that `.env` file or export the variables in the shell first:
+
+```dotenv
+DEEPFIX_LLM_API_KEY=
+DEEPFIX_LLM_BASE_URL=https://openrouter.ai/api/v1
+DEEPFIX_LLM_MODEL_NAME=openai/x-ai/grok-4-fast
+DEEPFIX_LLM_TEMPERATURE=0.7
+DEEPFIX_LLM_MAX_TOKENS=8000
+DEEPFIX_LLM_CACHE=1
+DEEPFIX_LLM_TRACK_USAGE=1
+
+DEEPFIX_SEARCH_PROVIDER="duckduckgo"
+
+NUM_REASONING_CHAINS=1
+
+DEEPFIX_SERVER_DATABASE_URL=sqlite:///./deepfix_server.db
+
+MLFLOW_TRACKING_URI=
+MLFLOW_EXP_NAME=Deepfix-server
+```
+
+```bash
+deepfix-server launch -host 0.0.0.0 -port 8844
+```
+
+For reproducible deployments, pin the installation to a release tag or commit:
+
+```bash
+uv tool install "git+https://github.com/delcaux-labs/deepfix.git#subdirectory=packages/deepfix-server"
+```
+
+Manage the installed tool with:
+
+```bash
+uv tool upgrade deepfix-server
+uv tool uninstall deepfix-server
+```
 ---
 ## Environment Configuration (`.env`)
-DeepFix uses a `.env` file in the project root to configure inference model backends and MLflow tracking.
-Create `.env` using the template below:
+DeepFix uses a `.env` file in the project root for MLflow tracking, the diagnostic server, model endpoints, S3 storage, and graph databases.
+Copy the template and fill in your credentials:
+```bash
+cp example.env .env
+```
 ```dotenv
-# ==============================================================================
-# 1. Model Inference Endpoints (AISC / Octen / LiteLLM)
-# ==============================================================================
-# HPI AI Service Center (AISC) / Octen Inference
-AISC_URL=https://api.aisc.hpi.de/v1
-AISC_KEY=your_aisc_api_key_here
-# LiteLLM Proxy / OpenRouter (optional fallback)
-LITELLM_URL=https://litellm.mittelstand-zukunftslab.de
-LITELLM_KEY=your_litellm_api_key_here
-OPENROUTER_KEY=your_openrouter_api_key_here
-# Provider selector: 'aisc', 'octen', 'hpi', or 'openrouter'
-DEEPFIX_INFERENCE_PROVIDER=aisc
-# ==============================================================================
-# 2. MLflow Experiment Tracking
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# MLflow Tracking & Experiment Configuration
+# ------------------------------------------------------------------------------
 MLFLOW_TRACKING_URI=https://mlflow.mittelstand-zukunftslab.de
-MLFLOW_EXPERIMENT_NAME=deepfix-rag-optimization
-# ==============================================================================
-# 3. Local LanceDB & Data Storage
-# ==============================================================================
-LANCEDB_DATA_DIR=data/lancedb
-DATASET_CACHE_DIR=data/datasets
+MLFLOW_DEV_RAG_EXPERIMENT=dev_rag_experiment
+MLFLOW_ENABLE_ASYNC_TRACE_LOGGING=true
+
+DEEPFIX_SERVER_URL=https://deepfix-server.mittelstand-zukunftslab.de
+DEEPFIX_API_KEY=
+
+# ------------------------------------------------------------------------------
+# LLM Inference Configuration
+# ------------------------------------------------------------------------------
+LLM_BASE_URL=https://api.aisc.hpi.de/v1
+LLM_API_KEY=
+LLM_MODEL=qwen3-8-27b
+LLM_JUDGE_MODEL=gpt-oss-120b
+
+# S3-compatible storage
+S3_ENDPOINT_URL=https://hpi-s3.mittelstand-zukunftslab.de
+S3_URI=s3://deepfix-index/dev
+S3_REGION=us-east-1
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+
+HF_TOKEN=
+
+# ------------------------------------------------------------------------------
+# Embedding Model Configuration
+# ------------------------------------------------------------------------------
+EMBEDDING_BASE_URL=https://api.aisc.hpi.de/v1
+EMBEDDING_API_KEY=
+EMBEDDING_MODEL=octen-embedding-8b
+
+# ------------------------------------------------------------------------------
+# Reranker Configuration (Cohere-compatible API)
+# ------------------------------------------------------------------------------
+COHERE_BASE_URL=https://api.aisc.hpi.de
+COHERE_API_KEY=
+COHERE_MODEL=qwen3-reranker-4b
+
+# ------------------------------------------------------------------------------
+# Memgraph Graph Database
+# ------------------------------------------------------------------------------
+MEMGRAPH_URL=bolt://localhost:7687
+MEMGRAPH_USERNAME=neo4j
+MEMGRAPH_PASSWORD=neo4j
+
+# ------------------------------------------------------------------------------
+# FalkorDB Graph Database
+# ------------------------------------------------------------------------------
+FALKORDB_HOST=localhost
+FALKORDB_PORT=6379
+FALKORDB_USERNAME=
+FALKORDB_PASSWORD=
+FALKORDB_DATABASE=my_knowledge_graph
 ```
 ---
 ## Quickstart: Step-by-Step Optimization Walkthrough

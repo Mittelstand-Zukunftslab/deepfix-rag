@@ -1,24 +1,63 @@
 ---
-name: Re-Ranker Calibration
-description: Adjusts ranking parameters when relevant documents are retrieved but scored too low.
-failure_mode: Low nDCG, Reciprocal Rank Inversion
-trigger_conditions: High Recall paired with low nDCG in evaluation summaries.
-cli_actions: deepfix mutate-config, deepfix eval
+name: rerank-calibration
+description: >
+  Use when eval shows high recall but low ndcg: the relevant documents are retrieved
+  and then ranked too low. Turn on rerank.enabled and raise retrieval.top_k.
+  There is no rerank score-threshold field.
+failure_mode:
+  - retrieval_induced_error
+trigger_conditions:
+  - "recall is high while ndcg is low on eval --json"
+  - "failure_distribution.retrieval_induced_error dominates and retrieved_doc_ids contain the gold id below the cutoff"
+cli_actions:
+  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
+  - "uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
 ---
-## Reasoning Heuristics
-If the right docs are found but sit at the bottom of the pile, activate the re-ranker stage.
 
-## Concrete CLI Patterns
-1. **Activate Post-Retrieval Re-Ranking:**
-   `deepfix mutate-config --set rerank.enabled=true --set rerank.top_n=5`
-2. **Boost Retrieval Base Count:**
-   `deepfix mutate-config --set retrieval.top_k=50`
+Follow `optimization-loop` for the quality gate, exit codes, and the 15-call budget. Re-ranking is query-time. Do not re-index for `rerank.*` or `retrieval.top_k`.
 
-## Validated Findings (legal-rag-bench, 30-query retrieval-only eval)
-- top_k=50 deep retrieval + rerank top_n=5 lifted nDCG@5 0.29→0.59 and Recall@5 0.50→0.80 vs un-reranked hybrid; also beats dense-only (0.53/0.67). Retrieval misses fell 15→6/30. This is the single largest measured lever.
-- A naive 50/50 dense+BM25 RRF hybrid can score far below dense-only on legal corpora. Always A/B `retrieval.backend=dense` vs `hybrid` before trusting fusion; reranking is what makes hybrid safe because it repairs fusion ranking noise.
-- `deepfix hpo --retrieval-only` over query-time hybrid weights (top_k, dense_weight, fusion_mode, bm25 k1/b) plateaus near the dense baseline without a rerank stage.
+## When not to use
+
+`recall` near zero is a retrieval miss. Use `chunking-tuning`, `query-rewriting`, or `embedding-selection` before spending a rerank call on an empty candidate pool.
+
+## Procedure
+
+1. Widen the pool and keep a short list for the generator. Confirm `diffs` is non-empty.
+
+```
+uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
+```
+
+2. Compare. Primary metric is `ndcg`.
+
+```
+uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
+```
+
+Accept only under the optimization-loop gate. There is no `rerank.threshold` key; a `--set` of that name is silently ignored.
+
+## Valid values
+
+`rerank.enabled`: `true` or `false` (default `false`).
+
+`rerank.top_n`: integer >= 1 (default 5). This is how many passages reach generation.
+
+`retrieval.top_k`: 1–100 (default 10). This is the candidate pool before reranking. Set `top_k` above `top_n`.
+
+## Index-time vs query-time
+
+`rerank.enabled`, `rerank.top_n`, and `retrieval.top_k` are query-time.
+
+## Validated findings
+
+legal-rag-bench, 30-query retrieval-only eval:
+
+- `top_k=50` dense retrieval plus `rerank.top_n=5` lifted nDCG@5 from 0.29 to 0.59 and Recall@5 from 0.50 to 0.80 versus un-reranked hybrid, and beat dense-only (0.53 / 0.67). Retrieval misses fell from 15 to 6 of 30. This is the largest measured lever.
+- A naive 50/50 dense+BM25 reciprocal-rank hybrid can score below dense-only on legal corpora. Compare `retrieval.backend=dense` and `hybrid` before trusting fusion. Reranking is what makes hybrid safe, because it repairs fusion rank noise.
+- `deepfix hpo --retrieval-only` over query-time hybrid weights (`top_k`, `dense_weight`, `fusion_mode`, BM25 `k1`/`b`) plateaus near the dense baseline when no rerank stage is on.
 
 ## Pitfalls
-- CohereRerank (llama-index) appends `/v2/rerank` to COHERE_BASE_URL: a base ending in `/v1` yields 404s that present as per-query `retrieval_miss` with empty retrieval — strip the version suffix from the base URL.
-- Confirm hybrid is actually active: grep eval stderr for "falling back to dense". Old pipeline code silently degraded hybrid to dense whenever the loaded index docstore was empty, masking whether BM25 helps or hurts.
+
+- Cohere rerank appends `/v2/rerank` to `COHERE_BASE_URL`. A base URL ending in `/v1` returns 404s that show up as per-query `retrieval_miss` with empty retrieval. Strip the version suffix from the base URL.
+- Confirm hybrid is actually active. If eval stderr contains `falling back to dense`, the loaded index docstore was empty and BM25 was skipped.
+- `top_k` above 100 fails validation (`mutate-config` exits 1).

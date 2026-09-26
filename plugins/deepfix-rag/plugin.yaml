@@ -1,8 +1,28 @@
-schema_version: "1.0"
-name: "DeepFix RAG Optimizer"
-description: "A tool suite and skill manifest for AI agents to diagnose, evaluate, and optimize RAG pipelines."
-entrypoint: "deepfix"
+name: deepfix-rag
+version: "1.0.0"
+description: "Agent-agnostic RAG failure diagnosis, re-indexing, and configuration remediation skills."
+author: "Mittelstand Zukunftslab & AI Service Center @ HPI"
+compatibility:
+  claude_code: ">=1.0.0"
+  hermes: ">=2.0.0"
+  codex: ">=1.0.0"
 skills_directory: "../../.agents/skills"
+skills:
+  - "../../.agents/skills/optimization-loop/SKILL.md"
+  - "../../.agents/skills/diagnostic-server/SKILL.md"
+  - "../../.agents/skills/chunking-tuning/SKILL.md"
+  - "../../.agents/skills/query-rewriting/SKILL.md"
+  - "../../.agents/skills/rerank-calibration/SKILL.md"
+  - "../../.agents/skills/embedding-selection/SKILL.md"
+  - "../../.agents/skills/deflection-and-refusal/SKILL.md"
+  - "../../.agents/skills/legal-retrieval-grounding/SKILL.md"
+  - "../../.agents/skills/multi-hop-aggregation/SKILL.md"
+tool_requirements:
+  - command: deepfix
+    purpose: "Deterministic CLI execution layer for RAG operations."
+  - command: deepfix-server
+    purpose: "DeepFix analysis server used by deepfix run-diagnostic."
+entrypoint: deepfix
 capabilities:
   - diagnostics
   - hyperparameter-optimization
