@@ -104,7 +104,7 @@ Configure the server's model providers before launching it. The server reads the
 ```dotenv
 DEEPFIX_LLM_API_KEY=
 DEEPFIX_LLM_BASE_URL=https://openrouter.ai/api/v1
-DEEPFIX_LLM_MODEL_NAME=openai/x-ai/grok-4-fast
+DEEPFIX_LLM_MODEL_NAME=qwen/qwen3.8-flash
 DEEPFIX_LLM_TEMPERATURE=0.7
 DEEPFIX_LLM_MAX_TOKENS=8000
 DEEPFIX_LLM_CACHE=1
@@ -138,7 +138,7 @@ uv tool uninstall deepfix-server
 ```
 ---
 ## Environment Configuration (`.env`)
-DeepFix uses a `.env` file in the project root for MLflow tracking, the diagnostic server, model endpoints, S3 storage, and graph databases.
+DeepFix uses a `.env` file in the project root for MLflow tracking, the diagnostic server, model endpoints, S3 storage, graph databases, and the Hermes agent.
 Copy the template and fill in your credentials:
 ```bash
 cp example.env .env
@@ -200,6 +200,29 @@ FALKORDB_PORT=6379
 FALKORDB_USERNAME=
 FALKORDB_PASSWORD=
 FALKORDB_DATABASE=my_knowledge_graph
+
+# ------------------------------------------------------------------------------
+# Hermes Agent
+# ------------------------------------------------------------------------------
+HERMES_DASHBOARD=
+HERMES_DASHBOARD_BASIC_AUTH_USERNAME=
+HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=
+HERMES_DASHBOARD_BASIC_AUTH_SECRET=
+API_SERVER_ENABLED=
+API_SERVER_HOST=
+API_SERVER_KEY=
+
+# ------------------------------------------------------------------------------
+# MLflow Server (docker compose)
+# The tracking client above still uses MLFLOW_TRACKING_URI.
+# Point that URI at http://localhost:5000 to use this local server.
+# ------------------------------------------------------------------------------
+MLFLOW_BACKEND_STORE_URI=sqlite:////opt/mlflow/data/mlflow.db
+MLFLOW_AUTH_CONFIG_PATH=/opt/mlflow/data/basic_auth.ini
+MLFLOW_FLASK_SERVER_SECRET_KEY=change-me
+MLFLOW_ADMIN_PASSWORD=change-me
+MLFLOW_ALLOWED_HOSTS=localhost,127.0.0.1
+MLFLOW_CORS_ALLOWED_ORIGINS=http://localhost:5000
 ```
 ---
 ## Quickstart: Step-by-Step Optimization Walkthrough

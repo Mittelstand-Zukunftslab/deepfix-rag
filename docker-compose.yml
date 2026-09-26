@@ -1,0 +1,132 @@
+# Local services for DeepFix.
+# Credentials are read from .env (see example.env):
+#   MEMGRAPH_USERNAME, MEMGRAPH_PASSWORD
+#   FALKORDB_PASSWORD
+#   HERMES_DASHBOARD, HERMES_DASHBOARD_BASIC_AUTH_*, API_SERVER_*
+#   MLFLOW_BACKEND_STORE_URI, MLFLOW_AUTH_CONFIG_PATH,
+#   MLFLOW_ALLOWED_HOSTS, MLFLOW_CORS_ALLOWED_ORIGINS
+#
+#   docker compose up -d
+
+services:
+  memgraph:
+    image: memgraph/memgraph-mage:3.13.1
+    container_name: memgraph-mage
+    environment:
+      MEMGRAPH_USER: ${MEMGRAPH_USERNAME:-neo4j}
+      MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-neo4j}
+    ports:
+      - "7687:7687"
+      - "7444:7444"
+    volumes:
+      - memgraph_lib:/var/lib/memgraph
+      - memgraph_log:/var/log/memgraph
+    command: ["--log-level=TRACE"]
+    restart: unless-stopped
+
+  memgraph-lab:
+    image: memgraph/lab:3.13.1
+    container_name: memgraph-lab
+    ports:
+      - "3000:3000"
+    depends_on:
+      - memgraph
+    environment:
+      QUICK_CONNECT_MG_HOST: memgraph
+      QUICK_CONNECT_MG_PORT: "7687"
+    restart: unless-stopped
+
+  falkordb:
+    image: falkordb/falkordb:v4.20.3-alpine
+    container_name: falkordb
+    ports:
+      - "6379:6379"
+    environment:
+      # Empty FALKORDB_PASSWORD leaves the server open, matching the app default.
+      # A non-empty value enables Redis AUTH with that same password.
+      REDIS_ARGS: ${FALKORDB_PASSWORD:+--requirepass ${FALKORDB_PASSWORD}}
+      FALKORDB_ARGS: THREAD_COUNT 4
+    volumes:
+      - falkordb_data:/var/lib/falkordb/data
+    restart: unless-stopped
+
+  hermes:
+    image: nousresearch/hermes-agent:v2026.6.19
+    container_name: hermes
+    command: ["gateway", "run"]
+    ports:
+      - "9119:9119" # dashboard
+      - "8642:8642" # OpenAI-compatible API
+    environment:
+      HERMES_DASHBOARD: ${HERMES_DASHBOARD:-}
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
+      API_SERVER_ENABLED: ${API_SERVER_ENABLED:-}
+      API_SERVER_HOST: ${API_SERVER_HOST:-}
+      API_SERVER_KEY: ${API_SERVER_KEY:-}
+    volumes:
+      - hermes_data:/opt/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+    restart: unless-stopped
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.15.1
+    container_name: mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_artifacts:/opt/mlflow/data
+    environment:
+      MLFLOW_BACKEND_STORE_URI: ${MLFLOW_BACKEND_STORE_URI}
+      MLFLOW_AUTH_CONFIG_PATH: ${MLFLOW_AUTH_CONFIG_PATH}
+      MLFLOW_ALLOWED_HOSTS: ${MLFLOW_ALLOWED_HOSTS}
+      MLFLOW_CORS_ALLOWED_ORIGINS: ${MLFLOW_CORS_ALLOWED_ORIGINS}
+      MLFLOW_SERVER_ENABLE_JOB_EXECUTION: "false"
+      MLFLOW_WORKERS: "1"
+    mem_limit: 1G
+    pids_limit: 64
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+
+        cat > "$${MLFLOW_AUTH_CONFIG_PATH}" <<EOF
+        [mlflow]
+        default_permission = READ
+        database_uri = $${MLFLOW_BACKEND_STORE_URI}
+        grant_default_workspace_access = false
+        workspace_cache_max_size = 10000
+        workspace_cache_ttl_seconds = 3600
+        EOF
+
+        exec mlflow server \
+          --host 0.0.0.0 \
+          --port 5000 \
+          --artifacts-destination /opt/mlflow/data/artifacts \
+          --default-artifact-root mlflow-artifacts:/ \
+          --allowed-hosts "$${MLFLOW_ALLOWED_HOSTS}" \
+          --cors-allowed-origins "$${MLFLOW_CORS_ALLOWED_ORIGINS}"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  memgraph_lib:
+  memgraph_log:
+  falkordb_data:
+  hermes_data:
+  mlflow_artifacts:
