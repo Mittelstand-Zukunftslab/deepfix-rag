@@ -43,27 +43,23 @@ DeepFix separates the optimization loop into two clear layers:
 ## Feature Matrix & Implementation Status
 | Feature / Subcommand | Status | Description |
 | :--- | :---: | :--- |
-| `deepfix dataset load` | `[Ready]` | Ingests benchmark datasets with strict `dev`/`test` split isolation and HuggingFace streaming. |
+| `deepfix dataset load` | `[Ready]` | Ingests benchmark datasets (Bundestag, Legal RAG Bench, local files) into standardized JSON Lines format. |
 | `deepfix index` | `[Ready]` | Builds vector & lexical tables in LanceDB with Octen-8B / Qwen embeddings. |
 | `deepfix eval` | `[Ready]` | Runs DeepEval scoring; supports `--compare` for automatic delta metrics. |
 | `deepfix mutate-config` | `[Ready]` | Validates dot-notation parameter overrides against Pydantic schema and outputs updated YAML. |
 | `deepfix diff-config` | `[Ready]` | Computes structural and hyperparameter diffs between two YAML configurations. |
+| `deepfix hpo` | `[Ready]` | Executes multi-paradigm hyperparameter optimization (dense, hybrid, graph) using Optuna. |
 | `deepfix run-diagnostic` | `[In Progress]` | Categorizes failure modes (retrieval vs. ranking vs. grounding vs. entity). |
 | `deepfix export` | `[In Progress]` | Packages best configuration with evaluation lineage into standalone deployment bundles. |
 | **Autonomous Agent Loop** | `[In Progress]` | Multi-cycle closed-loop optimization executed by Hermes via `SKILL.md` plugins. |
 ---
 ## Supported Benchmark Matrix
-DeepFix targets complex, domain-specific, and large-scale RAG benchmarks:
-| Benchmark | Domain / Task | Failure Focus | Split Isolation | Source / Repository |
-| :--- | :--- | :--- | :---: | :--- |
-| **GaRAGe** | General Question Answering | Grounding, factuality & unanswerable deflection ("I don't know") | `dev` / `test` | `ds-ba/GaRAGe` |
-| **bLLeQA** | Multilingual (FR/NL) Legal QA | Cross-lingual grounding and statutory refusal calibration | `dev` / `test` | `ds-ba/bLLeQA` |
-| **Legal RAG Bench** | Complex Statutory Analysis | Decomposes retrieval misses vs. reasoning failures vs. hallucinations | `dev` / `test` | `isaacus/legal-rag-bench` |
-| **BrowseComp-Plus** | Web Deep Research (~100k docs) | Multi-hop reasoning and long-tail document retrieval | `dev` / `test` | `ds-ba/BrowseComp-Plus` |
-| **EnterpriseRAG-Bench**| Enterprise Knowledge (>500k docs)| Low lexical overlap, enterprise jargon & multi-doc aggregation | `dev` / `test` | `ds-ba/EnterpriseRAG-Bench` |
-| **mtRAG** | Multi-Turn Conversational AI | Context maintenance across turns and topic shifts | `dev` / `test` | `ds-ba/mtRAG` |
-> [!IMPORTANT]
-> **Split Isolation Policy**: Optimization and tuning loops **only** execute against the `dev` split. The `test` split is strictly locked for final evaluation.
+DeepFix targets complex, domain-specific legal and parliamentary RAG benchmarks implemented in `src/deepfix_rag/data.py`:
+| Benchmark | Preset / Alias | Domain / Task | Failure Focus | Split / Subsets | Source / Repository |
+| :--- | :--- | :--- | :--- | :---: | :--- |
+| **Bundestag Parliamentary Benchmark** | `bundestag-qa`<br>`bundestag-corpus` | German parliamentary debates & legislative inquiry QA (DIP) | Domain terminology, multi-document aggregation, legislative context | `train` | `wirthual/dip-bundestag` (corpus)<br>`wirthual/dip-bundestag-qa` (QA) |
+| **Legal RAG Bench** | `legal-rag-bench` | Complex statutory analysis & legal QA (US statutes, regulatory code, footnotes) | Decomposes retrieval misses vs. reasoning failures vs. hallucinations | `test`<br>(`corpus` / `qa`) | `isaacus/legal-rag-bench` |
+| **Custom / Local Benchmarks** | `<path.jsonl>`<br>`<dir_path>` | Arbitrary domain corpora and evaluation QA pairs | Custom evaluation & domain-specific failure mode diagnostics | Flexible | Local JSON / JSONL files or directory (`LocalFileLoader`) |
 ---
 ## Installation & Prerequisites
 ### Prerequisites
@@ -119,27 +115,27 @@ DATASET_CACHE_DIR=data/datasets
 ## Quickstart: Step-by-Step Optimization Walkthrough
 Here is an end-to-end scenario demonstrating how DeepFix loads data, indexes passages, computes baselines, mutates parameters, and compares improvements.
 ### 1. Ingest Benchmark Dataset
-Fetch the development split of the benchmark dataset (e.g. `garage`):
+Fetch the benchmark dataset (e.g. `bundestag-qa`):
 ```bash
-deepfix dataset load --name garage --split dev
+deepfix dataset load --name bundestag-qa --split train
 ```
-Files are saved to `data/datasets/garage/dev/corpus.jsonl` and `qa.jsonl`.
+Files are saved to `data/datasets/bundestag-qa/train/corpus.jsonl` and `qa.jsonl`.
 ### 2. Build LanceDB Index
 Generate embeddings and build the LanceDB hybrid table:
 ```bash
 deepfix index \
-  --dataset data/datasets/garage/dev/corpus.jsonl \
+  --dataset data/datasets/bundestag-qa/train/corpus.jsonl \
   --config configs/default.yaml \
-  --index-dir data/indexes/garage_dev \
+  --index-dir data/indexes/bundestag_train \
   --force
 ```
 ### 3. Run Baseline Evaluation
 Evaluate the baseline configuration using DeepEval metrics:
 ```bash
 deepfix eval \
-  --dataset data/datasets/garage/dev/qa.jsonl \
+  --dataset data/datasets/bundestag-qa/train/qa.jsonl \
   --config configs/default.yaml \
-  --index-dir data/indexes/garage_dev \
+  --index-dir data/indexes/bundestag_train \
   --limit 20
 ```
 ### 4. Mutate Hyperparameters
@@ -159,10 +155,10 @@ deepfix diff-config configs/default.yaml configs/candidate_v1.yaml
 Run evaluation with `--compare` to get side-by-side metric deltas:
 ```bash
 deepfix eval \
-  --dataset data/datasets/garage/dev/qa.jsonl \
+  --dataset data/datasets/bundestag-qa/train/qa.jsonl \
   --config configs/candidate_v1.yaml \
   --compare configs/default.yaml \
-  --index-dir data/indexes/garage_dev \
+  --index-dir data/indexes/bundestag_train \
   --limit 20
 ```
 Output includes `candidate`, `baseline`, and `delta` for:
@@ -181,7 +177,7 @@ All subcommands support `--json` for headless automation by LLM agents.
 ### `deepfix dataset load`
 Download and format benchmark datasets into canonical JSON Lines format.
 ```bash
-deepfix dataset load --name <preset_or_hf_repo> --split <dev|test> [--stream]
+deepfix dataset load --name <preset_or_hf_repo> [--split train] [--limit <N>] [--subset <corpus|qa>] [--corpus-only] [--data-root <dir>] [--json]
 ```
 ### `deepfix index`
 Build dense, sparse, or hybrid LanceDB indexes from a corpus.
@@ -212,6 +208,11 @@ deepfix run-diagnostic --dataset <path> --type <retrieval|entity|ranking|groundi
 Export the best candidate configuration bundle and metadata.
 ```bash
 deepfix export --config <best_config.yaml> --output <dist_path> [--include-meta] [--json]
+```
+### `deepfix hpo`
+Execute multi-paradigm hyperparameter optimization study using Optuna.
+```bash
+deepfix hpo --config <hpo_config.yaml> [--n-trials <N>] [--storage-uri <uri>] [--paradigm <dense|hybrid|graph>] [--output <best.yaml>] [--json]
 ```
 ---
 ## Configuration Schema
@@ -273,21 +274,24 @@ pilotproject-deepfix/
 ├── src/deepfix_rag/               <- Main Python package source code
 │   ├── cli/                       <- CLI subcommands (Typer)
 │   │   ├── config.py              <- mutate-config and diff-config
-│   │   ├── dataset.py             <- dataset load and split management
+│   │   ├── dataset.py             <- dataset load, list, and unanswerable generation
 │   │   ├── diagnostic.py          <- run-diagnostic (failure analysis)
 │   │   ├── eval.py                <- eval with DeepEval and delta comparisons
 │   │   ├── export.py              <- export configuration bundles
+│   │   ├── hpo.py                 <- multi-paradigm Optuna HPO study CLI
 │   │   ├── index.py               <- index building with LanceDB
 │   │   └── ui.py                  <- Rich console formatting and JSON output
 │   ├── config/                    <- Configuration schema and mutator logic
+│   │   ├── hpo.py                 <- Optuna HPO search space and study config
 │   │   ├── mutator.py             <- Parameter override and diff engine
-│   │   └── schema.py              <- Pydantic RAGConfig model definition
+│   │   ├── schema.py              <- Pydantic RAGConfig and DataLoaderConfig schemas
+│   │   └── settings.py            <- Environment settings and logger setup
+│   ├── data.py                    <- Benchmark loader strategies and DataLoader facade
 │   ├── diagnostics/               <- Failure mode classification engine
 │   ├── evaluation/                <- Evaluation runner and MLflow integrations
 │   │   └── runner.py              <- DeepEval pipeline execution runner
-│   ├── retrieval/                 <- Retrieval and generation engines
-│   │   ├── models.py              <- EmbeddingClient and GenerationClient
-│   │   └── pipeline.py            <- Hybrid and dense retrieval pipeline
+│   ├── hpo.py                     <- HyperparameterOpt execution engine
+│   ├── pipeline.py                <- LlamaIndex Workflow RAG pipeline (hybrid/dense/BM25)
 │   └── main.py                    <- Entrypoint CLI application (`deepfix`)
 ├── tests/                         <- Test suite (pytest + conftest.py)
 │   ├── conftest.py                <- Shared fixtures (cli_runner, configs, benchmark paths)
