@@ -441,7 +441,8 @@ class RAGWorkflow(Workflow):
     def _get_graph_retriever(self, index: BaseIndex, top_k: int) -> BaseRetriever:
         """Construct a PropertyGraph retriever with VectorContextRetriever and LLMSynonymRetriever traversal."""
 
-        sub_retrievers = [
+        def get_subretrievers(graph_store: PropertyGraphStore) -> list[BaseRetriever]:
+            return [
                 LLMSynonymRetriever(
                     graph_store=graph_store,
                     include_text=True,
@@ -456,6 +457,7 @@ class RAGWorkflow(Workflow):
                     include_text=True,
                 ),
             ]
+        
         if isinstance(index, PropertyGraphIndex):
             graph_store = getattr(
                 index,
@@ -463,7 +465,7 @@ class RAGWorkflow(Workflow):
                 getattr(index, "_property_graph_store", None),
             )            
             return index.as_retriever(
-                sub_retrievers=sub_retrievers,
+                sub_retrievers=get_subretrievers(graph_store),
                 similarity_top_k=top_k,
             )
         else:
@@ -474,7 +476,7 @@ class RAGWorkflow(Workflow):
                     embed_model=self._get_embed_model(),
                 )
                 return pg_index.as_retriever(
-                    sub_retrievers=sub_retrievers,
+                    sub_retrievers=get_subretrievers(graph_store),
                     similarity_top_k=top_k,
                 )
             raise ValueError(

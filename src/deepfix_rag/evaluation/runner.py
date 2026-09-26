@@ -444,39 +444,16 @@ class EvaluationTracker:
 
     def __init__(
         self,
-        workspace: str = "dev",
         experiment_name: str | None = None,
     ) -> None:
-        self.workspace = workspace
         self.experiment_name = experiment_name or settings.MLFLOW_DEV_RAG_EXPERIMENT
 
     def setup(self) -> None:
-        """Setup MLflow workspace and verify experiment exists."""
-        workspace_env = (
-            "MLFLOW_TEST_WORKSPACE" if self.workspace == "test" else "MLFLOW_DEV_WORKSPACE"
-        )
-        workspace_name = getattr(settings, workspace_env, None)
-        if hasattr(mlflow, "set_workspace") and workspace_name:
-            try:
-                mlflow.set_workspace(workspace_name)
-            except Exception as e:
-                LOGGER.debug(f"Failed to set MLflow workspace: {e}")
-
-        try:
-            experiment = mlflow.get_experiment_by_name(self.experiment_name)
-        except Exception as e:
-            if "does not support workspaces" in str(e) and hasattr(mlflow, "set_workspace"):
-                try:
-                    mlflow.set_workspace(None)
-                except Exception:
-                    pass
-                experiment = mlflow.get_experiment_by_name(self.experiment_name)
-            else:
-                raise
-
+        """Verify MLflow experiment exists and set it as active."""
+        experiment = mlflow.get_experiment_by_name(self.experiment_name)
         if experiment is None:
             raise RuntimeError(
-                f"MLflow experiment '{self.experiment_name}' does not exist in this workspace. "
+                f"MLflow experiment '{self.experiment_name}' does not exist. "
                 f"Refusing to auto-create per contract - check {self.experiment_name}."
             )
         mlflow.set_experiment(experiment_id=experiment.experiment_id)
@@ -624,7 +601,7 @@ class EvaluationRunner:
     async def run(
         self,
         dataset_path: Path | str,
-        workspace: str = "dev",
+        workspace: str | None = None,
         run_name: str = "eval_run",
         split: str | None = None,
         limit: int | None = None,
@@ -649,7 +626,6 @@ class EvaluationRunner:
 
             self.config = apply_mutation(self.config, overrides)
 
-        self.tracker.workspace = workspace
         self.tracker.setup()
 
         qa_pairs = load_qa_dataset(dataset_path, split=self.config.data.split)
@@ -782,7 +758,6 @@ class EvaluationRunner:
 async def run_evaluation(
     dataset_path: Path | str,
     config: RAGConfig,
-    workspace: str = "dev",
     run_name: str = "eval_run",
     split: str | None = None,
     limit: int | None = None,
@@ -794,7 +769,6 @@ async def run_evaluation(
     runner = EvaluationRunner(config=config)
     return await runner.run(
         dataset_path=dataset_path,
-        workspace=workspace,
         run_name=run_name,
         split=split,
         limit=limit,

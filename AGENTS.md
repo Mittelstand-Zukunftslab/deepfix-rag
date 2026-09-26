@@ -171,7 +171,6 @@ Always reuse standard fixtures defined in [`tests/conftest.py`](tests/conftest.p
 - **`sample_qa_path`**: Path to [`tests/data/sample_qa.jsonl`](tests/data/sample_qa.jsonl).
 - **`default_rag_config`**: Fresh default `RAGConfig` instance.
 - **`sample_rag_config`**: Pre-configured `RAGConfig` referencing sample benchmark fixtures.
-- **`isolated_mlflow_env`**: Isolated local SQLite MLflow tracking environment.
 - **`populated_sample_index_dir`**: Temporary LanceDB directory pre-populated with sample corpus.
 
 ### Test Isolation & Real Pipeline Testing (No Mocks)

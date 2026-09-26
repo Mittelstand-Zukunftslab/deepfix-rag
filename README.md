@@ -108,9 +108,6 @@ DEEPFIX_INFERENCE_PROVIDER=aisc
 # 2. MLflow Experiment Tracking
 # ==============================================================================
 MLFLOW_TRACKING_URI=https://mlflow.mittelstand-zukunftslab.de
-MLFLOW_TRACKING_USERNAME=your_username
-MLFLOW_TRACKING_PASSWORD=your_password
-MLFLOW_DEV_WORKSPACE=deepfix-dev
 MLFLOW_EXPERIMENT_NAME=deepfix-rag-optimization
 # ==============================================================================
 # 3. Local LanceDB & Data Storage

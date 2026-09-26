@@ -196,14 +196,12 @@ class HyperparameterOpt:
         dataset_path: Path | str,
         split: str,
         limit: int | None,
-        workspace: str,
         run_name: str,
     ) -> dict[str, float]:
         """Execute EvaluationRunner asynchronously for a single trial."""
         runner = EvaluationRunner(config=trial_config)
         summary = await runner.run(
             dataset_path=dataset_path,
-            workspace=workspace,
             run_name=run_name,
             split=split,
             limit=limit,
@@ -216,7 +214,6 @@ class HyperparameterOpt:
         dataset_path: Path | str,
         split: str,
         limit: int | None,
-        workspace: str,
     ) -> tuple[float, ...]:
         """Optuna objective function."""
         # 1. Sample overrides according to paradigm
@@ -257,7 +254,6 @@ class HyperparameterOpt:
                             dataset_path=dataset_path,
                             split=split,
                             limit=limit,
-                            workspace=workspace,
                             run_name=run_name,
                         ),
                     ).result()
@@ -268,7 +264,6 @@ class HyperparameterOpt:
                         dataset_path=dataset_path,
                         split=split,
                         limit=limit,
-                        workspace=workspace,
                         run_name=run_name,
                     )
                 )
@@ -306,7 +301,7 @@ class HyperparameterOpt:
         dataset_path: Path | str | None = None,
         split: str | None = None,
         limit: int | None = None,
-        workspace: str = "dev",
+        workspace: str | None = None,
         load_if_exists: bool = True,
     ) -> HPOResult:
         """Run the Optuna optimization study."""
@@ -334,7 +329,6 @@ class HyperparameterOpt:
                 dataset_path=target_dataset,
                 split=target_split,
                 limit=target_limit,
-                workspace=workspace,
             ),
             n_trials=target_n_trials,
             timeout=timeout,

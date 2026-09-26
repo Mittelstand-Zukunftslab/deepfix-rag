@@ -20,14 +20,8 @@ def get_logger():
 
 class Settings(BaseSettings):
     # MLflow
-    MLFLOW_TRACKING_USERNAME: str | None = None
-    MLFLOW_TRACKING_PASSWORD: str | None = None
     MLFLOW_TRACKING_URI: str | None = None
-    MLFLOW_DEV_WORKSPACE: str | None = None
-    MLFLOW_CANDIDATE_ID: str = "baseline_001"
     MLFLOW_DEV_RAG_EXPERIMENT: str = "dev_rag_experiment"
-    MLFLOW_CORPUS_ID: str | None = None
-    MLFLOW_ENABLE_ASYNC_TRACE_LOGGING: bool = False
 
     DATA_ROOT: str = os.path.join(Path(__file__).parents[3], "data", "raw")
     DATA_PROCESSES_DIR: str = os.path.join(Path(__file__).parents[3], "data", "processed")

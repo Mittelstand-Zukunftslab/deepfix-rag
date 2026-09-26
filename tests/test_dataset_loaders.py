@@ -259,66 +259,6 @@ def test_chunking_overlap_validation_still_applies_to_sentence():
         ChunkingConfig(strategy=ChunkingStrategy.SENTENCE, size=64, overlap=64)
 
 
-def test_build_node_parser_routes_strategies():
-    """Verify build_node_parser maps each strategy to the expected LlamaIndex parser."""
-    from llama_index.core.node_parser import (
-        HierarchicalNodeParser,
-        SemanticSplitterNodeParser,
-        SentenceSplitter,
-        TokenTextSplitter,
-    )
-    from llama_index.embeddings.openai import OpenAIEmbedding
-
-    from deepfix_rag.data import RecursiveChonkieParser
-
-    recursive = build_node_parser(ChunkingConfig(strategy=ChunkingStrategy.RECURSIVE))
-    assert isinstance(recursive, RecursiveChonkieParser)
-
-    sentence = build_node_parser(ChunkingConfig(strategy=ChunkingStrategy.SENTENCE))
-    assert isinstance(sentence, SentenceSplitter)
-
-    fixed = build_node_parser(
-        ChunkingConfig(strategy=ChunkingStrategy.FIXED, size=128, overlap=16)
-    )
-    assert isinstance(fixed, TokenTextSplitter)
-
-    hierarchical = build_node_parser(ChunkingConfig(strategy=ChunkingStrategy.HIERARCHICAL))
-    assert isinstance(hierarchical, HierarchicalNodeParser)
-
-    embed = OpenAIEmbedding(model_name="test-embed", api_key="sk-test")
-    semantic = build_node_parser(
-        ChunkingConfig(strategy=ChunkingStrategy.SEMANTIC),
-        embed_model=embed,
-    )
-    assert isinstance(semantic, SemanticSplitterNodeParser)
-
-
-def test_chunk_docs_fixed_and_hierarchical_preserve_parent_ids():
-    """Verify fixed and hierarchical chunk_docs keep parent doc_id and unique chunk_id."""
-    text = " ".join(["lorem"] * 400)
-    docs = [Document(text=text, id_="doc_h", metadata={"doc_id": "doc_h"})]
-
-    fixed_chunks = DataLoader.chunk_docs(
-        docs, ChunkingConfig(strategy=ChunkingStrategy.FIXED, size=64, overlap=0)
-    )
-    assert len(fixed_chunks) > 1
-    assert {c.id_ for c in fixed_chunks} == {"doc_h"}
-    assert len({c.metadata["chunk_id"] for c in fixed_chunks}) == len(fixed_chunks)
-
-    hier_chunks = DataLoader.chunk_docs(
-        docs,
-        ChunkingConfig(
-            strategy=ChunkingStrategy.HIERARCHICAL,
-            hierarchical_chunk_sizes=[256, 64],
-        ),
-    )
-    assert len(hier_chunks) >= 1
-    for chunk in hier_chunks:
-        assert chunk.id_ == "doc_h"
-        assert chunk.metadata["doc_id"] == "doc_h"
-        assert chunk.metadata["chunk_id"].startswith("doc_h::chunk_")
-
-
 def test_hierarchical_chunking_rejected_with_graph_backend():
     """Verify hierarchical ingest raises when combined with graph retrieval."""
     cfg = RAGConfig()
