@@ -122,8 +122,10 @@ services:
       - mlflow_artifacts:/opt/mlflow/data
     environment:
       MLFLOW_BACKEND_STORE_URI: sqlite:////opt/mlflow/data/mlflow.db
+      MLFLOW_SERVER_ALLOWED_HOSTS: "*"
+      MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: "*"
     mem_limit: 1G
-    command: mlflow server --host 0.0.0.0 --port 5000 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/ --allowed-hosts "*" --cors-allowed-origins "*"
+    command: mlflow server --host 0.0.0.0 --port 5000 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/
     healthcheck:
       test:
         - CMD
