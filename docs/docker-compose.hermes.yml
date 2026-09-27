@@ -1,0 +1,96 @@
+services:
+  hermes:
+    image: nousresearch/hermes-agent:v2026.6.19
+    restart: unless-stopped
+    environment:
+      HERMES_DASHBOARD: ${HERMES_DASHBOARD}
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD}
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET}
+      API_SERVER_ENABLED: ${API_SERVER_ENABLED}
+      API_SERVER_HOST: ${API_SERVER_HOST}
+      API_SERVER_KEY: ${API_SERVER_KEY}
+      HERMES_HOME: /opt/data
+      HERMES_OTEL_CONFIG: /opt/data/hermes_otel.yaml
+      PYTHONPATH: /opt/data/.python-packages
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-https://mlflowhpi.mittelstand-zukunftslab.de}
+      MLFLOW_EXPERIMENT_ID: ${MLFLOW_EXPERIMENT_ID:-1}
+      DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-https://deepfix-server.mittelstand-zukunftslab.de}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.aisc.hpi.de/v1}
+      HERMES_REASONING_EFFORT: ${HERMES_REASONING_EFFORT:-low}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if ! python -c 'import opentelemetry.exporter.otlp.proto.http.trace_exporter; import yaml' 2>/dev/null; then
+          uv pip install --python /opt/hermes/.venv/bin/python --target /opt/data/.python-packages \
+            'opentelemetry-api<2' 'opentelemetry-sdk<2' 'opentelemetry-exporter-otlp-proto-http<2' pyyaml
+        fi
+
+        # Same plugin revision as the working HPI-github deployment.
+        source=/opt/data/.hermes-otel-source
+        commit=c6b4e0144222fd797368a4de0700286ea639af21
+        if [ ! -d "$$source/.git" ]; then
+          git init "$$source"
+        fi
+        if [ "$$(git -C "$$source" rev-parse HEAD 2>/dev/null)" != "$$commit" ]; then
+          git -C "$$source" fetch --depth 1 https://github.com/briancaffey/hermes-otel.git "$$commit"
+          git -C "$$source" checkout --detach FETCH_HEAD
+        fi
+        mkdir -p /opt/data/plugins/hermes_otel
+        cp -a "$$source/hermes_otel/." /opt/data/plugins/hermes_otel/
+        hermes plugins enable hermes_otel
+
+        # Restore the HPI Qwen model without overwriting other Hermes settings.
+        python - <<'PY'
+        import os
+        from pathlib import Path
+        import yaml
+
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise SystemExit("Set OPENAI_API_KEY in Dokploy before starting Hermes")
+        effort = os.environ["HERMES_REASONING_EFFORT"].lower()
+        if effort not in {"low", "medium", "high"}:
+            raise SystemExit("HERMES_REASONING_EFFORT must be low, medium, or high")
+        path = Path("/opt/data/config.yaml")
+        config = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
+        config = config or {}
+        config["model"] = {**config.get("model", {}), "provider": "custom",
+                           "default": "qwen3-8-27b",
+                           "base_url": os.environ["OPENAI_BASE_URL"],
+                           "api_mode": "chat_completions",
+                           "api_key": "$${OPENAI_API_KEY}"}
+        config["agent"] = {**config.get("agent", {}), "reasoning_effort": effort}
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+        temporary.chmod(0o600)
+        temporary.replace(path)
+        PY
+
+        # Rewrite the tracing route on startup; no auth or workspace headers.
+        cat > "$$HERMES_OTEL_CONFIG" <<EOF
+        enabled: true
+        force_flush_on_session_end: true
+        capture_full_responses: true
+        backends:
+          - type: otlp
+            name: mlflow
+            endpoint: "$${MLFLOW_TRACKING_URI%/}/v1/traces"
+            metrics: false
+            logs: false
+            headers:
+              x-mlflow-experiment-id: "$${MLFLOW_EXPERIMENT_ID}"
+        EOF
+        echo "Hermes tracing configured for $${MLFLOW_TRACKING_URI}, experiment $${MLFLOW_EXPERIMENT_ID}"
+        exec hermes gateway run
+    volumes:
+      - hermes_data:/opt/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+volumes:
+  hermes_data:
