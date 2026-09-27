@@ -23,7 +23,6 @@ from deepeval.metrics import (
     FaithfulnessMetric,
 )
 from deepeval.test_case import LLMTestCase
-from llama_index.core.workflow import Context
 import mlflow
 import pandas as pd
 import pyterrier as pt
@@ -39,7 +38,8 @@ from deepfix_rag.config.schema import (
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader, QARecord
 from deepfix_rag.evaluation.llm import ProxyJudgeLLM
-from deepfix_rag.pipeline import RAGWorkflow, RetrievalResult
+from deepfix_rag.pipeline import RAGWorkflow, RetrievalResult, RAGResult
+from deepfix_rag.config.mutator import apply_mutation
 
 _enc = tiktoken.get_encoding("cl100k_base")
 
@@ -540,21 +540,14 @@ class EvaluationRunner:
         answer = ""
         error = None
 
-        ctx = Context(workflow)
         try:
-            results: list[RetrievalResult] | None = await workflow.run(ctx=ctx, query=query)
-            retrieved_results = results or []
+            result: RAGResult | None = await workflow.run(query=query)
+            retrieved_results = result.retrieval_results or []
             context = [r.text for r in retrieved_results]
 
             if not self.config.retrieval_only:
-                try:
-                    stored_ans = await ctx.store.get("synthesized_response", default=None)
-                except Exception:
-                    stored_ans = None
-                if stored_ans:
-                    answer = stored_ans
-                else:
-                    answer = context[0] if context else ""
+                answer = result.generated_answer
+                
         except Exception as e:
             error = str(e)
             LOGGER.warning(f"Case {i} execution error: {e}")
@@ -601,7 +594,6 @@ class EvaluationRunner:
     async def run(
         self,
         dataset_path: Path | str,
-        workspace: str | None = None,
         run_name: str = "eval_run",
         split: str | None = None,
         limit: int | None = None,
@@ -622,7 +614,7 @@ class EvaluationRunner:
             overrides["retrieval_only"] = retrieval_only
 
         if overrides:
-            from deepfix_rag.config.mutator import apply_mutation
+            
 
             self.config = apply_mutation(self.config, overrides)
 

@@ -2,7 +2,7 @@ import asyncio
 import concurrent.futures
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Optional
 
 import lancedb
 from llama_index.core import (
@@ -89,6 +89,10 @@ class RetrievalResult(BaseModel):
     score: float = Field(..., description="Retrieval score")
     text: str = Field(..., description="The text of the document")
 
+class RAGResult(BaseModel):
+    """RAG result."""
+    retrieval_results: list[RetrievalResult] = Field(..., description="The retrieval results")
+    generated_answer: Optional[str] = Field(None, description="The generated answer of the document")
 
 class ChunkStatistics(BaseModel):
     """Chunking statistics captured during index build."""
@@ -737,13 +741,13 @@ class RAGWorkflow(Workflow):
 
         if self.config.retrieval_only:
             LOGGER.info("Retrieval only mode enabled. Returning retrieved nodes.")
-            await ctx.store.set("synthesized_response", "")
-            return StopEvent(result=self.convert_nodes_to_results(ev.nodes))
+            return StopEvent(result=RAGResult(retrieval_results=self.convert_nodes_to_results(ev.nodes), generated_answer=None))
 
         summarizer = self._get_response_synthesizer()
         response = await summarizer.asynthesize(query, nodes=ev.nodes)
-        await ctx.store.set("synthesized_response", str(response.response) if response else "")
-        response_model = self.convert_nodes_to_results(response.source_nodes)
+        generated_answer=str(response.response) if response else None
+        retrieval_results = self.convert_nodes_to_results(ev.nodes)
+        response_model = RAGResult(retrieval_results=retrieval_results, generated_answer=generated_answer)
         return StopEvent(result=response_model)
 
 
@@ -751,10 +755,10 @@ def execute_pipeline(
     query: str,
     workflow: RAGWorkflow,
     ingest_data: bool = False,
-) -> list[RetrievalResult]:
+) -> RAGResult:
     """Execute retrieval on an existing index and return standardized candidate results synchronously."""
 
-    async def _arun() -> list[RetrievalResult]:
+    async def _arun() -> RAGResult:
         index = await workflow.run(ingest=ingest_data)
         response = await workflow.run(query=query, index=index)
         return response
