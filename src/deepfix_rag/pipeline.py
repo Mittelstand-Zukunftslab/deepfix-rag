@@ -179,7 +179,7 @@ class RAGWorkflow(Workflow):
             api_key=settings.EMBEDDING_API_KEY,
         )
 
-    def _get_llm(self) -> BaseLLM:
+    def _get_llm(self, additional_kwargs: dict[str, Any] | None = None) -> BaseLLM:
         if self.llm is not None:
             return self.llm
         model_name = settings.LLM_MODEL
@@ -192,6 +192,14 @@ class RAGWorkflow(Workflow):
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
             system_prompt=self.config.generation.system_prompt,
+            additional_kwargs=additional_kwargs or {},
+        )
+
+    def _get_extraction_llm(self) -> BaseLLM:
+        if not settings.LLM_EXTRACTION_DISABLE_THINKING:
+            return self._get_llm()
+        return self._get_llm(
+            additional_kwargs={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
         )
 
     def _get_reranker(self) -> CohereRerank | None:
@@ -375,8 +383,9 @@ class RAGWorkflow(Workflow):
             schema_key = str(self.config.retrieval.graph_extraction_schema).lower().strip()
             schema_info = GRAPH_EXTRACTION_SCHEMAS.get(schema_key)
             extractor_kwargs: dict[str, Any] = {
-                "llm": self._get_llm(),
+                "llm": self._get_extraction_llm(),
                 "max_triplets_per_chunk": self.config.retrieval.graph_max_paths_per_chunk,
+                "num_workers": self.config.retrieval.graph_extraction_workers,
             }
             if schema_info:
                 extractor_kwargs["possible_entities"] = label_literal(schema_info.entities)

@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     LLM_API_KEY: str | None = None
     LLM_MODEL: str = "qwen3-8-27b"
     LLM_CONTEXT_WINDOW: int = 20000
+    # Skips the reasoning phase of vLLM/Qwen-style models during graph triple extraction.
+    LLM_EXTRACTION_DISABLE_THINKING: bool = False
 
     # Judge
     LLM_JUDGE_MODEL: str = "gpt-oss-120b"

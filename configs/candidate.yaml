@@ -33,6 +33,7 @@ retrieval:
   bm25_b: 0.75
   graph_extraction_schema: entity_relationship
   graph_max_paths_per_chunk: 5
+  graph_extraction_workers: 16
   graph_traversal_hops: 2
   bit_width: 4
   language: german

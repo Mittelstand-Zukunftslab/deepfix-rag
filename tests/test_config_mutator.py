@@ -85,6 +85,19 @@ def test_retrieval_bit_width_validation():
         RAGConfig.model_validate({"retrieval": {"bit_width": 5}})
 
 
+def test_graph_extraction_workers_bounds():
+    """Verify the extraction concurrency default and limits."""
+    assert RAGConfig().retrieval.graph_extraction_workers == 4
+    cfg = RAGConfig.model_validate({"retrieval": {"graph_extraction_workers": 16}})
+    assert cfg.retrieval.graph_extraction_workers == 16
+
+    with pytest.raises(ValidationError):
+        RAGConfig.model_validate({"retrieval": {"graph_extraction_workers": 0}})
+
+    with pytest.raises(ValidationError):
+        RAGConfig.model_validate({"retrieval": {"graph_extraction_workers": 33}})
+
+
 @pytest.mark.parametrize(
     "config_filename",
     ["default.yaml", "dense.yaml", "graph.yaml", "graph_falkordb.yml", "rerank.yaml"],
