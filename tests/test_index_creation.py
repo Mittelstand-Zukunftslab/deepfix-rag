@@ -376,3 +376,24 @@ def test_graph_index_missing_when_lance_table_is_absent(tmp_path: Path) -> None:
 
     workflow = RAGWorkflow(config=config)
     assert workflow._index_exists() is False
+
+
+def test_entity_relationship_schema_builds_extractor() -> None:
+    """Entity lists must be Literal types, which is what the extractor validates."""
+    from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
+
+    from deepfix_rag.config.schema import GRAPH_EXTRACTION_SCHEMAS
+    from deepfix_rag.pipeline import label_literal, validation_triples
+
+    schema = GRAPH_EXTRACTION_SCHEMAS["entity_relationship"]
+    extractor = SchemaLLMPathExtractor(
+        llm=RAGWorkflow(config=RAGConfig())._get_llm(),
+        possible_entities=label_literal(schema.entities),
+        possible_relations=label_literal(schema.relations),
+        kg_validation_schema=validation_triples(schema.entities, schema.relations),
+        max_triplets_per_chunk=5,
+    )
+    assert extractor.max_triplets_per_chunk == 5
+    assert ("PERSON", "RELATED_TO", "ORGANIZATION") in extractor.kg_validation_schema[
+        "relationships"
+    ]

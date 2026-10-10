@@ -2,7 +2,7 @@ import asyncio
 import concurrent.futures
 from pathlib import Path
 import time
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import lancedb
 from llama_index.core import (
@@ -68,6 +68,23 @@ from deepfix_rag.config.schema import (
 )
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader, build_node_parser
+
+
+def label_literal(labels: list[str]) -> Any:
+    """Build the Literal type SchemaLLMPathExtractor expects for a label list."""
+    return Literal[tuple(labels)]
+
+
+def validation_triples(
+    entities: list[str], relations: list[str]
+) -> list[tuple[str, str, str]]:
+    """Allow every configured relation between the configured entity types."""
+    return [
+        (subject, relation, obj)
+        for subject in entities
+        for relation in relations
+        for obj in entities
+    ]
 
 
 class RetrieverEvent(Event):
@@ -362,8 +379,12 @@ class RAGWorkflow(Workflow):
                 "max_triplets_per_chunk": self.config.retrieval.graph_max_paths_per_chunk,
             }
             if schema_info:
-                extractor_kwargs["possible_entities"] = schema_info.entities
-                extractor_kwargs["possible_relations"] = schema_info.relations
+                extractor_kwargs["possible_entities"] = label_literal(schema_info.entities)
+                extractor_kwargs["possible_relations"] = label_literal(schema_info.relations)
+                extractor_kwargs["kg_validation_schema"] = validation_triples(
+                    schema_info.entities,
+                    schema_info.relations,
+                )
 
             index = PropertyGraphIndex.from_documents(
                 documents,
