@@ -50,6 +50,11 @@ Accept only under the optimization-loop gate. There is no `rerank.threshold` key
 
 ## Validated findings
 
+Bundestag QA, 100-query retrieval-only eval on a 100-document index (7 gold documents for those questions plus 93 short distractors):
+
+- Hybrid `top_k=10` with rerank off scored nDCG@5 0.743 and Recall@5 0.97.
+- `top_k=50` plus `rerank.enabled=true` and `rerank.top_n=5` scored nDCG@5 0.948 and Recall@5 0.97 (`delta.ndcg` +0.204, `delta.recall` 0). Three rerank HTTP timeouts were counted as misses and still left the nDCG gain above the 0.025 gate.
+
 legal-rag-bench, 30-query retrieval-only eval:
 
 - `top_k=50` dense retrieval plus `rerank.top_n=5` lifted nDCG@5 from 0.29 to 0.59 and Recall@5 from 0.50 to 0.80 versus un-reranked hybrid, and beat dense-only (0.53 / 0.67). Retrieval misses fell from 15 to 6 of 30. This is the largest measured lever.

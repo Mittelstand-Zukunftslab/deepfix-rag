@@ -126,7 +126,11 @@ Switching among `dense`, `bm25`, and `hybrid` can reuse an index when node text 
 
 ## Validated findings
 
-No checked-in end-to-end loop result yet. Measured retrieval levers live in `rerank-calibration`.
+Bundestag QA, first 100 training questions, retrieval-only, 2026-10-10. The index held those questions' 7 gold documents plus 93 short distractors (100 documents, 570 chunks), not the full 53,723-document corpus.
+
+- Champion before the round: hybrid, `top_k=10`, rerank off. nDCG@5 0.743, Recall@5 0.97, 3 `retrieval_miss`, 0 transport errors.
+- One hypothesis, `rerank-calibration`: `rerank.enabled=true`, `rerank.top_n=5`, `retrieval.top_k=50`. No re-index.
+- Compare delta: nDCG@5 +0.204 (0.948), Recall@5 +0.000. Three rerank calls timed out and were scored as misses. The candidate was promoted.
 
 ## Pitfalls
 
