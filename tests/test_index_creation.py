@@ -11,7 +11,7 @@ import yaml
 
 from deepfix_rag.cli.ui import EXIT_SUCCESS, EXIT_VALIDATION_ERROR
 from deepfix_rag.cli.utils import load_rag_config
-from deepfix_rag.config.schema import FusionMode, RAGConfig, RetrievalBackend
+from deepfix_rag.config.schema import FusionMode, GraphStoreType, RAGConfig, RetrievalBackend
 from deepfix_rag.config.settings import settings
 from deepfix_rag.main import app
 from deepfix_rag.pipeline import RAGWorkflow
@@ -345,3 +345,34 @@ def test_cli_index_graph_config_json_and_retrieve(
 
     nodes = asyncio.run(_query_existing())
     assert nodes is not None
+
+
+def test_graph_index_exists_when_lancedb_table_has_rows(tmp_path: Path) -> None:
+    """A FalkorDB config reuses a LanceDB table instead of extracting again."""
+    import lancedb
+
+    index_dir = tmp_path / "graph_index"
+    connection = lancedb.connect(str(index_dir))
+    connection.create_table("documents", data=[{"id": "1", "text": "bundestag"}])
+
+    config = RAGConfig()
+    config.retrieval.backend = RetrievalBackend.GRAPH
+    config.retrieval.graph_store = GraphStoreType.FALKORDB
+    config.retrieval.lancedb_index_dir = str(index_dir)
+    config.retrieval.load_if_exists = True
+
+    workflow = RAGWorkflow(config=config)
+    assert workflow._index_exists() is True
+
+
+def test_graph_index_missing_when_lance_table_is_absent(tmp_path: Path) -> None:
+    """An empty directory is not an existing graph index."""
+    index_dir = tmp_path / "empty_graph"
+    index_dir.mkdir()
+    config = RAGConfig()
+    config.retrieval.backend = RetrievalBackend.GRAPH
+    config.retrieval.graph_store = GraphStoreType.FALKORDB
+    config.retrieval.lancedb_index_dir = str(index_dir)
+
+    workflow = RAGWorkflow(config=config)
+    assert workflow._index_exists() is False

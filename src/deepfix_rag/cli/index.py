@@ -96,7 +96,7 @@ def index_cmd(
         rag_config.retrieval.lancedb_index_dir = str(target_index_dir)
         rag_config.data = DataLoaderConfig(path_or_repo=target_dataset)
 
-        workflow = RAGWorkflow(config=rag_config)
+        workflow = RAGWorkflow(config=rag_config, timeout=None)
 
         print_info("Triggering asynchronous RAGWorkflow data ingestion...")
 

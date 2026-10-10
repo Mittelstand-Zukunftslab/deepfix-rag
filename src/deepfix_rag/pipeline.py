@@ -271,8 +271,8 @@ class RAGWorkflow(Workflow):
     def _index_exists(self) -> bool:
         """Check if an index already exists for the configured storage backend."""
         try:
-            if self.config.retrieval.graph_store != GraphStoreType.NONE:
-                return False
+            # A property-graph build also writes the LanceDB vector table. Reuse that
+            # table instead of extracting triplets again on every eval.
             if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
                 uri = self.config.retrieval.lancedb_index_dir
                 if not str(uri).startswith("s3://") and not Path(uri).exists():
