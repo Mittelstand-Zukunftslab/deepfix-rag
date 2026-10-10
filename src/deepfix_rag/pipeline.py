@@ -293,11 +293,23 @@ class RAGWorkflow(Workflow):
             image_store=None,  # images of scanned PDFs
         )
 
+    def _graph_store_has_chunks(self) -> bool:
+        graph_store = self._get_graph_store()
+        if graph_store is None:
+            return False
+        rows = graph_store.structured_query("MATCH (n:Chunk) RETURN count(n) AS c")
+        return bool(rows) and rows[0]["c"] > 0
+
     def _index_exists(self) -> bool:
         """Check if an index already exists for the configured storage backend."""
         try:
-            # A property-graph build also writes the LanceDB vector table. Reuse that
-            # table instead of extracting triplets again on every eval.
+            # Property graph stores keep chunks, embeddings and triplets together, so the
+            # LanceDB table stays empty. Reuse the graph instead of extracting again.
+            if self.config.retrieval.graph_store in (
+                GraphStoreType.MEMGRAPH,
+                GraphStoreType.FALKORDB,
+            ):
+                return self._graph_store_has_chunks()
             if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
                 uri = self.config.retrieval.lancedb_index_dir
                 if not str(uri).startswith("s3://") and not Path(uri).exists():

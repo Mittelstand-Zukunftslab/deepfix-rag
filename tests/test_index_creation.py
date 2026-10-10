@@ -347,35 +347,32 @@ def test_cli_index_graph_config_json_and_retrieve(
     assert nodes is not None
 
 
-def test_graph_index_exists_when_lancedb_table_has_rows(tmp_path: Path) -> None:
-    """A FalkorDB config reuses a LanceDB table instead of extracting again."""
+def test_vector_index_exists_when_lancedb_table_has_rows(tmp_path: Path) -> None:
+    """A populated LanceDB table counts as an existing non-graph index."""
     import lancedb
 
-    index_dir = tmp_path / "graph_index"
+    index_dir = tmp_path / "vector_index"
     connection = lancedb.connect(str(index_dir))
     connection.create_table("documents", data=[{"id": "1", "text": "bundestag"}])
 
     config = RAGConfig()
-    config.retrieval.backend = RetrievalBackend.GRAPH
-    config.retrieval.graph_store = GraphStoreType.FALKORDB
+    config.retrieval.backend = RetrievalBackend.DENSE
+    config.retrieval.graph_store = GraphStoreType.NONE
     config.retrieval.lancedb_index_dir = str(index_dir)
-    config.retrieval.load_if_exists = True
 
-    workflow = RAGWorkflow(config=config)
-    assert workflow._index_exists() is True
+    assert RAGWorkflow(config=config)._index_exists() is True
 
 
-def test_graph_index_missing_when_lance_table_is_absent(tmp_path: Path) -> None:
-    """An empty directory is not an existing graph index."""
-    index_dir = tmp_path / "empty_graph"
+def test_vector_index_missing_when_lance_table_is_absent(tmp_path: Path) -> None:
+    """An empty directory is not an existing index."""
+    index_dir = tmp_path / "empty_index"
     index_dir.mkdir()
     config = RAGConfig()
-    config.retrieval.backend = RetrievalBackend.GRAPH
-    config.retrieval.graph_store = GraphStoreType.FALKORDB
+    config.retrieval.backend = RetrievalBackend.DENSE
+    config.retrieval.graph_store = GraphStoreType.NONE
     config.retrieval.lancedb_index_dir = str(index_dir)
 
-    workflow = RAGWorkflow(config=config)
-    assert workflow._index_exists() is False
+    assert RAGWorkflow(config=config)._index_exists() is False
 
 
 def test_entity_relationship_schema_builds_extractor() -> None:
