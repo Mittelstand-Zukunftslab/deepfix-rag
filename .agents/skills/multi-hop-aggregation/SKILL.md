@@ -12,9 +12,9 @@ trigger_conditions:
   - "context_recall or recall is partial: 0 < recall < 1 on multi-document questions"
   - "failure_distribution.retrieval_induced_error is high and gold evidence is split across documents"
 cli_actions:
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.graph_traversal_hops=3 --json"
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=mixed --set retrieval.graph_store=memgraph --set retrieval.graph_weight=0.3 --set retrieval.dense_weight=0.5 --set retrieval.bm25_weight=0.2 --json"
-  - "uv run --env-file .env deepfix hpo --paradigm graph --retrieval-only --limit 30 --n-trials 10 --output configs/best_graph.yaml --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.graph_traversal_hops=3 --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=mixed --set retrieval.graph_store=memgraph --set retrieval.graph_weight=0.3 --set retrieval.dense_weight=0.5 --set retrieval.bm25_weight=0.2 --json"
+  - "uv run deepfix hpo --paradigm graph --retrieval-only --limit 30 --n-trials 10 --output configs/best_graph.yaml --json"
 ---
 
 Follow `optimization-loop` for the quality gate, exit codes, and the 15-call budget. `hpo --paradigm graph` is a separate long run. Do not start it inside the 15-call iteration.
@@ -28,31 +28,31 @@ A single gold passage found but ranked last is `rerank-calibration`. One documen
 If a graph index already exists, hops are query-time. Confirm `diffs` is non-empty.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.graph_traversal_hops=3 --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.graph_traversal_hops=3 --json
 ```
 
 ```
-uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 To fuse graph with dense and BM25, switch to `mixed` and set all three weights. Weights that do not sum to 1 are renormalized only on the `mixed` backend. This backend change needs a graph index.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=mixed --set retrieval.graph_store=memgraph --set retrieval.graph_weight=0.3 --set retrieval.dense_weight=0.5 --set retrieval.bm25_weight=0.2 --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=mixed --set retrieval.graph_store=memgraph --set retrieval.graph_weight=0.3 --set retrieval.dense_weight=0.5 --set retrieval.bm25_weight=0.2 --json
 ```
 
 ```
-uv run --env-file .env deepfix index --config configs/candidate.yaml --index-dir indexes/candidate-mixed --force --json
+uv run deepfix index --config configs/candidate.yaml --index-dir indexes/candidate-mixed --force --json
 ```
 
 ```
-uv run --env-file .env deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate-mixed --compare configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate-mixed --compare configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 Outside the iteration budget:
 
 ```
-uv run --env-file .env deepfix hpo --paradigm graph --retrieval-only --limit 30 --n-trials 10 --output configs/best_graph.yaml --json
+uv run deepfix hpo --paradigm graph --retrieval-only --limit 30 --n-trials 10 --output configs/best_graph.yaml --json
 ```
 
 ## Valid values

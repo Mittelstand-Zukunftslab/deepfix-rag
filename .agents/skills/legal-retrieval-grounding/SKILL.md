@@ -12,9 +12,9 @@ trigger_conditions:
   - "The dataset is Legal RAG Bench and gold citations or article ids are missing from retrieved_doc_ids"
   - "failure_distribution.retrieval_miss stays high after dense and rerank trials"
 cli_actions:
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=graph --set retrieval.graph_store=memgraph --set retrieval.graph_extraction_schema=domain_legal --set retrieval.language=english --json"
-  - "uv run --env-file .env deepfix index --config configs/candidate.yaml --index-dir indexes/candidate-graph --force --json"
-  - "uv run --env-file .env deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate-graph --compare configs/champion.yaml --retrieval-only --limit 30 --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=graph --set retrieval.graph_store=memgraph --set retrieval.graph_extraction_schema=domain_legal --set retrieval.language=english --json"
+  - "uv run deepfix index --config configs/candidate.yaml --index-dir indexes/candidate-graph --force --json"
+  - "uv run deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate-graph --compare configs/champion.yaml --retrieval-only --limit 30 --json"
 ---
 
 Follow `optimization-loop` for the quality gate, exit codes, and the 15-call budget. Graph extraction runs at index time and calls an LLM. Keep this off the cheap 15-call loop unless a graph database is already up.
@@ -30,19 +30,19 @@ The default `retrieval.graph_extraction_schema` is `default`, and that name matc
 1. Point retrieval at a graph store and the legal schema. Set `retrieval.language` to the corpus language. Confirm `diffs` is non-empty.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=graph --set retrieval.graph_store=memgraph --set retrieval.graph_extraction_schema=domain_legal --set retrieval.language=english --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=graph --set retrieval.graph_store=memgraph --set retrieval.graph_extraction_schema=domain_legal --set retrieval.language=english --json
 ```
 
 2. Re-index. Triplet extraction will not run against an existing vector index.
 
 ```
-uv run --env-file .env deepfix index --config configs/candidate.yaml --index-dir indexes/candidate-graph --force --json
+uv run deepfix index --config configs/candidate.yaml --index-dir indexes/candidate-graph --force --json
 ```
 
 3. Compare. Primary metric is `recall` or `ndcg`.
 
 ```
-uv run --env-file .env deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate-graph --compare configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate-graph --compare configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 For long statutes, a second index-time hypothesis is hierarchical chunking. `chunking.hierarchical_chunk_sizes` is a list; edit it in YAML rather than `--set`, then re-index. See `chunking-tuning`.
