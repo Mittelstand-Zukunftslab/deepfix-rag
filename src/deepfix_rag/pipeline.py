@@ -2,8 +2,9 @@ import asyncio
 import concurrent.futures
 from pathlib import Path
 import time
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
+from cohere import ClientV2
 import lancedb
 from llama_index.core import (
     Document,
@@ -68,6 +69,23 @@ from deepfix_rag.config.schema import (
 )
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader, build_node_parser
+
+
+def label_literal(labels: list[str]) -> Any:
+    """Build the Literal type SchemaLLMPathExtractor expects for a label list."""
+    return Literal[tuple(labels)]
+
+
+def validation_triples(
+    entities: list[str], relations: list[str]
+) -> list[tuple[str, str, str]]:
+    """Allow every configured relation between the configured entity types."""
+    return [
+        (subject, relation, obj)
+        for subject in entities
+        for relation in relations
+        for obj in entities
+    ]
 
 
 class RetrieverEvent(Event):
@@ -175,17 +193,26 @@ class RAGWorkflow(Workflow):
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
             system_prompt=self.config.generation.system_prompt,
+            additional_kwargs=dict(settings.LLM_KWARGS),
         )
 
     def _get_reranker(self) -> CohereRerank | None:
         if not self.config.rerank.enabled:
             return None
-        return CohereRerank(
+        reranker = CohereRerank(
             model=settings.COHERE_MODEL,
             top_n=self.config.rerank.top_n,
             api_key=settings.COHERE_API_KEY,
             base_url=settings.COHERE_BASE_URL,
         )
+        # The wrapper builds its client without a timeout, and the default 300s stalls the
+        # event loop whenever the endpoint hangs during the TLS handshake.
+        reranker._client = ClientV2(
+            api_key=settings.COHERE_API_KEY,
+            base_url=settings.COHERE_BASE_URL,
+            timeout=settings.COHERE_TIMEOUT_SECONDS,
+        )
+        return reranker
 
     def _get_vector_store(self) -> BasePydanticVectorStore:
 
@@ -268,11 +295,23 @@ class RAGWorkflow(Workflow):
             image_store=None,  # images of scanned PDFs
         )
 
+    def _graph_store_has_chunks(self) -> bool:
+        graph_store = self._get_graph_store()
+        if graph_store is None:
+            return False
+        rows = graph_store.structured_query("MATCH (n:Chunk) RETURN count(n) AS c")
+        return bool(rows) and rows[0]["c"] > 0
+
     def _index_exists(self) -> bool:
         """Check if an index already exists for the configured storage backend."""
         try:
-            if self.config.retrieval.graph_store != GraphStoreType.NONE:
-                return False
+            # Property graph stores keep chunks, embeddings and triplets together, so the
+            # LanceDB table stays empty. Reuse the graph instead of extracting again.
+            if self.config.retrieval.graph_store in (
+                GraphStoreType.MEMGRAPH,
+                GraphStoreType.FALKORDB,
+            ):
+                return self._graph_store_has_chunks()
             if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
                 uri = self.config.retrieval.lancedb_index_dir
                 if not str(uri).startswith("s3://") and not Path(uri).exists():
@@ -360,10 +399,15 @@ class RAGWorkflow(Workflow):
             extractor_kwargs: dict[str, Any] = {
                 "llm": self._get_llm(),
                 "max_triplets_per_chunk": self.config.retrieval.graph_max_paths_per_chunk,
+                "num_workers": self.config.retrieval.graph_extraction_workers,
             }
             if schema_info:
-                extractor_kwargs["possible_entities"] = schema_info.entities
-                extractor_kwargs["possible_relations"] = schema_info.relations
+                extractor_kwargs["possible_entities"] = label_literal(schema_info.entities)
+                extractor_kwargs["possible_relations"] = label_literal(schema_info.relations)
+                extractor_kwargs["kg_validation_schema"] = validation_triples(
+                    schema_info.entities,
+                    schema_info.relations,
+                )
 
             index = PropertyGraphIndex.from_documents(
                 documents,

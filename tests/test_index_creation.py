@@ -11,7 +11,7 @@ import yaml
 
 from deepfix_rag.cli.ui import EXIT_SUCCESS, EXIT_VALIDATION_ERROR
 from deepfix_rag.cli.utils import load_rag_config
-from deepfix_rag.config.schema import FusionMode, RAGConfig, RetrievalBackend
+from deepfix_rag.config.schema import FusionMode, GraphStoreType, RAGConfig, RetrievalBackend
 from deepfix_rag.config.settings import settings
 from deepfix_rag.main import app
 from deepfix_rag.pipeline import RAGWorkflow
@@ -345,3 +345,52 @@ def test_cli_index_graph_config_json_and_retrieve(
 
     nodes = asyncio.run(_query_existing())
     assert nodes is not None
+
+
+def test_vector_index_exists_when_lancedb_table_has_rows(tmp_path: Path) -> None:
+    """A populated LanceDB table counts as an existing non-graph index."""
+    import lancedb
+
+    index_dir = tmp_path / "vector_index"
+    connection = lancedb.connect(str(index_dir))
+    connection.create_table("documents", data=[{"id": "1", "text": "bundestag"}])
+
+    config = RAGConfig()
+    config.retrieval.backend = RetrievalBackend.DENSE
+    config.retrieval.graph_store = GraphStoreType.NONE
+    config.retrieval.lancedb_index_dir = str(index_dir)
+
+    assert RAGWorkflow(config=config)._index_exists() is True
+
+
+def test_vector_index_missing_when_lance_table_is_absent(tmp_path: Path) -> None:
+    """An empty directory is not an existing index."""
+    index_dir = tmp_path / "empty_index"
+    index_dir.mkdir()
+    config = RAGConfig()
+    config.retrieval.backend = RetrievalBackend.DENSE
+    config.retrieval.graph_store = GraphStoreType.NONE
+    config.retrieval.lancedb_index_dir = str(index_dir)
+
+    assert RAGWorkflow(config=config)._index_exists() is False
+
+
+def test_entity_relationship_schema_builds_extractor() -> None:
+    """Entity lists must be Literal types, which is what the extractor validates."""
+    from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
+
+    from deepfix_rag.config.schema import GRAPH_EXTRACTION_SCHEMAS
+    from deepfix_rag.pipeline import label_literal, validation_triples
+
+    schema = GRAPH_EXTRACTION_SCHEMAS["entity_relationship"]
+    extractor = SchemaLLMPathExtractor(
+        llm=RAGWorkflow(config=RAGConfig())._get_llm(),
+        possible_entities=label_literal(schema.entities),
+        possible_relations=label_literal(schema.relations),
+        kg_validation_schema=validation_triples(schema.entities, schema.relations),
+        max_triplets_per_chunk=5,
+    )
+    assert extractor.max_triplets_per_chunk == 5
+    assert ("PERSON", "RELATED_TO", "ORGANIZATION") in extractor.kg_validation_schema[
+        "relationships"
+    ]

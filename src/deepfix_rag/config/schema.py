@@ -323,6 +323,12 @@ class RetrievalConfig(BaseModel):
         le=10,
         description="Maximum extraction paths per document chunk in Graph RAG.",
     )
+    graph_extraction_workers: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        description="Concurrent LLM extraction calls while building the property graph.",
+    )
     graph_traversal_hops: int = Field(
         default=2,
         ge=1,

@@ -73,8 +73,23 @@ uv run deepfix hpo --paradigm graph --retrieval-only --limit 30 --n-trials 10 --
 
 No checked-in A/B result for hop count or mixed fusion yet.
 
+Pure `graph` backend on the Bundestag 100-question sample (FalkorDB, `entity_relationship` schema, rerank on, retrieval-only), against the hybrid + rerank champion on the same questions:
+
+| Config | nDCG@5 | Recall@5 | nDCG@5, error rows excluded |
+| :--- | :--- | :--- | :--- |
+| hybrid + rerank (champion) | 0.902 | 0.92 | 0.980 |
+| graph + rerank (candidate) | 0.624 | 0.72 | 0.726 |
+
+The candidate was discarded (delta nDCG about -0.28). Bundestag questions have one gold document each, so they do not need multi-hop traversal. Do not use `graph` there. Both runs had infrastructure errors (read and TLS timeouts) counted as misses, so compare the error-excluded column too.
+
 ## Pitfalls
 
 - `graph_traversal_hops` on a vector-only index does nothing until a property graph has been built.
 - `hpo --paradigm graph` re-ingests with an LLM extractor and will blow the 15-call iteration if started there.
 - A hop value above 3 makes `mutate-config` exit 1.
+- Falkor and Memgraph keep chunks and embeddings in the graph, so `lancedb_index_dir` stays empty. `eval --compare` shares one index dir between both configs, so a hybrid baseline cannot load from the graph dir. Run the two evals separately and compute the delta.
+- Extraction is one LLM call per chunk. A reasoning model takes about 27 s per chunk, so 570 chunks took 57 minutes. Turn reasoning off with `LLM_KWARGS` (JSON, for example `{"reasoning_effort": "none", "drop_params": true}`) and raise `retrieval.graph_extraction_workers`.
+- Graph retrieval also calls the LLM on every query, so query-time latency follows the same LLM.
+- `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY` choose the pipeline LLM. For OpenRouter through litellm, prefix the model once more, for example `openai/openai/gpt-6-luna-pro`.
+- Use a dedicated graph name (`FALKORDB_DATABASE`) per experiment. Running the graph CLI tests with the real Falkor host in `.env` writes test chunks into that graph.
+- Falkor can hold entity nodes with no type label. Graph retrieval then fails with an `EntityNode label` validation error on those queries.
