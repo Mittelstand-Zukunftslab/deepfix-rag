@@ -196,11 +196,7 @@ class RAGWorkflow(Workflow):
         )
 
     def _get_extraction_llm(self) -> BaseLLM:
-        if not settings.LLM_EXTRACTION_DISABLE_THINKING:
-            return self._get_llm()
-        return self._get_llm(
-            additional_kwargs={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
-        )
+        return self._get_llm(additional_kwargs=dict(settings.LLM_EXTRACTION_KWARGS))
 
     def _get_reranker(self) -> CohereRerank | None:
         if not self.config.rerank.enabled:

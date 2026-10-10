@@ -2,8 +2,10 @@ import logging
 import os
 from pathlib import Path
 import sys
+from typing import Any
 
 import mlflow
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,8 +33,9 @@ class Settings(BaseSettings):
     LLM_API_KEY: str | None = None
     LLM_MODEL: str = "qwen3-8-27b"
     LLM_CONTEXT_WINDOW: int = 20000
-    # Skips the reasoning phase of vLLM/Qwen-style models during graph triple extraction.
-    LLM_EXTRACTION_DISABLE_THINKING: bool = False
+    # Extra litellm kwargs for graph triple extraction only, as a JSON object. Use it to
+    # turn off reasoning, e.g. {"reasoning_effort": "none", "drop_params": true}.
+    LLM_EXTRACTION_KWARGS: dict[str, Any] = Field(default_factory=dict)
 
     # Judge
     LLM_JUDGE_MODEL: str = "gpt-oss-120b"
