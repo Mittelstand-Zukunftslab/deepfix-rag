@@ -12,9 +12,9 @@ trigger_conditions:
   - "recall is low while a manual dense lookup of the same fact succeeds"
   - "Queries use acronyms or paraphrases that never appear in the source text"
 cli_actions:
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.query_expansion_num=3 --json"
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.fusion_mode=relative_score --set retrieval.dense_weight=0.7 --set retrieval.bm25_weight=0.3 --json"
-  - "uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.query_expansion_num=3 --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.fusion_mode=relative_score --set retrieval.dense_weight=0.7 --set retrieval.bm25_weight=0.3 --json"
+  - "uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
 ---
 
 Follow `optimization-loop` for the quality gate, exit codes, and the 15-call budget. Hypothetical document embeddings (HyDE) are not implemented. Do not set a HyDE flag.
@@ -28,19 +28,19 @@ High `recall` and low `ndcg` means the documents were retrieved and then ranked 
 1. Expand the query. This is query-time on `hybrid` and `mixed` backends. Confirm `diffs` is non-empty.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.query_expansion_num=3 --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.query_expansion_num=3 --json
 ```
 
 2. Compare before touching fusion weights.
 
 ```
-uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 3. Only if expansion is flat, switch the fusion mode so weights are actually read, and set dense and BM25 weights together. Hybrid retrieval does not renormalize a lone `dense_weight`.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.fusion_mode=relative_score --set retrieval.dense_weight=0.7 --set retrieval.bm25_weight=0.3 --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.fusion_mode=relative_score --set retrieval.dense_weight=0.7 --set retrieval.bm25_weight=0.3 --json
 ```
 
 `retrieval.query_gen_prompt` is the expansion instruction. It is a multi-line string; edit it in the candidate YAML instead of `--set`. The template must keep `{num_queries}` and `{query}`.

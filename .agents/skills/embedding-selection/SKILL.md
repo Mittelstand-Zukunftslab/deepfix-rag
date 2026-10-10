@@ -10,9 +10,9 @@ trigger_conditions:
   - "failure_distribution.retrieval_miss is high and chunk boundaries are already coherent"
   - "dense, bm25, and hybrid have not been compared with eval --retrieval-only --compare"
 cli_actions:
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=dense --json"
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=bm25 --json"
-  - "uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=dense --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=bm25 --json"
+  - "uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
 ---
 
 Follow `optimization-loop` for the quality gate, exit codes, and the 15-call budget.
@@ -28,11 +28,11 @@ High `recall` with low `ndcg` is `rerank-calibration`. Cut-off passages are `chu
 Compare backends on the same corpus. Changing among `dense`, `bm25`, and `hybrid` is query-time when the index still has node text. Confirm `diffs` is non-empty.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=dense --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=dense --json
 ```
 
 ```
-uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 Repeat with `--set retrieval.backend=bm25` and `--set retrieval.backend=hybrid`. Promote only the backend that clears the optimization-loop gate. If hybrid wins on `ndcg` only after rerank, keep the rerank skill's settings rather than fusion weights alone.
@@ -40,7 +40,7 @@ Repeat with `--set retrieval.backend=bm25` and `--set retrieval.backend=hybrid`.
 To change the embedding model, set `EMBEDDING_MODEL`, then rebuild:
 
 ```
-uv run --env-file .env deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json
+uv run deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json
 ```
 
 ## Valid values

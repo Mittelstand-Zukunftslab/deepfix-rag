@@ -10,8 +10,8 @@ trigger_conditions:
   - "recall is high while ndcg is low on eval --json"
   - "failure_distribution.retrieval_induced_error dominates and retrieved_doc_ids contain the gold id below the cutoff"
 cli_actions:
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
-  - "uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
+  - "uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
 ---
 
 Follow `optimization-loop` for the quality gate, exit codes, and the 15-call budget. Re-ranking is query-time. Do not re-index for `rerank.*` or `retrieval.top_k`.
@@ -25,13 +25,13 @@ Follow `optimization-loop` for the quality gate, exit codes, and the 15-call bud
 1. Widen the pool and keep a short list for the generator. Confirm `diffs` is non-empty.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
 ```
 
 2. Compare. Primary metric is `ndcg`.
 
 ```
-uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 Accept only under the optimization-loop gate. There is no `rerank.threshold` key; a `--set` of that name is silently ignored.
