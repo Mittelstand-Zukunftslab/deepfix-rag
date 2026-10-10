@@ -4,6 +4,7 @@ from pathlib import Path
 import time
 from typing import Any, Literal, Optional
 
+from cohere import ClientV2
 import lancedb
 from llama_index.core import (
     Document,
@@ -179,7 +180,7 @@ class RAGWorkflow(Workflow):
             api_key=settings.EMBEDDING_API_KEY,
         )
 
-    def _get_llm(self, additional_kwargs: dict[str, Any] | None = None) -> BaseLLM:
+    def _get_llm(self) -> BaseLLM:
         if self.llm is not None:
             return self.llm
         model_name = settings.LLM_MODEL
@@ -192,21 +193,26 @@ class RAGWorkflow(Workflow):
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
             system_prompt=self.config.generation.system_prompt,
-            additional_kwargs=additional_kwargs or {},
+            additional_kwargs=dict(settings.LLM_KWARGS),
         )
-
-    def _get_extraction_llm(self) -> BaseLLM:
-        return self._get_llm(additional_kwargs=dict(settings.LLM_EXTRACTION_KWARGS))
 
     def _get_reranker(self) -> CohereRerank | None:
         if not self.config.rerank.enabled:
             return None
-        return CohereRerank(
+        reranker = CohereRerank(
             model=settings.COHERE_MODEL,
             top_n=self.config.rerank.top_n,
             api_key=settings.COHERE_API_KEY,
             base_url=settings.COHERE_BASE_URL,
         )
+        # The wrapper builds its client without a timeout, and the default 300s stalls the
+        # event loop whenever the endpoint hangs during the TLS handshake.
+        reranker._client = ClientV2(
+            api_key=settings.COHERE_API_KEY,
+            base_url=settings.COHERE_BASE_URL,
+            timeout=settings.COHERE_TIMEOUT_SECONDS,
+        )
+        return reranker
 
     def _get_vector_store(self) -> BasePydanticVectorStore:
 
@@ -391,7 +397,7 @@ class RAGWorkflow(Workflow):
             schema_key = str(self.config.retrieval.graph_extraction_schema).lower().strip()
             schema_info = GRAPH_EXTRACTION_SCHEMAS.get(schema_key)
             extractor_kwargs: dict[str, Any] = {
-                "llm": self._get_extraction_llm(),
+                "llm": self._get_llm(),
                 "max_triplets_per_chunk": self.config.retrieval.graph_max_paths_per_chunk,
                 "num_workers": self.config.retrieval.graph_extraction_workers,
             }

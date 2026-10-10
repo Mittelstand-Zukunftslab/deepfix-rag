@@ -33,9 +33,9 @@ class Settings(BaseSettings):
     LLM_API_KEY: str | None = None
     LLM_MODEL: str = "qwen3-8-27b"
     LLM_CONTEXT_WINDOW: int = 20000
-    # Extra litellm kwargs for graph triple extraction only, as a JSON object. Use it to
-    # turn off reasoning, e.g. {"reasoning_effort": "none", "drop_params": true}.
-    LLM_EXTRACTION_KWARGS: dict[str, Any] = Field(default_factory=dict)
+    # Extra litellm kwargs for pipeline LLM calls, as a JSON object. Use it to turn off
+    # reasoning, e.g. {"reasoning_effort": "none", "drop_params": true}.
+    LLM_KWARGS: dict[str, Any] = Field(default_factory=dict)
 
     # Judge
     LLM_JUDGE_MODEL: str = "gpt-oss-120b"
@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     COHERE_API_KEY: str | None = None
     COHERE_MODEL: str = "qwen3-reranker-4b"
     COHERE_BASE_URL: str = "https://api.aisc.hpi.de"
+    COHERE_TIMEOUT_SECONDS: float = 30.0
 
     # Memgraph
     MEMGRAPH_URL: str = "bolt://localhost:7687"
