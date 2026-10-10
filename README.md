@@ -136,6 +136,31 @@ Manage the installed tool with:
 uv tool upgrade deepfix-server
 uv tool uninstall deepfix-server
 ```
+
+### Run MLflow Tracking Server Locally (`uvx`)
+
+DeepFix tracks evaluation metrics, run configurations, prompt artifacts, and comparison deltas in MLflow. If you want to run a local MLflow tracking server without Docker or installing MLflow into your virtual environment, run it on-demand with [`uvx`](https://docs.astral.sh/uv/guides/tools/#running-tools):
+
+```bash
+uvx mlflow server --host 127.0.0.1 --port 5000
+```
+
+To persist runs and experiment artifacts in a local SQLite database across restarts:
+
+```bash
+uvx mlflow server \
+  --backend-store-uri sqlite:///mlflow.db \
+  --default-artifact-root ./mlruns \
+  --host 127.0.0.1 \
+  --port 5000
+```
+
+Once the server is running, the MLflow dashboard is available at `http://127.0.0.1:5000`. Point your tracking URI in `.env` to the local instance:
+
+```dotenv
+MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+```
+
 ---
 ## Environment Configuration (`.env`)
 DeepFix uses a `.env` file in the project root for MLflow tracking, the diagnostic server, model endpoints, S3 storage, graph databases, and the Hermes agent.
