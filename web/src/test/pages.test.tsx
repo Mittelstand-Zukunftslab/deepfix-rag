@@ -4,6 +4,8 @@ import { Suspense, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
 import { ChatPage } from "@/features/chat/chat-page";
+import { indexQueryOptions } from "@/features/index/index-queries";
+import { libraryQueryOptions } from "@/features/library/library-queries";
 import { LibraryPage } from "@/features/library/library-page";
 import { SearchPage } from "@/features/search/search-page";
 import type { IndexStatus } from "@/services/index-service";
@@ -99,6 +101,8 @@ describe("Dashboard pages", () => {
       screen.getByText("No extractable text. This PDF looks scanned, and OCR is not available."),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Delete scan.pdf" })).toBeTruthy();
+    expect(screen.getByText("Pending")).toBeTruthy();
+    expect(screen.getByText("Failed")).toBeTruthy();
     expect(screen.getByText("Page 2 has garbled text")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Delete cipher.pdf" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rebuild index" })).toBeNull();
@@ -122,6 +126,26 @@ describe("Dashboard pages", () => {
     expect(
       screen.getByText("The current index remains available until the new build is ready."),
     ).toBeTruthy();
+  });
+
+  it("polls while a document or the index is still changing", () => {
+    const libraryInterval = libraryQueryOptions().refetchInterval;
+    const indexInterval = indexQueryOptions().refetchInterval;
+    expect(typeof libraryInterval).toBe("function");
+    expect(typeof indexInterval).toBe("function");
+    if (typeof libraryInterval !== "function" || typeof indexInterval !== "function") {
+      return;
+    }
+    const library = (status: string) =>
+      libraryInterval({ state: { data: [{ status }] } } as never);
+    const index = (status: string) => indexInterval({ state: { data: { status } } } as never);
+    expect(library("pending")).toBe(3000);
+    expect(library("indexing")).toBe(3000);
+    expect(library("deleting")).toBe(3000);
+    expect(library("indexed")).toBe(false);
+    expect(index("rebuilding")).toBe(3000);
+    expect(index("updating")).toBe(3000);
+    expect(index("ready")).toBe(false);
   });
 
   it("search and ask explain when no serving index exists", () => {

@@ -5,7 +5,12 @@ from pathlib import Path
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.indices.base import BaseIndex
-from llama_index.core.schema import NodeWithScore
+from llama_index.core.schema import (
+    Document,
+    NodeRelationship,
+    NodeWithScore,
+    RelatedNodeInfo,
+)
 
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.config.settings import LOGGER
@@ -69,6 +74,55 @@ class QueryService:
         if reranker is None:
             return nodes
         return reranker.postprocess_nodes(nodes, query_str=query)
+
+    def replace_document(self, document: Document) -> None:
+        """Replace one document's chunks in the current index. Other documents stay put."""
+        doc_id = str(document.id_)
+        try:
+            self._index.delete_ref_doc(doc_id, delete_from_docstore=True)
+        except Exception:
+            LOGGER.debug("No existing chunks to replace for %s", doc_id, exc_info=True)
+        nodes = self._workflow._get_node_parser().get_nodes_from_documents([document])
+        for node in nodes:
+            metadata = dict(node.metadata or {})
+            metadata["doc_id"] = doc_id
+            node.metadata = metadata
+            node.relationships[NodeRelationship.SOURCE] = RelatedNodeInfo(node_id=doc_id)
+        if nodes:
+            self._index.insert_nodes(nodes)
+        self.refresh_lexical()
+
+    def remove_document(self, doc_id: str) -> None:
+        """Remove one document's chunks from the current index."""
+        self._index.delete_ref_doc(doc_id, delete_from_docstore=True)
+        self.refresh_lexical()
+
+    def refresh_lexical(self) -> None:
+        """Make the next lexical search read chunks written since this service loaded."""
+        vector_store = getattr(self._index, "vector_store", None)
+        table = getattr(vector_store, "table", None)
+        if table is not None and hasattr(table, "checkout_latest"):
+            table.checkout_latest()
+        # A build seeds the docstore with the documents it saw. BM25 prefers that
+        # snapshot, so drop it and let the next search rebuild from the table.
+        docstore = getattr(self._index, "docstore", None)
+        if docstore is None or not hasattr(docstore, "docs"):
+            return
+        for node_id in list(docstore.docs):
+            docstore.delete_document(node_id, raise_error=False)
+
+    def chunk_count(self) -> int:
+        """Count chunks currently stored in the serving table."""
+        self.refresh_lexical()
+        table = self._index.vector_store.table
+        if hasattr(table, "count_rows"):
+            return int(table.count_rows())
+        return len(table.to_arrow())
+
+    def chunk_rows(self) -> list[dict[str, object]]:
+        """Return the serving table rows, including ids and embeddings."""
+        self.refresh_lexical()
+        return list(self._index.vector_store.table.to_arrow().to_pylist())
 
     async def _generate(self, query: str, nodes: list[NodeWithScore]) -> str | None:
         try:

@@ -60,7 +60,7 @@ def create_document(
     except UploadRejected as exc:
         raise HTTPException(status_code=BAD_REQUEST, detail=str(exc)) from exc
     if document.status != "failed":
-        request.app.state.index.schedule_if_unserved()
+        request.app.state.index.on_document_added(document.doc_id)
     return _response(document)
 
 
@@ -107,4 +107,5 @@ def delete_document_route(doc_id: str, request: Request) -> Response:
         raise HTTPException(status_code=NOT_FOUND, detail=str(exc)) from exc
     except DeleteForbiddenError as exc:
         raise HTTPException(status_code=FORBIDDEN, detail=str(exc)) from exc
+    request.app.state.index.on_document_removed(doc_id)
     return Response(status_code=204)
