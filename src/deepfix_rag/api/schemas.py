@@ -81,6 +81,30 @@ class TextIssueResponse(ApiModel):
     kind: Literal["scanned", "garbled"]
 
 
+class QueryRequest(ApiModel):
+    """A search or ask question."""
+
+    query: str = Field(min_length=1)
+
+
+class HitResponse(ApiModel):
+    """One passage shown for a search or an answer."""
+
+    rank: int
+    doc_id: str
+    document_filename: str
+    text: str
+    score: float
+    vote: Literal["up", "down"] | None = None
+
+
+class RetrievalResponse(ApiModel):
+    """Ranked passages for one search, with the interaction that recorded them."""
+
+    interaction_id: str
+    hits: list[HitResponse]
+
+
 class DocumentResponse(ApiModel):
     """A non-deleted workspace document. Extracted text stays on disk."""
 

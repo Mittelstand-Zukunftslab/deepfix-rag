@@ -115,6 +115,38 @@ export type HealthResponse = {
 };
 
 /**
+ * HitResponse
+ *
+ * One passage shown for a search or an answer.
+ */
+export type HitResponse = {
+    /**
+     * Doc Id
+     */
+    doc_id: string;
+    /**
+     * Document Filename
+     */
+    document_filename: string;
+    /**
+     * Rank
+     */
+    rank: number;
+    /**
+     * Score
+     */
+    score: number;
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Vote
+     */
+    vote: 'up' | 'down' | null;
+};
+
+/**
  * IndexStatusResponse
  *
  * Overall state of the shared serving index.
@@ -164,6 +196,34 @@ export type LogoutResponse = {
      * Status
      */
     status: 'ok';
+};
+
+/**
+ * QueryRequest
+ *
+ * A search or ask question.
+ */
+export type QueryRequest = {
+    /**
+     * Query
+     */
+    query: string;
+};
+
+/**
+ * RetrievalResponse
+ *
+ * Ranked passages for one search, with the interaction that recorded them.
+ */
+export type RetrievalResponse = {
+    /**
+     * Hits
+     */
+    hits: Array<HitResponse>;
+    /**
+     * Interaction Id
+     */
+    interaction_id: string;
 };
 
 /**
@@ -554,3 +614,36 @@ export type GetIndexStatusResponses = {
 };
 
 export type GetIndexStatusResponse = GetIndexStatusResponses[keyof GetIndexStatusResponses];
+
+export type RetrieveData = {
+    body: QueryRequest;
+    path?: never;
+    query?: never;
+    url: '/retrieval';
+};
+
+export type RetrieveErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type RetrieveError = RetrieveErrors[keyof RetrieveErrors];
+
+export type RetrieveResponses = {
+    /**
+     * Successful Response
+     */
+    200: RetrievalResponse;
+};
+
+export type RetrieveResponse = RetrieveResponses[keyof RetrieveResponses];

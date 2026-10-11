@@ -223,6 +223,20 @@ def list_documents(
     return [_record(row, user_id, role) for row in rows]
 
 
+def document_filenames(db_path: Path, doc_ids: list[str]) -> dict[str, str]:
+    """Return filenames for the given document ids. Missing ids are omitted."""
+    if not doc_ids:
+        return {}
+    init_documents(db_path)
+    placeholders = ", ".join("?" for _ in doc_ids)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT doc_id, filename FROM documents WHERE doc_id IN ({placeholders})",
+            doc_ids,
+        ).fetchall()
+    return {row["doc_id"]: row["filename"] for row in rows}
+
+
 def delete_document(
     db_path: Path,
     workspace: Path,

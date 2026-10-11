@@ -1,24 +1,15 @@
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { useSuspenseQuery } from "@tanstack/react-query";
-
 import { indexQueryOptions } from "@/features/index/index-queries";
-import { initialSearchQueryOptions } from "@/features/search/search-queries";
 import { SearchPage } from "@/features/search/search-page";
 import { pageMeta } from "@/lib/seo";
 
 export const Route = createFileRoute("/search")({
   head: () => ({
-    meta: pageMeta(
-      "Search",
-      "Find invoices, statements and contracts with natural-language search.",
-    ),
+    meta: pageMeta("Search", "Search the shared corpus and read the passages that matched."),
   }),
-  loader: ({ context }) =>
-    Promise.all([
-      context.queryClient.ensureQueryData(initialSearchQueryOptions()),
-      context.queryClient.ensureQueryData(indexQueryOptions()),
-    ]),
+  loader: ({ context }) => context.queryClient.ensureQueryData(indexQueryOptions()),
   component: SearchRoute,
 });
 

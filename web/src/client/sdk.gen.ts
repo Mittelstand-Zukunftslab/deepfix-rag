@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
+import type { CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, RetrieveData, RetrieveErrors, RetrieveResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -123,3 +123,17 @@ export const health = <ThrowOnError extends boolean = false>(options?: Options<H
  * Return the shared index status for any signed-in user.
  */
 export const getIndexStatus = <ThrowOnError extends boolean = false>(options?: Options<GetIndexStatusData, ThrowOnError>): RequestResult<GetIndexStatusResponses, GetIndexStatusErrors, ThrowOnError> => (options?.client ?? client).get<GetIndexStatusResponses, GetIndexStatusErrors, ThrowOnError>({ url: '/index', ...options });
+
+/**
+ * Search the corpus
+ *
+ * Return ranked passages. This route never calls the generation model.
+ */
+export const retrieve = <ThrowOnError extends boolean = false>(options: Options<RetrieveData, ThrowOnError>): RequestResult<RetrieveResponses, RetrieveErrors, ThrowOnError> => (options.client ?? client).post<RetrieveResponses, RetrieveErrors, ThrowOnError>({
+    url: '/retrieval',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from deepfix_rag.accounts import init_db
-from deepfix_rag.api.routes import admin, auth, documents, health, index
+from deepfix_rag.api.routes import admin, auth, documents, health, index, retrieval
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.config.settings import settings as default_settings
 from deepfix_rag.documents import init_documents, prepare_workspace
@@ -74,6 +74,7 @@ def create_app(app_settings: Settings | None = None, *, embed_model: Any = None)
     app.include_router(admin.router)
     app.include_router(documents.router)
     app.include_router(index.router)
+    app.include_router(retrieval.router)
     for route in app.routes:
         if isinstance(route, APIRoute):
             route.responses.pop(422, None)

@@ -162,6 +162,56 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "HitResponse": {
+        "description": "One passage shown for a search or an answer.",
+        "properties": {
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "document_filename": {
+            "title": "Document Filename",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "vote": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vote"
+          }
+        },
+        "required": [
+          "rank",
+          "doc_id",
+          "document_filename",
+          "text",
+          "score",
+          "vote"
+        ],
+        "title": "HitResponse",
+        "type": "object"
+      },
       "IndexStatusResponse": {
         "description": "Overall state of the shared serving index.",
         "properties": {
@@ -254,6 +304,43 @@
           "status"
         ],
         "title": "LogoutResponse",
+        "type": "object"
+      },
+      "QueryRequest": {
+        "description": "A search or ask question.",
+        "properties": {
+          "query": {
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "QueryRequest",
+        "type": "object"
+      },
+      "RetrievalResponse": {
+        "description": "Ranked passages for one search, with the interaction that recorded them.",
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/HitResponse"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "hits"
+        ],
+        "title": "RetrievalResponse",
         "type": "object"
       },
       "RoleUpdateRequest": {
@@ -870,6 +957,68 @@
         "summary": "Read index status",
         "tags": [
           "index"
+        ]
+      }
+    },
+    "/retrieval": {
+      "post": {
+        "description": "Return ranked passages. This route never calls the generation model.",
+        "operationId": "retrieve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Search the corpus",
+        "tags": [
+          "retrieval"
         ]
       }
     }

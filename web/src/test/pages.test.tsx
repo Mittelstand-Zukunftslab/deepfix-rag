@@ -19,13 +19,34 @@ const renderWithQuery = (ui: ReactNode) => {
 };
 
 describe("Dashboard pages", () => {
-  it("search shows ranked results and records feedback", async () => {
-    renderWithQuery(<SearchPage />);
-    expect(await screen.findByText("Northwind Power & Light: Electricity bill")).toBeTruthy();
-    const [up] = screen.getAllByRole("button", { name: "Helpful" });
-    if (!up) throw new Error("Missing feedback button");
-    fireEvent.click(up);
-    expect(up.getAttribute("aria-pressed")).toBe("true");
+  it("search lists rank, filename, score, and text", () => {
+    renderWithQuery(
+      <SearchPage
+        indexReady
+        searchedQuery="harbor"
+        hits={[
+          {
+            rank: 1,
+            doc_id: "ws_harbor",
+            document_filename: "harbor.txt",
+            text: "The harbor budget was approved.",
+            score: 0.82,
+            vote: null,
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("textbox", { name: "Search" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Search" })).toBeTruthy();
+    expect(screen.getByText("1")).toBeTruthy();
+    expect(screen.getByText("harbor.txt")).toBeTruthy();
+    expect(screen.getByText("0.820")).toBeTruthy();
+    expect(screen.getByText("The harbor budget was approved.")).toBeTruthy();
+  });
+
+  it("search explains when nothing matched", () => {
+    renderWithQuery(<SearchPage indexReady searchedQuery="missing" hits={[]} />);
+    expect(screen.getByText('No passages matched "missing".')).toBeTruthy();
   });
 
   it("chat sends a message and receives a reply", async () => {
@@ -107,7 +128,7 @@ describe("Dashboard pages", () => {
     const message = "The index is being prepared. Try again in a minute.";
     renderWithQuery(<SearchPage indexReady={false} />);
     expect(screen.getByText(message)).toBeTruthy();
-    expect(screen.queryByText("Northwind Power & Light: Electricity bill")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
     renderWithQuery(<ChatPage indexReady={false} />);
     expect(screen.getAllByText(message).length).toBeGreaterThan(0);
   });
