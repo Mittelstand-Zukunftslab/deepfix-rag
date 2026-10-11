@@ -12,10 +12,10 @@ trigger_conditions:
   - "recall < 0.6 on eval --json"
   - "Retrieved passages are cut off mid-sentence or mid-statute"
 cli_actions:
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set chunking.strategy=semantic --set chunking.semantic_breakpoint_percentile=90 --json"
-  - "uv run --env-file .env deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json"
-  - "uv run --env-file .env deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate --compare configs/champion.yaml --retrieval-only --limit 30 --json"
-  - "uv run --env-file .env deepfix hpo --tune-chunking --retrieval-only --limit 30 --n-trials 10 --output configs/best_chunking.yaml --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set chunking.strategy=semantic --set chunking.semantic_breakpoint_percentile=90 --json"
+  - "uv run deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json"
+  - "uv run deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate --compare configs/champion.yaml --retrieval-only --limit 30 --json"
+  - "uv run deepfix hpo --tune-chunking --retrieval-only --limit 30 --n-trials 10 --output configs/best_chunking.yaml --json"
 ---
 
 Follow `optimization-loop` for the quality gate, exit codes, and the 15-call budget. Chunking is index-time: a config edit without `index --force` scores the previous index.
@@ -29,25 +29,25 @@ High `recall` with low `ndcg` is a ranking problem. Use `rerank-calibration`. Vo
 1. Mutate one chunking hypothesis. Confirm `diffs` is non-empty.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set chunking.strategy=semantic --set chunking.semantic_breakpoint_percentile=90 --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set chunking.strategy=semantic --set chunking.semantic_breakpoint_percentile=90 --json
 ```
 
 2. Rebuild into a new directory.
 
 ```
-uv run --env-file .env deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json
+uv run deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json
 ```
 
 3. Compare retrieval only, then apply the optimization-loop gate (`delta.ndcg` or `delta.recall` >= 0.025, no secondary regression).
 
 ```
-uv run --env-file .env deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate --compare configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate --compare configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 Sweep only outside the 15-call iteration:
 
 ```
-uv run --env-file .env deepfix hpo --tune-chunking --retrieval-only --limit 30 --n-trials 10 --output configs/best_chunking.yaml --json
+uv run deepfix hpo --tune-chunking --retrieval-only --limit 30 --n-trials 10 --output configs/best_chunking.yaml --json
 ```
 
 ## Valid values

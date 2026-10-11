@@ -14,14 +14,14 @@ trigger_conditions:
   - "An optimization iteration is starting and no pathology skill has been chosen yet"
   - "eval --compare JSON is available and the candidate must be promoted or discarded"
 cli_actions:
-  - "uv run --env-file .env deepfix eval --config configs/champion.yaml --retrieval-only --limit 30 --json"
-  - "uv run --env-file .env deepfix run-diagnostic --config configs/champion.yaml --limit 30 --json"
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.top_k=20 --json"
-  - "uv run --env-file .env deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json"
-  - "uv run --env-file .env deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate --compare configs/champion.yaml --retrieval-only --limit 30 --json"
+  - "uv run deepfix eval --config configs/champion.yaml --retrieval-only --limit 30 --json"
+  - "uv run deepfix run-diagnostic --config configs/champion.yaml --limit 30 --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.top_k=20 --json"
+  - "uv run deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json"
+  - "uv run deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate --compare configs/champion.yaml --retrieval-only --limit 30 --json"
 ---
 
-Run commands from the repo root as `uv run --env-file .env deepfix ...`. The console script is `deepfix`. Append `--json` so the payload is on stdout. Logs go to stderr.
+Run commands from the repo root as `uv run deepfix ...`. Do not pass `--env-file .env`. The repo `.env` points graph hosts at localhost and leaves passwords empty, and that flag fills any unset `FALKORDB_*` or `MEMGRAPH_*` from it. The console script is `deepfix`. Append `--json` so the payload is on stdout. Logs go to stderr.
 
 This skill is the shared contract. Pathology skills in `.agents/skills/` name the hypothesis; this skill decides whether to keep it.
 
@@ -36,32 +36,32 @@ Stay within 15 shell calls per iteration. Read `failure_mode` from `eval` rows a
 1. Score the champion. Prefer a cheap pass first.
 
 ```
-uv run --env-file .env deepfix eval --config configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 2. Optionally diagnose. If this exits 2 because nothing is listening, follow `diagnostic-server` once, then retry. Skip diagnosis when a server is not available.
 
 ```
-uv run --env-file .env deepfix run-diagnostic --config configs/champion.yaml --limit 30 --json
+uv run deepfix run-diagnostic --config configs/champion.yaml --limit 30 --json
 ```
 
 3. Pick one pathology skill from the routing table below and read its `SKILL.md`.
 4. Write exactly one candidate. Confirm the JSON `diffs` object is non-empty. Unknown `--set` keys are ignored by `RAGConfig` and the command still exits 0.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.top_k=20 --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.top_k=20 --json
 ```
 
 5. Re-index only when an index-time key changed (see below). Write a new directory so the champion index stays intact.
 
 ```
-uv run --env-file .env deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json
+uv run deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json
 ```
 
 6. Compare. Pass the candidate index with `--index-dir` when you re-indexed.
 
 ```
-uv run --env-file .env deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate --compare configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/candidate.yaml --index-dir indexes/candidate --compare configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 7. Apply the quality gate, then repeat a full eval without `--limit` only for a candidate that already passed the cheap pass.
@@ -126,10 +126,15 @@ Switching among `dense`, `bm25`, and `hybrid` can reuse an index when node text 
 
 ## Validated findings
 
-No checked-in end-to-end loop result yet. Measured retrieval levers live in `rerank-calibration`.
+Bundestag QA, first 100 training questions, retrieval-only, 2026-10-10. The index held those questions' 7 gold documents plus 93 short distractors (100 documents, 570 chunks), not the full 53,723-document corpus.
+
+- Champion before the round: hybrid, `top_k=10`, rerank off. nDCG@5 0.743, Recall@5 0.97, 3 `retrieval_miss`, 0 transport errors.
+- One hypothesis, `rerank-calibration`: `rerank.enabled=true`, `rerank.top_n=5`, `retrieval.top_k=50`. No re-index.
+- Compare delta: nDCG@5 +0.204 (0.948), Recall@5 +0.000. Three rerank calls timed out and were scored as misses. The candidate was promoted.
 
 ## Pitfalls
 
+- `uv run --env-file .env` fills unset `FALKORDB_*` and `MEMGRAPH_*` from the repo `.env` (localhost, empty password). Omit the flag.
 - A mutation with an empty `diffs` object changed nothing.
 - Evaluating a candidate without `--index-dir` after `index --force` scores the index path stored in the YAML, which may still be the champion index.
 - Promoting on `|delta| < 0.025` hill-climbs judge noise.

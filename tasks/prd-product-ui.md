@@ -226,7 +226,7 @@ Stories are ordered by dependency. US-001 to US-003 unblock the API and the opti
   - If another run is `running`, it returns 409.
   - Otherwise it records a `running` run and returns `run_id`, `dev_dataset_path`, `champion_config_path`, `champion_index_dir`, and `corpus_path`.
 - [ ] The Hermes job prompt (US-015) calls this endpoint first and stops immediately when the response is `skipped` or 409.
-- [ ] Hermes follows `.agents/skills/optimization-loop/SKILL.md` by running the installed `deepfix` CLI with `--dataset <dev_dataset_path>`, writing candidates under `/workspace/runs/<run_id>/`. The skill's `uv run --env-file .env deepfix` prefix is the repo-checkout form; inside the container the same subcommands are invoked as `deepfix ... --json`.
+- [ ] Hermes follows `.agents/skills/optimization-loop/SKILL.md` by running the installed `deepfix` CLI with `--dataset <dev_dataset_path>`, writing candidates under `/workspace/runs/<run_id>/`. The skill's `uv run deepfix` prefix is the repo-checkout form and does not pass `--env-file .env`; inside the container the same subcommands are invoked as `deepfix ... --json`.
 - [ ] `POST /internal/optimization/runs/{run_id}/candidate` (internal token) accepts `candidate_config_path`, `primary_metric`, the `eval --compare` JSON from `dev`, and the MLflow run id.
 - [ ] On candidate submission, the API rejects the candidate (status `rejected`, reason recorded) if any of these fail:
   - The candidate validates as a `RAGConfig`, and `retrieval.backend` is `dense`, `hybrid`, or `bm25`.

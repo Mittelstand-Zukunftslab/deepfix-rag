@@ -17,7 +17,7 @@ cli_actions:
   - "uv tool install git+https://github.com/delcaux-labs/deepfix.git#subdirectory=packages/deepfix-server"
   - "deepfix-server version"
   - "deepfix-server launch -host 0.0.0.0 -port 8844"
-  - "uv run --env-file .env deepfix run-diagnostic --config configs/champion.yaml --server-url http://localhost:8844 --limit 30 --json"
+  - "uv run deepfix run-diagnostic --config configs/champion.yaml --server-url http://localhost:8844 --limit 30 --json"
 ---
 
 `deepfix run-diagnostic` does not start the analysis server. It is a client of the separate `deepfix-server` package. Install that server once, leave it running, then call the client from the repo root.
@@ -74,7 +74,7 @@ deepfix-server launch -host 0.0.0.0 -port 8844
 6. Run a small diagnosis. `--json` prints the payload on stdout and moves logs to stderr. Pass `--server-url` when you are not using the default.
 
 ```
-uv run --env-file .env deepfix run-diagnostic --config configs/champion.yaml --server-url http://localhost:8844 --limit 30 --json
+uv run deepfix run-diagnostic --config configs/champion.yaml --server-url http://localhost:8844 --limit 30 --json
 ```
 
 Exit 0 with a JSON body means the server accepted the dataset. Then read `optimization-loop` and choose a pathology skill. The client waits up to 360 seconds for the server.

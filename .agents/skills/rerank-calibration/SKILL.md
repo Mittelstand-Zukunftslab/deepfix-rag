@@ -10,8 +10,8 @@ trigger_conditions:
   - "recall is high while ndcg is low on eval --json"
   - "failure_distribution.retrieval_induced_error dominates and retrieved_doc_ids contain the gold id below the cutoff"
 cli_actions:
-  - "uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
-  - "uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
+  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
+  - "uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
 ---
 
 Follow `optimization-loop` for the quality gate, exit codes, and the 15-call budget. Re-ranking is query-time. Do not re-index for `rerank.*` or `retrieval.top_k`.
@@ -25,13 +25,13 @@ Follow `optimization-loop` for the quality gate, exit codes, and the 15-call bud
 1. Widen the pool and keep a short list for the generator. Confirm `diffs` is non-empty.
 
 ```
-uv run --env-file .env deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
+uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
 ```
 
 2. Compare. Primary metric is `ndcg`.
 
 ```
-uv run --env-file .env deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
+uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
 ```
 
 Accept only under the optimization-loop gate. There is no `rerank.threshold` key; a `--set` of that name is silently ignored.
@@ -49,6 +49,11 @@ Accept only under the optimization-loop gate. There is no `rerank.threshold` key
 `rerank.enabled`, `rerank.top_n`, and `retrieval.top_k` are query-time.
 
 ## Validated findings
+
+Bundestag QA, 100-query retrieval-only eval on a 100-document index (7 gold documents for those questions plus 93 short distractors):
+
+- Hybrid `top_k=10` with rerank off scored nDCG@5 0.743 and Recall@5 0.97.
+- `top_k=50` plus `rerank.enabled=true` and `rerank.top_n=5` scored nDCG@5 0.948 and Recall@5 0.97 (`delta.ndcg` +0.204, `delta.recall` 0). Three rerank HTTP timeouts were counted as misses and still left the nDCG gain above the 0.025 gate.
 
 legal-rag-bench, 30-query retrieval-only eval:
 
