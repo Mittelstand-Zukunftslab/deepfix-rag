@@ -5,6 +5,34 @@ export type ClientOptions = {
 };
 
 /**
+ * AskResponse
+ *
+ * One single-turn answer and the passages it used.
+ */
+export type AskResponse = {
+    /**
+     * Answer
+     */
+    answer: string | null;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * Hits
+     */
+    hits: Array<HitResponse>;
+    /**
+     * Interaction Id
+     */
+    interaction_id: string;
+    /**
+     * Vote
+     */
+    vote: 'up' | 'down' | null;
+};
+
+/**
  * Body_create_document
  */
 export type BodyCreateDocument = {
@@ -380,6 +408,39 @@ export type UpdateUserRoleResponses = {
 };
 
 export type UpdateUserRoleResponse = UpdateUserRoleResponses[keyof UpdateUserRoleResponses];
+
+export type AskQuestionData = {
+    body: QueryRequest;
+    path?: never;
+    query?: never;
+    url: '/ask';
+};
+
+export type AskQuestionErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type AskQuestionError = AskQuestionErrors[keyof AskQuestionErrors];
+
+export type AskQuestionResponses = {
+    /**
+     * Successful Response
+     */
+    200: AskResponse;
+};
+
+export type AskQuestionResponse = AskQuestionResponses[keyof AskQuestionResponses];
 
 export type LoginData = {
     body: CredentialsRequest;

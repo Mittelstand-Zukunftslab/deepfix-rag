@@ -1,6 +1,68 @@
 {
   "components": {
     "schemas": {
+      "AskResponse": {
+        "description": "One single-turn answer and the passages it used.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/HitResponse"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "vote": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vote"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "answer",
+          "error",
+          "vote",
+          "hits"
+        ],
+        "title": "AskResponse",
+        "type": "object"
+      },
       "Body_create_document": {
         "properties": {
           "file": {
@@ -603,6 +665,68 @@
         "summary": "Change a user's role",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/ask": {
+      "post": {
+        "description": "Answer one question from the current index. Earlier questions are not included.",
+        "operationId": "ask_question",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Ask a question",
+        "tags": [
+          "retrieval"
         ]
       }
     },

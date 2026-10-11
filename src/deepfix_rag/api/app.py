@@ -29,7 +29,12 @@ def validation_detail(exc: RequestValidationError) -> str:
     return str(error.get("msg") or "Invalid input.")
 
 
-def create_app(app_settings: Settings | None = None, *, embed_model: Any = None) -> FastAPI:
+def create_app(
+    app_settings: Settings | None = None,
+    *,
+    embed_model: Any = None,
+    llm: Any = None,
+) -> FastAPI:
     """Build the API with its routers and CORS limited to the configured web origin."""
     app_settings = app_settings or default_settings
 
@@ -42,6 +47,7 @@ def create_app(app_settings: Settings | None = None, *, embed_model: Any = None)
             app.state.settings.workspace_dir,
             app.state.settings.product_db_path,
             embed_model=embed_model,
+            llm=llm,
         )
         app.state.index = coordinator
         coordinator.startup()

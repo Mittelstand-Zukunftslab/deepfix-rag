@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { Suspense, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
-import { ChatPage } from "@/features/chat/chat-page";
+import { AskPage } from "@/features/chat/chat-page";
 import { indexQueryOptions } from "@/features/index/index-queries";
 import { libraryQueryOptions } from "@/features/library/library-queries";
 import { LibraryPage } from "@/features/library/library-page";
@@ -51,15 +51,58 @@ describe("Dashboard pages", () => {
     expect(screen.getByText('No passages matched "missing".')).toBeTruthy();
   });
 
-  it("chat sends a message and receives a reply", async () => {
-    renderWithQuery(<ChatPage />);
-    const input = await screen.findByLabelText("Message");
-    fireEvent.change(input, { target: { value: "Show water bills" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(await screen.findByText("Show water bills")).toBeTruthy();
-    await waitFor(() => expect(screen.getByText(/I searched your archive/)).toBeTruthy(), {
-      timeout: 3000,
-    });
+  it("ask shows the answer before the passages it used", () => {
+    renderWithQuery(
+      <AskPage
+        indexReady
+        askedQuery="harbor"
+        answer="The harbor budget was approved."
+        hits={[
+          {
+            rank: 1,
+            doc_id: "ws_harbor",
+            document_filename: "harbor.txt",
+            text: "The harbor budget was approved.",
+            score: 0.82,
+            vote: null,
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("textbox", { name: "Ask" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy();
+    const answer = screen.getByText("Answer");
+    const passages = screen.getByRole("heading", { name: "Passages" });
+    expect(
+      answer.compareDocumentPosition(passages) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText("harbor.txt")).toBeTruthy();
+  });
+
+  it("ask shows a generation error above the passages", () => {
+    renderWithQuery(
+      <AskPage
+        indexReady
+        askedQuery="harbor"
+        answer={null}
+        error="The answer could not be generated."
+        hits={[
+          {
+            rank: 1,
+            doc_id: "ws_harbor",
+            document_filename: "harbor.txt",
+            text: "The harbor budget was approved.",
+            score: 0.82,
+            vote: null,
+          },
+        ]}
+      />,
+    );
+    const alert = screen.getByRole("alert");
+    const passage = screen.getByText("harbor.txt");
+    expect(alert.textContent).toBe("The answer could not be generated.");
+    expect(alert.compareDocumentPosition(passage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("Answer")).toBeNull();
   });
 
   it("library explains an empty corpus and marks a scanned pdf", () => {
@@ -136,8 +179,7 @@ describe("Dashboard pages", () => {
     if (typeof libraryInterval !== "function" || typeof indexInterval !== "function") {
       return;
     }
-    const library = (status: string) =>
-      libraryInterval({ state: { data: [{ status }] } } as never);
+    const library = (status: string) => libraryInterval({ state: { data: [{ status }] } } as never);
     const index = (status: string) => indexInterval({ state: { data: { status } } } as never);
     expect(library("pending")).toBe(3000);
     expect(library("indexing")).toBe(3000);
@@ -153,7 +195,7 @@ describe("Dashboard pages", () => {
     renderWithQuery(<SearchPage indexReady={false} />);
     expect(screen.getByText(message)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
-    renderWithQuery(<ChatPage indexReady={false} />);
+    renderWithQuery(<AskPage indexReady={false} />);
     expect(screen.getAllByText(message).length).toBeGreaterThan(0);
   });
 });

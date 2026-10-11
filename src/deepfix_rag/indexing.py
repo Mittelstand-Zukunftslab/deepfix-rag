@@ -17,6 +17,7 @@ import time
 import uuid
 
 from llama_index.core.base.embeddings.base import BaseEmbedding
+from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.schema import Document
 from pydantic import ValidationError
 
@@ -124,10 +125,12 @@ class IndexCoordinator:
         db_path: Path,
         *,
         embed_model: BaseEmbedding | None = None,
+        llm: BaseLLM | None = None,
     ) -> None:
         self.workspace = workspace
         self.db_path = db_path
         self.embed_model = embed_model
+        self.llm = llm
         self._lock = threading.Lock()
         self._rebuilding = False
         self._rebuild_queued = False
@@ -378,7 +381,7 @@ class IndexCoordinator:
             documents = self._indexable_documents(config)
             if not documents:
                 raise IndexEmpty
-            workflow = RAGWorkflow(config=config, embed_model=self.embed_model)
+            workflow = RAGWorkflow(config=config, embed_model=self.embed_model, llm=self.llm)
             index = workflow._build_index(documents)
             chunk_count = workflow._count_index_chunks(index)
             manifest = {
@@ -411,7 +414,7 @@ class IndexCoordinator:
     def _publish(self, build_id: str) -> None:
         build_dir = self._build_path(build_id)
         config = bind_locations(self._read_champion(), self.workspace, build_dir)
-        service = QueryService(config, build_dir, embed_model=self.embed_model)
+        service = QueryService(config, build_dir, embed_model=self.embed_model, llm=self.llm)
         with self._lock:
             previous = self._build_id
             self._service = service

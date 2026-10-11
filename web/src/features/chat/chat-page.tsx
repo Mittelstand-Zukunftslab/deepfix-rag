@@ -1,174 +1,127 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
-import {
-  ArrowUp,
-  CheckCheck,
-  FileText,
-  Paperclip,
-  Plus,
-  Sparkles,
-  ThumbsDown,
-  ThumbsUp,
-} from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import { TopBar } from "@/components/layout/app-shell";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
-import { formatCurrency } from "@/lib/format";
-import type { ChatMessage } from "@/schemas/chat";
 import { IndexPreparing } from "@/features/index/index-preparing";
+import { askService, type AskHit } from "@/services/ask-service";
 
-import { conversationQueryOptions, useResetConversation, useSendMessage } from "./chat-queries";
+export function AskPage({
+  indexReady = true,
+  answer = undefined,
+  error: initialError = null,
+  hits,
+  askedQuery = null,
+}: {
+  indexReady?: boolean;
+  answer?: string | null;
+  error?: string | null;
+  hits?: AskHit[];
+  askedQuery?: string | null;
+}) {
+  const [draft, setDraft] = useState(askedQuery ?? "");
+  const [activeQuery, setActiveQuery] = useState<string | null>(askedQuery);
+  const [resultAnswer, setResultAnswer] = useState<string | null>(hits ? (answer ?? null) : null);
+  const [resultError, setResultError] = useState<string | null>(initialError);
+  const [results, setResults] = useState<AskHit[] | null>(hits ?? null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
 
-const timeFormatter = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
-
-export function ChatPage({ indexReady = true }: { indexReady?: boolean }) {
-  const { data: messages } = useSuspenseQuery(conversationQueryOptions());
-  const send = useSendMessage();
-  const reset = useResetConversation();
-  const [draft, setDraft] = useState("");
-  const endRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView?.({ behavior: "smooth" });
-  }, [messages.length]);
-
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!draft.trim()) return;
-    send.mutate({ content: draft });
-    setDraft("");
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    const query = draft.trim();
+    if (!query) {
+      setError("Enter a question.");
+      return;
+    }
+    setPending(true);
+    setError(null);
+    try {
+      const response = await askService.ask(query);
+      setActiveQuery(query);
+      setResultAnswer(response.answer);
+      setResultError(response.error);
+      setResults(response.hits);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to ask. Try again.");
+    } finally {
+      setPending(false);
+    }
   };
 
   if (!indexReady) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <TopBar title="Archival intelligence chat" />
-        <div className="mx-auto max-w-4xl px-8 py-16">
+      <>
+        <TopBar title="Ask" />
+        <div className="mx-auto max-w-5xl px-8 py-16">
           <IndexPreparing />
         </div>
-      </div>
+      </>
     );
   }
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <TopBar
-        title="Archival intelligence chat"
-        actions={
-          <Button variant="soft" size="sm" onClick={reset}>
-            <Plus />
-            New chat
-          </Button>
-        }
-      />
-      <div className="flex-1 overflow-y-auto px-8 py-4">
-        <div className="mx-auto flex max-w-4xl flex-col gap-8">
-          {messages.length === 0 ? (
-            <p className="py-24 text-center text-body-md text-muted-foreground">
-              Start a new conversation about your documents.
-            </p>
-          ) : null}
-          {messages.map((m) =>
-            m.role === "user" ? (
-              <UserBubble key={m.id} message={m} />
-            ) : (
-              <AssistantBubble key={m.id} message={m} />
-            ),
-          )}
-          {send.isPending ? (
-            <p className="pl-14 text-body-sm text-muted-foreground">Searching your archive…</p>
-          ) : null}
-          <div ref={endRef} />
-        </div>
-      </div>
-      <form onSubmit={onSubmit} className="mx-auto w-full max-w-4xl px-8 pb-8">
-        <Card className="flex items-center gap-3 px-4 py-2 shadow-soft">
-          <Paperclip className="size-5 text-muted-foreground" aria-hidden />
-          <Input
-            aria-label="Message"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Ask anything about your documents, fiscal reports, or agreements…"
-            className="border-0 shadow-none"
-          />
-          <Button type="submit" size="icon" aria-label="Send message" disabled={send.isPending}>
-            <ArrowUp />
-          </Button>
-        </Card>
-      </form>
-    </div>
-  );
-}
+  const shown = results ?? [];
+  const empty = activeQuery != null && shown.length === 0 && !pending && !error;
 
-function UserBubble({ message }: { message: ChatMessage }) {
   return (
-    <div className="flex flex-col items-end gap-1">
-      <div className="flex items-start gap-3">
-        <div className="rounded-2xl bg-surface-high px-5 py-3 text-body-md text-foreground">
-          {message.content}
-        </div>
-        <Avatar>
-          <AvatarFallback>FS</AvatarFallback>
-        </Avatar>
-      </div>
-      <p className="flex items-center gap-1 pr-14 text-label-md text-muted-foreground">
-        {timeFormatter.format(new Date(message.createdAt))}
-        <CheckCheck className="size-3.5 text-primary" />
-      </p>
-    </div>
-  );
-}
-
-function AssistantBubble({ message }: { message: ChatMessage }) {
-  return (
-    <div className="flex items-start gap-4">
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-        <Sparkles className="size-4" />
-      </div>
-      <Card className="flex max-w-2xl flex-col gap-4 p-5 shadow-soft">
-        <p className="text-body-md text-foreground">{message.content}</p>
-        {message.breakdown ? (
-          <div className="flex flex-col gap-3 rounded-lg bg-surface-low p-5">
-            {message.breakdown.items.map((item) => (
-              <div key={item.label} className="flex justify-between text-body-sm">
-                <span className="text-foreground">{item.label}</span>
-                <span className="font-semibold text-foreground">{formatCurrency(item.amount)}</span>
-              </div>
-            ))}
-            <Separator />
-            <div className="flex items-center justify-between">
-              <span className="text-label-lg text-foreground">{message.breakdown.totalLabel}</span>
-              <span className="text-headline-md text-primary">
-                {formatCurrency(message.breakdown.total)}
-              </span>
-            </div>
-          </div>
+    <>
+      <TopBar title="Ask" />
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-10 sm:px-8">
+        <form onSubmit={onSubmit} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm font-medium text-foreground">
+            Ask
+            <Input
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              className="h-11 text-base md:text-base"
+            />
+          </label>
+          <Button type="submit" className="h-11" disabled={pending} aria-busy={pending}>
+            {pending ? "Asking" : "Ask"}
+          </Button>
+        </form>
+        {error ? (
+          <p role="alert" className="text-sm font-medium text-destructive">
+            {error}
+          </p>
         ) : null}
-        <div className="flex items-center gap-2">
-          {message.sources?.length ? (
-            <span className="text-label-md text-muted-foreground">Sources:</span>
-          ) : null}
-          {message.sources?.map((s) => (
-            <Badge key={s} variant="soft" className="gap-1">
-              <FileText className="size-3" />
-              {s}
-            </Badge>
-          ))}
-          <div className="ml-auto flex">
-            <Button variant="icon" size="icon" aria-label="Helpful answer">
-              <ThumbsUp />
-            </Button>
-            <Button variant="icon" size="icon" aria-label="Unhelpful answer">
-              <ThumbsDown />
-            </Button>
-          </div>
-        </div>
-      </Card>
-    </div>
+        {resultError ? (
+          <p role="alert" className="text-sm font-medium text-destructive">
+            {resultError}
+          </p>
+        ) : null}
+        {resultAnswer ? (
+          <Card className="flex flex-col gap-2 p-5 shadow-soft">
+            <p className="text-label-lg text-foreground">Answer</p>
+            <p className="text-body-md text-foreground">{resultAnswer}</p>
+          </Card>
+        ) : null}
+        {empty ? (
+          <p className="text-body-md text-muted-foreground">
+            No passages matched &quot;{activeQuery}&quot;.
+          </p>
+        ) : null}
+        {shown.length > 0 ? (
+          <section className="flex flex-col gap-3">
+            <h2 className="text-headline-md text-foreground">Passages</h2>
+            <ol className="flex flex-col gap-3">
+              {shown.map((hit) => (
+                <li key={`${hit.doc_id}-${hit.rank}`}>
+                  <Card className="flex flex-col gap-2 p-5 shadow-soft">
+                    <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-body-sm text-muted-foreground">
+                      <span className="tabular-nums">{hit.rank}</span>
+                      <span className="text-label-lg text-foreground">{hit.document_filename}</span>
+                      <span className="tabular-nums">{hit.score.toFixed(3)}</span>
+                    </p>
+                    <p className="text-body-md text-foreground">{hit.text}</p>
+                  </Card>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
+      </div>
+    </>
   );
 }

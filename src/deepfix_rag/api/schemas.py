@@ -105,6 +105,16 @@ class RetrievalResponse(ApiModel):
     hits: list[HitResponse]
 
 
+class AskResponse(ApiModel):
+    """One single-turn answer and the passages it used."""
+
+    interaction_id: str
+    answer: str | None = None
+    error: str | None = None
+    vote: Literal["up", "down"] | None = None
+    hits: list[HitResponse]
+
+
 class DocumentResponse(ApiModel):
     """A non-deleted workspace document. Extracted text stays on disk."""
 

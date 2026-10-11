@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, RetrieveData, RetrieveErrors, RetrieveResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
+import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, RetrieveData, RetrieveErrors, RetrieveResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -32,6 +32,20 @@ export const rebuildIndex = <ThrowOnError extends boolean = false>(options?: Opt
  */
 export const updateUserRole = <ThrowOnError extends boolean = false>(options: Options<UpdateUserRoleData, ThrowOnError>): RequestResult<UpdateUserRoleResponses, UpdateUserRoleErrors, ThrowOnError> => (options.client ?? client).patch<UpdateUserRoleResponses, UpdateUserRoleErrors, ThrowOnError>({
     url: '/admin/users/{user_id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Ask a question
+ *
+ * Answer one question from the current index. Earlier questions are not included.
+ */
+export const askQuestion = <ThrowOnError extends boolean = false>(options: Options<AskQuestionData, ThrowOnError>): RequestResult<AskQuestionResponses, AskQuestionErrors, ThrowOnError> => (options.client ?? client).post<AskQuestionResponses, AskQuestionErrors, ThrowOnError>({
+    url: '/ask',
     ...options,
     headers: {
         'Content-Type': 'application/json',
