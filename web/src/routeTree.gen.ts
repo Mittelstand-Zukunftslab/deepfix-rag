@@ -14,6 +14,7 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as ChatRouteImport } from './routes/chat'
 import { Route as GalleryRouteImport } from './routes/gallery'
 import { Route as SearchRouteImport } from './routes/search'
+import { Route as StatusRouteImport } from './routes/status'
 import { Route as UploadRouteImport } from './routes/upload'
 
 const IndexRoute = IndexRouteImport.update({
@@ -41,6 +42,11 @@ const SearchRoute = SearchRouteImport.update({
   path: '/search',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StatusRoute = StatusRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UploadRoute = UploadRouteImport.update({
   id: '/upload',
   path: '/upload',
@@ -53,6 +59,7 @@ export interface FileRoutesByFullPath {
   '/chat': typeof ChatRoute
   '/gallery': typeof GalleryRoute
   '/search': typeof SearchRoute
+  '/status': typeof StatusRoute
   '/upload': typeof UploadRoute
 }
 export interface FileRoutesByTo {
@@ -61,6 +68,7 @@ export interface FileRoutesByTo {
   '/chat': typeof ChatRoute
   '/gallery': typeof GalleryRoute
   '/search': typeof SearchRoute
+  '/status': typeof StatusRoute
   '/upload': typeof UploadRoute
 }
 export interface FileRoutesById {
@@ -70,14 +78,24 @@ export interface FileRoutesById {
   '/chat': typeof ChatRoute
   '/gallery': typeof GalleryRoute
   '/search': typeof SearchRoute
+  '/status': typeof StatusRoute
   '/upload': typeof UploadRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/admin' | '/chat' | '/gallery' | '/search' | '/upload'
+  fullPaths:
+    '/' | '/admin' | '/chat' | '/gallery' | '/search' | '/status' | '/upload'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin' | '/chat' | '/gallery' | '/search' | '/upload'
-  id: '__root__' | '/' | '/admin' | '/chat' | '/gallery' | '/search' | '/upload'
+  to: '/' | '/admin' | '/chat' | '/gallery' | '/search' | '/status' | '/upload'
+  id:
+    | '__root__'
+    | '/'
+    | '/admin'
+    | '/chat'
+    | '/gallery'
+    | '/search'
+    | '/status'
+    | '/upload'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -86,6 +104,7 @@ export interface RootRouteChildren {
   ChatRoute: typeof ChatRoute
   GalleryRoute: typeof GalleryRoute
   SearchRoute: typeof SearchRoute
+  StatusRoute: typeof StatusRoute
   UploadRoute: typeof UploadRoute
 }
 
@@ -126,6 +145,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SearchRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/status': {
+      id: '/status'
+      path: '/status'
+      fullPath: '/status'
+      preLoaderRoute: typeof StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/upload': {
       id: '/upload'
       path: '/upload'
@@ -142,6 +168,7 @@ const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRoute,
   GalleryRoute: GalleryRoute,
   SearchRoute: SearchRoute,
+  StatusRoute: StatusRoute,
   UploadRoute: UploadRoute,
 }
 export const routeTree = rootRouteImport

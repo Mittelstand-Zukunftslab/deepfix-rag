@@ -1,4 +1,5 @@
 import {
+  Activity,
   BarChart3,
   CloudUpload,
   MessageSquare,
@@ -28,6 +29,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/upload", label: "Data upload", icon: CloudUpload },
   { to: "/gallery", label: "Data visualization", icon: BarChart3 },
   { to: "/admin", label: "Admin", icon: ShieldCheck, badge: "OPS" },
+  { to: "/status", label: "Status", icon: Activity },
 ];
 
 export function AppSidebar() {
