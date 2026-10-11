@@ -71,6 +71,22 @@ class Settings(BaseSettings):
 
     # Product API
     WEB_ORIGIN: str = "http://localhost:8080"
+    PRODUCT_DATA_DIR: Path = Path.home() / ".deepfix" / "product"
+    ALLOWED_EMAIL_DOMAINS: str = ""
+
+    @property
+    def product_db_path(self) -> Path:
+        """SQLite file for users and sessions, outside the agent workspace."""
+        return Path(self.PRODUCT_DATA_DIR) / "product.db"
+
+    @property
+    def allowed_email_domains(self) -> list[str]:
+        """Domains that may register, or an empty list when registration is open."""
+        return [
+            domain.strip().lower()
+            for domain in self.ALLOWED_EMAIL_DOMAINS.split(",")
+            if domain.strip()
+        ]
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
