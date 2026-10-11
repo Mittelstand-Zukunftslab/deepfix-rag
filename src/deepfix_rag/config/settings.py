@@ -72,12 +72,18 @@ class Settings(BaseSettings):
     # Product API
     WEB_ORIGIN: str = "http://localhost:8080"
     PRODUCT_DATA_DIR: Path = Path.home() / ".deepfix" / "product"
+    WORKSPACE_DIR: Path = Path.home() / ".deepfix" / "workspace"
     ALLOWED_EMAIL_DOMAINS: str = ""
 
     @property
     def product_db_path(self) -> Path:
-        """SQLite file for users and sessions, outside the agent workspace."""
+        """SQLite file for users, sessions, and documents, outside the agent workspace."""
         return Path(self.PRODUCT_DATA_DIR) / "product.db"
+
+    @property
+    def workspace_dir(self) -> Path:
+        """Shared corpus, indexes, feedback, configs, and runs."""
+        return Path(self.WORKSPACE_DIR)
 
     @property
     def allowed_email_domains(self) -> list[str]:

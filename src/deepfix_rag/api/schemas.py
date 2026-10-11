@@ -52,3 +52,24 @@ class LogoutResponse(ApiModel):
     """Confirmation that the session cookie was cleared."""
 
     status: Literal["ok"] = "ok"
+
+
+class TextIssueResponse(ApiModel):
+    """A PDF page flagged as scanned or garbled. OCR is not run."""
+
+    page: int
+    kind: Literal["scanned", "garbled"]
+
+
+class DocumentResponse(ApiModel):
+    """A non-deleted workspace document. Extracted text stays on disk."""
+
+    doc_id: str
+    filename: str
+    media_type: str
+    status: Literal["pending", "indexing", "indexed", "deleting", "failed"]
+    index_error: str | None = None
+    issues: list[TextIssueResponse] = Field(default_factory=list)
+    uploader_email: str
+    created_at: str
+    can_delete: bool
