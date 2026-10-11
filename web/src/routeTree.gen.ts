@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as ChatRouteImport } from './routes/chat'
-import { Route as GalleryRouteImport } from './routes/gallery'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as SignInRouteImport } from './routes/sign-in'
@@ -32,11 +31,6 @@ const AdminRoute = AdminRouteImport.update({
 const ChatRoute = ChatRouteImport.update({
   id: '/chat',
   path: '/chat',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const GalleryRoute = GalleryRouteImport.update({
-  id: '/gallery',
-  path: '/gallery',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RegisterRoute = RegisterRouteImport.update({
@@ -69,7 +63,6 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/chat': typeof ChatRoute
-  '/gallery': typeof GalleryRoute
   '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
   '/sign-in': typeof SignInRoute
@@ -80,7 +73,6 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/chat': typeof ChatRoute
-  '/gallery': typeof GalleryRoute
   '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
   '/sign-in': typeof SignInRoute
@@ -92,7 +84,6 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/chat': typeof ChatRoute
-  '/gallery': typeof GalleryRoute
   '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
   '/sign-in': typeof SignInRoute
@@ -105,7 +96,6 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/chat'
-    | '/gallery'
     | '/register'
     | '/search'
     | '/sign-in'
@@ -116,7 +106,6 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/chat'
-    | '/gallery'
     | '/register'
     | '/search'
     | '/sign-in'
@@ -127,7 +116,6 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/chat'
-    | '/gallery'
     | '/register'
     | '/search'
     | '/sign-in'
@@ -139,7 +127,6 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
   ChatRoute: typeof ChatRoute
-  GalleryRoute: typeof GalleryRoute
   RegisterRoute: typeof RegisterRoute
   SearchRoute: typeof SearchRoute
   SignInRoute: typeof SignInRoute
@@ -168,13 +155,6 @@ declare module '@tanstack/react-router' {
       path: '/chat'
       fullPath: '/chat'
       preLoaderRoute: typeof ChatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/gallery': {
-      id: '/gallery'
-      path: '/gallery'
-      fullPath: '/gallery'
-      preLoaderRoute: typeof GalleryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/register': {
@@ -219,7 +199,6 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
   ChatRoute: ChatRoute,
-  GalleryRoute: GalleryRoute,
   RegisterRoute: RegisterRoute,
   SearchRoute: SearchRoute,
   SignInRoute: SignInRoute,

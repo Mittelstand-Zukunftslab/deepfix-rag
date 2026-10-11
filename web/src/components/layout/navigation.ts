@@ -1,7 +1,6 @@
 import {
   Activity,
-  BarChart3,
-  CloudUpload,
+  Library,
   MessageSquare,
   Search,
   ShieldCheck,
@@ -21,8 +20,7 @@ export interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { to: "/search", label: "Search", icon: Search },
   { to: "/chat", label: "Chat", icon: MessageSquare },
-  { to: "/upload", label: "Data upload", icon: CloudUpload },
-  { to: "/gallery", label: "Data visualization", icon: BarChart3 },
+  { to: "/upload", label: "Library", icon: Library },
   { to: "/admin", label: "Admin", icon: ShieldCheck, badge: "OPS" },
   { to: "/status", label: "Status", icon: Activity },
 ];

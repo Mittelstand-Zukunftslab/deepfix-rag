@@ -1,13 +1,19 @@
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { uploadsQueryOptions } from "@/features/upload/upload-queries";
-import { UploadPage } from "@/features/upload/upload-page";
+import { LibraryPage } from "@/features/library/library-page";
+import { libraryQueryOptions } from "@/features/library/library-queries";
 import { pageMeta } from "@/lib/seo";
 
 export const Route = createFileRoute("/upload")({
   head: () => ({
-    meta: pageMeta("Data upload", "Upload PDFs and images to parse and index them."),
+    meta: pageMeta("Library", "Upload a text, Markdown, or PDF file into the shared corpus."),
   }),
-  loader: ({ context }) => context.queryClient.ensureQueryData(uploadsQueryOptions()),
-  component: UploadPage,
+  loader: ({ context }) => context.queryClient.ensureQueryData(libraryQueryOptions()),
+  component: LibraryRoute,
 });
+
+function LibraryRoute() {
+  const { data } = useSuspenseQuery(libraryQueryOptions());
+  return <LibraryPage documents={data} />;
+}

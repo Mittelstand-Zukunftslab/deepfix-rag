@@ -35,25 +35,3 @@ export const feedbackSchema = z.object({
   vote: z.enum(["up", "down"]),
 });
 export type Feedback = z.infer<typeof feedbackSchema>;
-
-export const galleryDocumentSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  kind: z.string(),
-  category: documentCategorySchema,
-  status: z.string(),
-  date: z.string(),
-  pages: z.number(),
-  format: z.enum(["PDF", "JPG"]),
-  sizeBytes: z.number(),
-  total: z.number().optional(),
-  lines: z.array(z.object({ label: z.string(), amount: z.number() })),
-});
-export type GalleryDocument = z.infer<typeof galleryDocumentSchema>;
-
-export const galleryQuerySchema = z.object({
-  category: z.string().optional(),
-  text: z.string().optional(),
-  page: z.number().int().min(1).default(1),
-});
-export type GalleryQuery = z.infer<typeof galleryQuerySchema>;
