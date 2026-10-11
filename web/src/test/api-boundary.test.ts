@@ -12,8 +12,8 @@ const sourceFiles = (dir: string): string[] =>
     return /\.(ts|tsx)$/.test(name) ? [path] : [];
   });
 
-// server.ts is the SSR request handler; its `fetch` is the server entry point, not an API call.
-const EXEMPT = new Set(["server.ts", join("test", "api-boundary.test.ts")]);
+// server.ts proxies `/api` in production. api.ts is the session fetch adapter for the generated client.
+const EXEMPT = new Set(["server.ts", "api.ts", join("test", "api-boundary.test.ts")]);
 
 const appFiles = sourceFiles(SRC).filter(
   (file) => !file.startsWith(GENERATED + sep) && !EXEMPT.has(relative(SRC, file)),
@@ -35,6 +35,11 @@ describe("API client boundary", () => {
       );
     // Status copy may display the configured origin to the user, but must not build requests from it.
     expect(offenders).toEqual([join("features", "status", "status-page.tsx")]);
+  });
+
+  it("the session adapter does not name API endpoints", () => {
+    const source = readFileSync(join(SRC, "api.ts"), "utf-8");
+    expect(source).not.toMatch(/['"`]\/(auth|health|admin|documents)/);
   });
 
   it("the generated SDK exposes no /internal operations", () => {

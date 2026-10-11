@@ -1,39 +1,16 @@
-import {
-  Activity,
-  BarChart3,
-  CloudUpload,
-  MessageSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Search,
-  ShieldCheck,
-  type LucideIcon,
-} from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
-import { NavLink, useActivePath, type AppPath } from "@/components/common/nav-link";
+import { NavLink, useActivePath } from "@/components/common/nav-link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { AccountRole } from "@/schemas/auth";
 import { useSidebarStore } from "@/stores/sidebar-store";
+import { navigationItems } from "./navigation";
 
-interface NavItem {
-  to: AppPath;
-  label: string;
-  icon: LucideIcon;
-  badge?: string;
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { to: "/search", label: "Search", icon: Search },
-  { to: "/chat", label: "Chat", icon: MessageSquare },
-  { to: "/upload", label: "Data upload", icon: CloudUpload },
-  { to: "/gallery", label: "Data visualization", icon: BarChart3 },
-  { to: "/admin", label: "Admin", icon: ShieldCheck, badge: "OPS" },
-  { to: "/status", label: "Status", icon: Activity },
-];
-
-export function AppSidebar() {
+export function AppSidebar({ role }: { role: AccountRole | null }) {
   const active = useActivePath();
+  const items = navigationItems(role);
   const isCollapsed = useSidebarStore((state) => state.isCollapsed);
   const toggleSidebar = useSidebarStore((state) => state.toggleSidebar);
   const ToggleIcon = isCollapsed ? PanelLeftOpen : PanelLeftClose;
@@ -41,7 +18,7 @@ export function AppSidebar() {
   return (
     <aside
       className={cn(
-        "sticky top-0 flex h-screen shrink-0 flex-col overflow-hidden bg-sidebar py-6 transition-[width] duration-200 ease-out",
+        "flex h-full shrink-0 flex-col overflow-hidden bg-sidebar py-6 transition-[width] duration-200 ease-out",
         isCollapsed ? "w-20 px-3" : "w-72 px-5",
       )}
     >
@@ -68,7 +45,7 @@ export function AppSidebar() {
         </Button>
       </div>
       <nav className="flex flex-col gap-1">
-        {NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const isActive = active.startsWith(item.to);
           return (
             <NavLink

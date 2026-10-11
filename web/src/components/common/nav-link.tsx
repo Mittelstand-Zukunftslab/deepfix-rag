@@ -3,7 +3,8 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
-export type AppPath = "/search" | "/chat" | "/upload" | "/gallery" | "/admin" | "/status";
+export type AppPath =
+  "/search" | "/chat" | "/upload" | "/gallery" | "/admin" | "/status" | "/sign-in" | "/register";
 
 interface NavLinkProps {
   to: AppPath;

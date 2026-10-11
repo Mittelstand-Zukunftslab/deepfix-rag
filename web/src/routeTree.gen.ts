@@ -13,7 +13,9 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as ChatRouteImport } from './routes/chat'
 import { Route as GalleryRouteImport } from './routes/gallery'
+import { Route as RegisterRouteImport } from './routes/register'
 import { Route as SearchRouteImport } from './routes/search'
+import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as StatusRouteImport } from './routes/status'
 import { Route as UploadRouteImport } from './routes/upload'
 
@@ -37,9 +39,19 @@ const GalleryRoute = GalleryRouteImport.update({
   path: '/gallery',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RegisterRoute = RegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignInRoute = SignInRouteImport.update({
+  id: '/sign-in',
+  path: '/sign-in',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StatusRoute = StatusRouteImport.update({
@@ -58,7 +70,9 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRoute
   '/chat': typeof ChatRoute
   '/gallery': typeof GalleryRoute
+  '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
+  '/sign-in': typeof SignInRoute
   '/status': typeof StatusRoute
   '/upload': typeof UploadRoute
 }
@@ -67,7 +81,9 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminRoute
   '/chat': typeof ChatRoute
   '/gallery': typeof GalleryRoute
+  '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
+  '/sign-in': typeof SignInRoute
   '/status': typeof StatusRoute
   '/upload': typeof UploadRoute
 }
@@ -77,23 +93,44 @@ export interface FileRoutesById {
   '/admin': typeof AdminRoute
   '/chat': typeof ChatRoute
   '/gallery': typeof GalleryRoute
+  '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
+  '/sign-in': typeof SignInRoute
   '/status': typeof StatusRoute
   '/upload': typeof UploadRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/admin' | '/chat' | '/gallery' | '/search' | '/status' | '/upload'
+    | '/'
+    | '/admin'
+    | '/chat'
+    | '/gallery'
+    | '/register'
+    | '/search'
+    | '/sign-in'
+    | '/status'
+    | '/upload'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin' | '/chat' | '/gallery' | '/search' | '/status' | '/upload'
+  to:
+    | '/'
+    | '/admin'
+    | '/chat'
+    | '/gallery'
+    | '/register'
+    | '/search'
+    | '/sign-in'
+    | '/status'
+    | '/upload'
   id:
     | '__root__'
     | '/'
     | '/admin'
     | '/chat'
     | '/gallery'
+    | '/register'
     | '/search'
+    | '/sign-in'
     | '/status'
     | '/upload'
   fileRoutesById: FileRoutesById
@@ -103,7 +140,9 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRoute
   ChatRoute: typeof ChatRoute
   GalleryRoute: typeof GalleryRoute
+  RegisterRoute: typeof RegisterRoute
   SearchRoute: typeof SearchRoute
+  SignInRoute: typeof SignInRoute
   StatusRoute: typeof StatusRoute
   UploadRoute: typeof UploadRoute
 }
@@ -138,11 +177,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GalleryRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/register': {
+      id: '/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof RegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/search': {
       id: '/search'
       path: '/search'
       fullPath: '/search'
       preLoaderRoute: typeof SearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sign-in': {
+      id: '/sign-in'
+      path: '/sign-in'
+      fullPath: '/sign-in'
+      preLoaderRoute: typeof SignInRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/status': {
@@ -167,7 +220,9 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRoute,
   ChatRoute: ChatRoute,
   GalleryRoute: GalleryRoute,
+  RegisterRoute: RegisterRoute,
   SearchRoute: SearchRoute,
+  SignInRoute: SignInRoute,
   StatusRoute: StatusRoute,
   UploadRoute: UploadRoute,
 }

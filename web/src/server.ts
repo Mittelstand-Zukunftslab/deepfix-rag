@@ -2,6 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { apiUpstreamUrl, internalApiBase, isApiPath } from "./api-proxy";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -44,8 +45,56 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+async function proxyApi(request: Request): Promise<Response> {
+  const incoming = new URL(request.url);
+  const target = apiUpstreamUrl(request.url, internalApiBase());
+  const headers = new Headers(request.headers);
+  headers.delete("host");
+  if (!headers.has("x-forwarded-proto")) {
+    headers.set("x-forwarded-proto", incoming.protocol.replace(":", ""));
+  }
+
+  const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  const upstream = await fetch(target, {
+    method: request.method,
+    headers,
+    body: hasBody ? request.body : undefined,
+    redirect: "manual",
+    duplex: hasBody ? "half" : undefined,
+  } as RequestInit);
+
+  const responseHeaders = new Headers(upstream.headers);
+  const setCookies =
+    typeof upstream.headers.getSetCookie === "function" ? upstream.headers.getSetCookie() : [];
+  if (setCookies.length > 0) {
+    responseHeaders.delete("set-cookie");
+  }
+  const response = new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: responseHeaders,
+  });
+  for (const cookie of setCookies) {
+    response.headers.append("set-cookie", cookie);
+  }
+  return response;
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    const url = new URL(request.url);
+    if (isApiPath(url.pathname)) {
+      try {
+        return await proxyApi(request);
+      } catch (error) {
+        console.error(error);
+        return new Response(JSON.stringify({ detail: "The API is unavailable." }), {
+          status: 502,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);

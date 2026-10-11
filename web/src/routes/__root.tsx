@@ -3,7 +3,9 @@ import {
   Outlet,
   Link,
   createRootRouteWithContext,
+  redirect,
   useRouter,
+  useRouterState,
   HeadContent,
   Scripts,
   type ErrorComponentProps,
@@ -12,6 +14,8 @@ import { useEffect, type ReactNode } from "react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { Toaster } from "@/components/ui/sonner";
+import { authRedirect, isPublicPath } from "@/features/auth/guard";
+import { authService } from "@/services/auth-service";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
@@ -75,6 +79,14 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
 }
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+  beforeLoad: async ({ location }) => {
+    const currentUser = await authService.currentUser();
+    const destination = authRedirect(location.pathname, currentUser);
+    if (destination) {
+      throw redirect({ to: destination });
+    }
+    return { currentUser };
+  },
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -118,14 +130,20 @@ function RootShell({ children }: { children: ReactNode }) {
 }
 
 function RootComponent() {
-  const { queryClient } = Route.useRouteContext();
+  const { queryClient, currentUser } = Route.useRouteContext();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const showShell = !isPublicPath(pathname) && currentUser;
 
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <AppShell>
+      {showShell ? (
+        <AppShell user={currentUser}>
+          <Outlet />
+        </AppShell>
+      ) : (
         <Outlet />
-      </AppShell>
+      )}
       <Toaster />
     </QueryClientProvider>
   );
