@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RegisterData, RegisterErrors, RegisterResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
+import type { CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -17,6 +17,13 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
      */
     meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
 };
+
+/**
+ * Rebuild the index
+ *
+ * Start a full repair rebuild. The current index keeps serving until it succeeds.
+ */
+export const rebuildIndex = <ThrowOnError extends boolean = false>(options?: Options<RebuildIndexData, ThrowOnError>): RequestResult<RebuildIndexResponses, RebuildIndexErrors, ThrowOnError> => (options?.client ?? client).post<RebuildIndexResponses, RebuildIndexErrors, ThrowOnError>({ url: '/admin/index/rebuild', ...options });
 
 /**
  * Change a user's role
@@ -109,3 +116,10 @@ export const deleteDocument = <ThrowOnError extends boolean = false>(options: Op
  * Report that the process is up. Touches no LLM, embedding, MLflow, or Hermes backend.
  */
 export const health = <ThrowOnError extends boolean = false>(options?: Options<HealthData, ThrowOnError>): RequestResult<HealthResponses, unknown, ThrowOnError> => (options?.client ?? client).get<HealthResponses, unknown, ThrowOnError>({ url: '/health', ...options });
+
+/**
+ * Read index status
+ *
+ * Return the shared index status for any signed-in user.
+ */
+export const getIndexStatus = <ThrowOnError extends boolean = false>(options?: Options<GetIndexStatusData, ThrowOnError>): RequestResult<GetIndexStatusResponses, GetIndexStatusErrors, ThrowOnError> => (options?.client ?? client).get<GetIndexStatusResponses, GetIndexStatusErrors, ThrowOnError>({ url: '/index', ...options });

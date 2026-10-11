@@ -162,6 +162,84 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "IndexStatusResponse": {
+        "description": "Overall state of the shared serving index.",
+        "properties": {
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "config_path": {
+            "title": "Config Path",
+            "type": "string"
+          },
+          "document_count": {
+            "title": "Document Count",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "pending_document_count": {
+            "title": "Pending Document Count",
+            "type": "integer"
+          },
+          "serving_build_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serving Build Id"
+          },
+          "status": {
+            "enum": [
+              "empty",
+              "updating",
+              "rebuilding",
+              "ready",
+              "ready_with_errors",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "status",
+          "document_count",
+          "chunk_count",
+          "pending_document_count",
+          "updated_at",
+          "config_path",
+          "serving_build_id",
+          "error"
+        ],
+        "title": "IndexStatusResponse",
+        "type": "object"
+      },
       "LogoutResponse": {
         "description": "Confirmation that the session cookie was cleared.",
         "properties": {
@@ -296,6 +374,68 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/index/rebuild": {
+      "post": {
+        "description": "Start a full repair rebuild. The current index keeps serving until it succeeds.",
+        "operationId": "rebuild_index",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          }
+        },
+        "summary": "Rebuild the index",
+        "tags": [
+          "index"
+        ]
+      }
+    },
     "/admin/users/{user_id}": {
       "patch": {
         "description": "Promote or demote an account. Members receive 403. The last admin cannot be demoted.",
@@ -698,6 +838,38 @@
         "summary": "Liveness probe",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/index": {
+      "get": {
+        "description": "Return the shared index status for any signed-in user.",
+        "operationId": "get_index_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "Read index status",
+        "tags": [
+          "index"
         ]
       }
     }

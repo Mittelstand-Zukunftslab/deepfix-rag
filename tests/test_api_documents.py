@@ -4,6 +4,7 @@ from collections.abc import Iterator
 import json
 
 from fastapi.testclient import TestClient
+from llama_index.core.embeddings import MockEmbedding
 import pytest
 
 from deepfix_rag.accounts import connect, create_admin
@@ -28,7 +29,8 @@ def document_settings(tmp_path):
 
 @pytest.fixture
 def client(document_settings: Settings) -> Iterator[TestClient]:
-    with TestClient(create_app(document_settings)) as test_client:
+    embed_model = MockEmbedding(embed_dim=16)
+    with TestClient(create_app(document_settings, embed_model=embed_model)) as test_client:
         yield test_client
 
 
@@ -73,7 +75,7 @@ def test_workspace_layout_and_champion_seed(
     assert "source_type: directory" in text
 
     champion.write_text("kept: true\n", encoding="utf-8")
-    with TestClient(create_app(document_settings)) as again:
+    with TestClient(create_app(document_settings, embed_model=MockEmbedding(embed_dim=16))) as again:
         again.get("/health")
     assert champion.read_text(encoding="utf-8") == "kept: true\n"
 

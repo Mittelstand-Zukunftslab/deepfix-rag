@@ -115,6 +115,46 @@ export type HealthResponse = {
 };
 
 /**
+ * IndexStatusResponse
+ *
+ * Overall state of the shared serving index.
+ */
+export type IndexStatusResponse = {
+    /**
+     * Chunk Count
+     */
+    chunk_count: number;
+    /**
+     * Config Path
+     */
+    config_path: string;
+    /**
+     * Document Count
+     */
+    document_count: number;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * Pending Document Count
+     */
+    pending_document_count: number;
+    /**
+     * Serving Build Id
+     */
+    serving_build_id: string | null;
+    /**
+     * Status
+     */
+    status: 'empty' | 'updating' | 'rebuilding' | 'ready' | 'ready_with_errors' | 'failed';
+    /**
+     * Updated At
+     */
+    updated_at: string | null;
+};
+
+/**
  * LogoutResponse
  *
  * Confirmation that the session cookie was cleared.
@@ -201,6 +241,43 @@ export type ValidationError = {
      */
     type: string;
 };
+
+export type RebuildIndexData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/admin/index/rebuild';
+};
+
+export type RebuildIndexErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * The request conflicts with the current state.
+     */
+    409: ErrorResponse;
+};
+
+export type RebuildIndexError = RebuildIndexErrors[keyof RebuildIndexErrors];
+
+export type RebuildIndexResponses = {
+    /**
+     * Successful Response
+     */
+    202: IndexStatusResponse;
+};
+
+export type RebuildIndexResponse = RebuildIndexResponses[keyof RebuildIndexResponses];
 
 export type UpdateUserRoleData = {
     body: RoleUpdateRequest;
@@ -452,3 +529,28 @@ export type HealthResponses = {
 };
 
 export type HealthResponse2 = HealthResponses[keyof HealthResponses];
+
+export type GetIndexStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/index';
+};
+
+export type GetIndexStatusErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type GetIndexStatusError = GetIndexStatusErrors[keyof GetIndexStatusErrors];
+
+export type GetIndexStatusResponses = {
+    /**
+     * Successful Response
+     */
+    200: IndexStatusResponse;
+};
+
+export type GetIndexStatusResponse = GetIndexStatusResponses[keyof GetIndexStatusResponses];
