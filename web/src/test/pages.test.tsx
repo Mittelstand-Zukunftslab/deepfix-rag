@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { ChatPage } from "@/features/chat/chat-page";
 import { LibraryPage } from "@/features/library/library-page";
 import { SearchPage } from "@/features/search/search-page";
+import type { IndexStatus } from "@/services/index-service";
 import type { LibraryDocument } from "@/services/library-service";
 
 const renderWithQuery = (ui: ReactNode) => {
@@ -79,5 +80,35 @@ describe("Dashboard pages", () => {
     expect(screen.getByRole("button", { name: "Delete scan.pdf" })).toBeTruthy();
     expect(screen.getByText("Page 2 has garbled text")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Delete cipher.pdf" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rebuild index" })).toBeNull();
+  });
+
+  it("library lets an admin confirm a rebuild that keeps the current index", () => {
+    const index: IndexStatus = {
+      status: "ready",
+      document_count: 2,
+      chunk_count: 4,
+      pending_document_count: 0,
+      updated_at: "2026-10-11T12:00:00.000Z",
+      config_path: "/tmp/champion.yaml",
+      serving_build_id: "build-1",
+      error: null,
+    };
+    renderWithQuery(<LibraryPage documents={[]} index={index} canRebuild />);
+    expect(screen.getByText("Ready")).toBeTruthy();
+    expect(screen.getByText("Chunks 4")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild index" }));
+    expect(
+      screen.getByText("The current index remains available until the new build is ready."),
+    ).toBeTruthy();
+  });
+
+  it("search and ask explain when no serving index exists", () => {
+    const message = "The index is being prepared. Try again in a minute.";
+    renderWithQuery(<SearchPage indexReady={false} />);
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(screen.queryByText("Northwind Power & Light: Electricity bill")).toBeNull();
+    renderWithQuery(<ChatPage indexReady={false} />);
+    expect(screen.getAllByText(message).length).toBeGreaterThan(0);
   });
 });

@@ -24,6 +24,8 @@ import { formatCurrency, formatDate, formatNumber } from "@/lib/format";
 import type { SearchResult } from "@/schemas/document";
 import { searchService } from "@/services/search-service";
 import { useSearchStore } from "@/stores/search-store";
+import { IndexPreparing } from "@/features/index/index-preparing";
+
 import { searchQueryOptions } from "./search-queries";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -35,12 +37,22 @@ const ICONS: Record<string, LucideIcon> = {
   Sanitation: Trash2,
 };
 
-export function SearchPage() {
+export function SearchPage({ indexReady = true }: { indexReady?: boolean }) {
   const { draft, filters, setDraft, submit, resetFilters } = useSearchStore();
   const { data = [], isFetching } = useQuery({
     ...searchQueryOptions(filters),
     placeholderData: keepPreviousData,
   });
+  if (!indexReady) {
+    return (
+      <>
+        <TopBar title="Search" />
+        <div className="mx-auto max-w-5xl px-8 py-16">
+          <IndexPreparing />
+        </div>
+      </>
+    );
+  }
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();

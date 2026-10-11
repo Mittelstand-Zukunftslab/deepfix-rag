@@ -20,11 +20,13 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { formatCurrency } from "@/lib/format";
 import type { ChatMessage } from "@/schemas/chat";
+import { IndexPreparing } from "@/features/index/index-preparing";
+
 import { conversationQueryOptions, useResetConversation, useSendMessage } from "./chat-queries";
 
 const timeFormatter = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
 
-export function ChatPage() {
+export function ChatPage({ indexReady = true }: { indexReady?: boolean }) {
   const { data: messages } = useSuspenseQuery(conversationQueryOptions());
   const send = useSendMessage();
   const reset = useResetConversation();
@@ -41,6 +43,17 @@ export function ChatPage() {
     send.mutate({ content: draft });
     setDraft("");
   };
+
+  if (!indexReady) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <TopBar title="Archival intelligence chat" />
+        <div className="mx-auto max-w-4xl px-8 py-16">
+          <IndexPreparing />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

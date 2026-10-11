@@ -1,13 +1,26 @@
 import { useRef, useState, type DragEvent } from "react";
 
 import { PageHeader } from "@/components/layout/app-shell";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { useRebuildIndex } from "@/features/index/index-queries";
 import { formatDateTime } from "@/lib/format";
-import { uploadSelectionSchema } from "@/schemas/library";
-import type { LibraryDocument } from "@/services/library-service";
 import { cn } from "@/lib/utils";
+import { uploadSelectionSchema } from "@/schemas/library";
+import type { IndexStatus } from "@/services/index-service";
+import type { LibraryDocument } from "@/services/library-service";
 
 import { useDeleteDocument, useUploadDocument } from "./library-queries";
 
@@ -19,14 +32,43 @@ const STATUS_LABEL: Record<LibraryDocument["status"], string> = {
   failed: "Failed",
 };
 
+const INDEX_LABEL: Record<IndexStatus["status"], string> = {
+  empty: "Empty",
+  updating: "Updating",
+  rebuilding: "Rebuilding",
+  ready: "Ready",
+  ready_with_errors: "Ready with errors",
+  failed: "Failed",
+};
+
+const EMPTY_INDEX: IndexStatus = {
+  status: "empty",
+  document_count: 0,
+  chunk_count: 0,
+  pending_document_count: 0,
+  updated_at: null,
+  config_path: "",
+  serving_build_id: null,
+  error: null,
+};
+
 function issueLabel(issue: LibraryDocument["issues"][number]): string {
   if (issue.kind === "scanned") return `Page ${issue.page} looks scanned`;
   return `Page ${issue.page} has garbled text`;
 }
 
-export function LibraryPage({ documents }: { documents: LibraryDocument[] }) {
+export function LibraryPage({
+  documents,
+  index = EMPTY_INDEX,
+  canRebuild = false,
+}: {
+  documents: LibraryDocument[];
+  index?: IndexStatus;
+  canRebuild?: boolean;
+}) {
   const upload = useUploadDocument();
   const remove = useDeleteDocument();
+  const rebuild = useRebuildIndex();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +109,68 @@ export function LibraryPage({ documents }: { documents: LibraryDocument[] }) {
         title="Library"
         description="Add a text, Markdown, or PDF file to the shared corpus. Scanned and garbled PDF pages are marked. OCR is not available."
       />
+      <section className="flex flex-col gap-3 rounded-2xl border border-border bg-card px-6 py-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-headline-md text-foreground">Index</h2>
+          {canRebuild ? (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  type="button"
+                  className="h-11"
+                  disabled={index.status === "rebuilding" || rebuild.isPending}
+                >
+                  {index.status === "rebuilding" || rebuild.isPending
+                    ? "Rebuilding"
+                    : "Rebuild index"}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Rebuild the index?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    The current index remains available until the new build is ready.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel className="h-11">Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    className="h-11"
+                    onClick={() => {
+                      rebuild.mutate(undefined, {
+                        onError: (caught) => {
+                          setError(
+                            caught instanceof Error
+                              ? caught.message
+                              : "Unable to rebuild the index. Try again.",
+                          );
+                        },
+                      });
+                    }}
+                  >
+                    Rebuild index
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          ) : null}
+        </div>
+        <p className="flex flex-wrap items-center gap-2 text-body-sm text-muted-foreground">
+          <span>Status</span>
+          <Badge variant={index.status === "failed" ? "destructive" : "soft"}>
+            {INDEX_LABEL[index.status]}
+          </Badge>
+          <span>Documents {index.document_count}</span>
+          <span>Chunks {index.chunk_count}</span>
+          <span>Pending {index.pending_document_count}</span>
+        </p>
+        {index.updated_at ? (
+          <p className="text-body-sm text-muted-foreground">
+            Updated {formatDateTime(index.updated_at)}
+          </p>
+        ) : null}
+        {index.error ? <p className="text-body-sm text-destructive">{index.error}</p> : null}
+      </section>
       <section
         onDragOver={(event) => {
           event.preventDefault();

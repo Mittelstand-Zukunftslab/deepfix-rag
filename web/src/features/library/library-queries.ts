@@ -9,7 +9,10 @@ export function useUploadDocument() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: libraryService.upload,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: libraryQueryOptions().queryKey }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: libraryQueryOptions().queryKey });
+      queryClient.invalidateQueries({ queryKey: ["index"] });
+    },
   });
 }
 
@@ -17,6 +20,9 @@ export function useDeleteDocument() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: libraryService.remove,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: libraryQueryOptions().queryKey }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: libraryQueryOptions().queryKey });
+      queryClient.invalidateQueries({ queryKey: ["index"] });
+    },
   });
 }
