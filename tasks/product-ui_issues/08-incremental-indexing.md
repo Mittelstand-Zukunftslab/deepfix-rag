@@ -13,6 +13,7 @@
 - [ ] A document moves pending, then indexing, then indexed. On failure it moves to failed, stores the index error, and leaves all other documents and chunks unchanged. Retrying is idempotent: existing chunks for that document are removed before its replacement chunks are inserted.
 - [ ] Deleting a document moves it to deleting, removes every chunk whose parent document id matches, removes the corpus source file, then sets the deleted time. A failed index deletion leaves the document visible as failed or deleting to admins and is retried. It is not reported as successfully deleted.
 - [ ] Per-document mutations are serialized through one index-writer queue. Search and Ask continue reading the current index while a mutation runs. After a successful insert or delete, the lexical retriever is refreshed so lexical results include the change.
+- [ ] On API startup, documents left in indexing are re-queued and documents left in deleting resume deletion, so a restart never leaves a document stuck.
 - [ ] The Library shows each document's indexing status and polls every 3 seconds while any document is pending, indexing, or deleting, or while the index is rebuilding.
 - [ ] An incremental failure does not disable Search or Ask for documents already indexed.
 - [ ] An integration test indexes documents A and B, uploads document C, and proves A and B keep the same chunk ids and stored embeddings while C becomes retrievable. A second test deletes B and proves only B's chunks disappear.

@@ -2,7 +2,7 @@
 
 **What to build:** A long-lived domain service that loads a built index once and answers both retrieval and RAG requests. Retrieval returns ranked passages without calling the generation model. RAG returns those passages plus the generated answer. Existing CLI commands for indexing and evaluation keep working unchanged.
 
-**Reference:** tasks\prd-product-ui.md, `### US-001: Workspace query service in the domain layer`
+**Reference:** tasks/prd-product-ui.md, `### US-001: Workspace query service in the domain layer`
 
 **Blocked by:** None — can start immediately.
 

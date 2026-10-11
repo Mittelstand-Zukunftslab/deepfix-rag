@@ -13,5 +13,6 @@
 - [ ] For rows with no reference answer, metrics that need one (answer correctness, and DeepEval metrics that need an expected output such as contextual precision and contextual recall) are skipped for that row and not averaged into the summary. Reference-free metrics (faithfulness, answer relevancy) still run.
 - [ ] A metric skipped for every row is absent from the comparison delta. A missing delta is already treated as "not an improvement" by the optimization loop.
 - [ ] A row is unanswerable only if it is explicitly marked so, not merely because the answer is missing.
-- [ ] Unit tests cover a single document id, multiple document ids, a missing answer, a row with both keys, a retrieved negative lowering precision, an unjudged hit left out of precision, a negative-only row that is not unanswerable, and an unchanged benchmark row with no negatives.
+- [ ] The eval runner also accepts records passed in memory, so the API can score holdout without writing it to disk. The comparison output has the same shape either way and includes per-question metric values.
+- [ ] Unit tests cover a single document id, multiple document ids, a missing answer, a row with both keys, a retrieved negative lowering precision, an unjudged hit left out of precision, a negative-only row that is not unanswerable, an unchanged benchmark row with no negatives, and in-memory records scoring the same as the same rows loaded from a file.
 - [ ] `uv run --env-file .env pytest -v -m "not network and not e2e"` passes.
