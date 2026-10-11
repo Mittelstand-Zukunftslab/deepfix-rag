@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     DEEPFIX_HOME: str = os.path.join(Path(__file__).parents[3], ".deepfix")
     DEEPFIX_API_KEY: str | None = None
 
+    # Product API
+    WEB_ORIGIN: str = "http://localhost:8080"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

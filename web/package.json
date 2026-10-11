@@ -11,7 +11,10 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "export:openapi": "cd .. && uv run python -m deepfix_rag.api.export_openapi",
+    "generate:api": "npm run export:openapi && openapi-ts"
   },
   "overrides": {
     "rolldown": "1.2.1"
@@ -75,6 +78,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
+    "@hey-api/openapi-ts": "^0.99.0",
     "@lovable.dev/vite-tanstack-config": "2.25.3",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.0.0",

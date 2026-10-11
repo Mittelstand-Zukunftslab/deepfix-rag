@@ -3,6 +3,7 @@ import concurrent.futures
 from pathlib import Path
 import time
 from typing import Any, Optional
+
 import lancedb
 from llama_index.core import (
     Document,
@@ -748,31 +749,6 @@ class RAGWorkflow(Workflow):
         retrieval_results = self.convert_nodes_to_results(ev.nodes)
         response_model = RAGResult(retrieval_results=retrieval_results, generated_answer=generated_answer)
         return StopEvent(result=response_model)
-
-
-async def run_workflow_server(
-    config: RAGConfig | None = None,
-    llm: BaseLLM | None = None,
-    embed_model: BaseEmbedding | None = None,
-    timeout: float | None = 600.0, 
-    host:str='0.0.0.0',
-    port:int=8090
-    ):"""Get a workflow server instance."""
-    from llama_agents.server import WorkflowServer
-    from dbos import DBOS
-    from llama_agents.dbos import DBOSRuntime
-    from llama_agents.server import WorkflowServer
-
-    DBOS(config={"name": "RAG-workflow", "run_admin_server": False})
-    runtime = DBOSRuntime()
-    workflow = RAGWorkflow(config=config, llm=llm, embed_model=embed_model, timeout=timeout,runtime=runtime)
-
-    server= WorkflowServer(workflow_store=runtime.create_workflow_store(),runtime=runtime.build_server_runtime())
-    server.add_workflow("RAG-workflow",workflow)
-
-    await server.start()
-    
-    await server.serve(host=host, port=port)
 
 
 def execute_pipeline(
