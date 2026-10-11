@@ -1,6 +1,7 @@
 """Search the shared index, and answer one question from it."""
 
 from pathlib import Path
+from typing import Literal, cast
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -8,15 +9,23 @@ from fastapi import APIRouter, HTTPException, Request
 from deepfix_rag.api.deps import current_user, get_settings
 from deepfix_rag.api.errors import (
     BAD_REQUEST,
+    NOT_FOUND,
     SERVICE_UNAVAILABLE,
     UNAUTHORIZED,
     error_responses,
 )
-from deepfix_rag.api.schemas import AskResponse, HitResponse, QueryRequest, RetrievalResponse
+from deepfix_rag.api.schemas import (
+    AskResponse,
+    HitResponse,
+    InteractionResponse,
+    QueryRequest,
+    RetrievalResponse,
+)
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.documents import document_filenames
+from deepfix_rag.feedback import current_votes
 from deepfix_rag.indexing import IndexCoordinator
-from deepfix_rag.interactions import Interaction, record_interaction
+from deepfix_rag.interactions import Interaction, get_interaction, record_interaction
 from deepfix_rag.pipeline import RetrievalResult
 from deepfix_rag.tracing import trace_request
 
@@ -115,8 +124,8 @@ async def ask_question(payload: QueryRequest, request: Request) -> AskResponse:
         interaction_id=stored.interaction_id,
         answer=stored.answer,
         error=stored.error,
-        vote=None,
-        hits=_hit_responses(settings.product_db_path, stored),
+        vote=_answer_vote(settings.product_db_path, user.id, stored.interaction_id),
+        hits=_hit_responses(settings.product_db_path, stored, user.id),
     )
 
 
@@ -142,7 +151,7 @@ def _stored_response(
     )
     return RetrievalResponse(
         interaction_id=recorded.interaction_id,
-        hits=_hit_responses(db_path, recorded),
+        hits=_hit_responses(db_path, recorded, user_id),
     )
 
 
@@ -191,8 +200,9 @@ def _store(
     )
 
 
-def _hit_responses(db_path: Path, recorded: Interaction) -> list[HitResponse]:
+def _hit_responses(db_path: Path, recorded: Interaction, user_id: str) -> list[HitResponse]:
     names = document_filenames(db_path, [hit.doc_id for hit in recorded.hits])
+    _answer, passages = current_votes(db_path, user_id, recorded.interaction_id)
     return [
         HitResponse(
             rank=hit.rank,
@@ -200,7 +210,37 @@ def _hit_responses(db_path: Path, recorded: Interaction) -> list[HitResponse]:
             document_filename=names.get(hit.doc_id, hit.doc_id),
             text=hit.text,
             score=hit.score,
-            vote=None,
+            vote=passages.get(hit.rank),
         )
         for hit in recorded.hits
     ]
+
+
+def _answer_vote(db_path: Path, user_id: str, interaction_id: str) -> str | None:
+    answer, _passages = current_votes(db_path, user_id, interaction_id)
+    return answer
+
+
+@router.get(
+    "/interactions/{interaction_id}",
+    operation_id="get_interaction",
+    response_model=InteractionResponse,
+    responses=error_responses(UNAUTHORIZED, NOT_FOUND),
+    summary="Read a stored search or ask",
+)
+def read_interaction(interaction_id: str, request: Request) -> InteractionResponse:
+    """Return one interaction with the current user's votes. Used after a refresh."""
+    user = current_user(request)
+    settings = get_settings(request)
+    stored = get_interaction(settings.product_db_path, interaction_id)
+    if stored is None:
+        raise HTTPException(status_code=NOT_FOUND, detail="No interaction with that id.")
+    return InteractionResponse(
+        interaction_id=stored.interaction_id,
+        kind=cast(Literal["retrieval", "ask"], stored.kind),
+        query=stored.query,
+        answer=stored.answer,
+        error=stored.error,
+        vote=_answer_vote(settings.product_db_path, user.id, stored.interaction_id),
+        hits=_hit_responses(settings.product_db_path, stored, user.id),
+    )

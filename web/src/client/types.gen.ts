@@ -47,6 +47,30 @@ export type BodyCreateDocument = {
 };
 
 /**
+ * ConfigApprovalResponse
+ *
+ * Answer approval for the interactions that used one champion config.
+ */
+export type ConfigApprovalResponse = {
+    /**
+     * Config Path
+     */
+    config_path: string;
+    /**
+     * Down
+     */
+    down: number;
+    /**
+     * Rate
+     */
+    rate: number | null;
+    /**
+     * Up
+     */
+    up: number;
+};
+
+/**
  * CredentialsRequest
  *
  * Email and password for register and login.
@@ -118,6 +142,110 @@ export type ErrorResponse = {
      * Human-readable explanation of what went wrong.
      */
     detail: string;
+};
+
+/**
+ * FeedbackRequest
+ *
+ * A thumbs-up, thumbs-down, or clear on a passage or an answer.
+ */
+export type FeedbackRequest = {
+    /**
+     * Action
+     */
+    action: 'up' | 'down' | 'clear';
+    /**
+     * Interaction Id
+     */
+    interaction_id: string;
+    /**
+     * Rank
+     */
+    rank?: number | null;
+    /**
+     * Target
+     */
+    target: 'passage' | 'answer';
+};
+
+/**
+ * FeedbackResponse
+ *
+ * The user's current vote after the event was stored.
+ */
+export type FeedbackResponse = {
+    /**
+     * Interaction Id
+     */
+    interaction_id: string;
+    /**
+     * Rank
+     */
+    rank: number | null;
+    /**
+     * Target
+     */
+    target: 'passage' | 'answer';
+    /**
+     * Vote
+     */
+    vote: 'up' | 'down' | null;
+};
+
+/**
+ * FeedbackSummaryResponse
+ *
+ * Vote, dataset, and outbox counts for an admin.
+ */
+export type FeedbackSummaryResponse = {
+    /**
+     * Answer Approval By Config
+     */
+    answer_approval_by_config: Array<ConfigApprovalResponse>;
+    /**
+     * Answer Approval Rate
+     */
+    answer_approval_rate: number | null;
+    /**
+     * Answer Down
+     */
+    answer_down: number;
+    /**
+     * Answer Up
+     */
+    answer_up: number;
+    /**
+     * Dev Question Count
+     */
+    dev_question_count: number;
+    /**
+     * Feedback Experiment Url
+     */
+    feedback_experiment_url: string | null;
+    /**
+     * Holdout Question Count
+     */
+    holdout_question_count: number;
+    /**
+     * No Trace Event Count
+     */
+    no_trace_event_count: number;
+    /**
+     * Passage Down
+     */
+    passage_down: number;
+    /**
+     * Passage Up
+     */
+    passage_up: number;
+    /**
+     * Product Experiment Url
+     */
+    product_experiment_url: string | null;
+    /**
+     * Unsynced Event Count
+     */
+    unsynced_event_count: number;
 };
 
 /**
@@ -212,6 +340,42 @@ export type IndexStatusResponse = {
      * Updated At
      */
     updated_at: string | null;
+};
+
+/**
+ * InteractionResponse
+ *
+ * A stored search or ask, including the current user's votes.
+ */
+export type InteractionResponse = {
+    /**
+     * Answer
+     */
+    answer: string | null;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * Hits
+     */
+    hits: Array<HitResponse>;
+    /**
+     * Interaction Id
+     */
+    interaction_id: string;
+    /**
+     * Kind
+     */
+    kind: 'retrieval' | 'ask';
+    /**
+     * Query
+     */
+    query: string;
+    /**
+     * Vote
+     */
+    vote: 'up' | 'down' | null;
 };
 
 /**
@@ -329,6 +493,35 @@ export type ValidationError = {
      */
     type: string;
 };
+
+export type GetFeedbackSummaryData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/admin/feedback/summary';
+};
+
+export type GetFeedbackSummaryErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+};
+
+export type GetFeedbackSummaryError = GetFeedbackSummaryErrors[keyof GetFeedbackSummaryErrors];
+
+export type GetFeedbackSummaryResponses = {
+    /**
+     * Successful Response
+     */
+    200: FeedbackSummaryResponse;
+};
+
+export type GetFeedbackSummaryResponse = GetFeedbackSummaryResponses[keyof GetFeedbackSummaryResponses];
 
 export type RebuildIndexData = {
     body?: never;
@@ -635,6 +828,39 @@ export type DeleteDocumentResponses = {
 
 export type DeleteDocumentResponse = DeleteDocumentResponses[keyof DeleteDocumentResponses];
 
+export type SubmitFeedbackData = {
+    body: FeedbackRequest;
+    path?: never;
+    query?: never;
+    url: '/feedback';
+};
+
+export type SubmitFeedbackErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type SubmitFeedbackError = SubmitFeedbackErrors[keyof SubmitFeedbackErrors];
+
+export type SubmitFeedbackResponses = {
+    /**
+     * Successful Response
+     */
+    200: FeedbackResponse;
+};
+
+export type SubmitFeedbackResponse = SubmitFeedbackResponses[keyof SubmitFeedbackResponses];
+
 export type HealthData = {
     body?: never;
     path?: never;
@@ -675,6 +901,40 @@ export type GetIndexStatusResponses = {
 };
 
 export type GetIndexStatusResponse = GetIndexStatusResponses[keyof GetIndexStatusResponses];
+
+export type GetInteractionData = {
+    body?: never;
+    path: {
+        /**
+         * Interaction Id
+         */
+        interaction_id: string;
+    };
+    query?: never;
+    url: '/interactions/{interaction_id}';
+};
+
+export type GetInteractionErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type GetInteractionError = GetInteractionErrors[keyof GetInteractionErrors];
+
+export type GetInteractionResponses = {
+    /**
+     * Successful Response
+     */
+    200: InteractionResponse;
+};
+
+export type GetInteractionResponse = GetInteractionResponses[keyof GetInteractionResponses];
 
 export type RetrieveData = {
     body: QueryRequest;

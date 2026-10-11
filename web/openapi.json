@@ -88,6 +88,42 @@
         "title": "Body_create_document",
         "type": "object"
       },
+      "ConfigApprovalResponse": {
+        "description": "Answer approval for the interactions that used one champion config.",
+        "properties": {
+          "config_path": {
+            "title": "Config Path",
+            "type": "string"
+          },
+          "down": {
+            "title": "Down",
+            "type": "integer"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "up": {
+            "title": "Up",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "config_path",
+          "up",
+          "down",
+          "rate"
+        ],
+        "title": "ConfigApprovalResponse",
+        "type": "object"
+      },
       "CredentialsRequest": {
         "description": "Email and password for register and login.",
         "properties": {
@@ -193,6 +229,196 @@
           "detail"
         ],
         "title": "ErrorResponse",
+        "type": "object"
+      },
+      "FeedbackRequest": {
+        "description": "A thumbs-up, thumbs-down, or clear on a passage or an answer.",
+        "properties": {
+          "action": {
+            "enum": [
+              "up",
+              "down",
+              "clear"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "interaction_id": {
+            "minLength": 1,
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "target": {
+            "enum": [
+              "passage",
+              "answer"
+            ],
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "target",
+          "action"
+        ],
+        "title": "FeedbackRequest",
+        "type": "object"
+      },
+      "FeedbackResponse": {
+        "description": "The user's current vote after the event was stored.",
+        "properties": {
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "target": {
+            "enum": [
+              "passage",
+              "answer"
+            ],
+            "title": "Target",
+            "type": "string"
+          },
+          "vote": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vote"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "target",
+          "rank",
+          "vote"
+        ],
+        "title": "FeedbackResponse",
+        "type": "object"
+      },
+      "FeedbackSummaryResponse": {
+        "description": "Vote, dataset, and outbox counts for an admin.",
+        "properties": {
+          "answer_approval_by_config": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigApprovalResponse"
+            },
+            "title": "Answer Approval By Config",
+            "type": "array"
+          },
+          "answer_approval_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Approval Rate"
+          },
+          "answer_down": {
+            "title": "Answer Down",
+            "type": "integer"
+          },
+          "answer_up": {
+            "title": "Answer Up",
+            "type": "integer"
+          },
+          "dev_question_count": {
+            "title": "Dev Question Count",
+            "type": "integer"
+          },
+          "feedback_experiment_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Experiment Url"
+          },
+          "holdout_question_count": {
+            "title": "Holdout Question Count",
+            "type": "integer"
+          },
+          "no_trace_event_count": {
+            "title": "No Trace Event Count",
+            "type": "integer"
+          },
+          "passage_down": {
+            "title": "Passage Down",
+            "type": "integer"
+          },
+          "passage_up": {
+            "title": "Passage Up",
+            "type": "integer"
+          },
+          "product_experiment_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Experiment Url"
+          },
+          "unsynced_event_count": {
+            "title": "Unsynced Event Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "passage_up",
+          "passage_down",
+          "answer_up",
+          "answer_down",
+          "dev_question_count",
+          "holdout_question_count",
+          "answer_approval_rate",
+          "answer_approval_by_config",
+          "unsynced_event_count",
+          "no_trace_event_count",
+          "product_experiment_url",
+          "feedback_experiment_url"
+        ],
+        "title": "FeedbackSummaryResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -350,6 +576,82 @@
           "error"
         ],
         "title": "IndexStatusResponse",
+        "type": "object"
+      },
+      "InteractionResponse": {
+        "description": "A stored search or ask, including the current user's votes.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/HitResponse"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "retrieval",
+              "ask"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "vote": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vote"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "kind",
+          "query",
+          "answer",
+          "error",
+          "vote",
+          "hits"
+        ],
+        "title": "InteractionResponse",
         "type": "object"
       },
       "LogoutResponse": {
@@ -523,6 +825,48 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/feedback/summary": {
+      "get": {
+        "description": "Return vote, dataset, and outbox counts. Members receive 403.",
+        "operationId": "get_feedback_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "Summarize feedback",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
     "/admin/index/rebuild": {
       "post": {
         "description": "Start a full repair rebuild. The current index keeps serving until it succeeds.",
@@ -1030,6 +1374,68 @@
         ]
       }
     },
+    "/feedback": {
+      "post": {
+        "description": "Store one vote event and return. MLflow is updated later by the outbox.",
+        "operationId": "submit_feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Vote on a passage or an answer",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "description": "Report that the process is up. Touches no LLM, embedding, MLflow, or Hermes backend.",
@@ -1081,6 +1487,59 @@
         "summary": "Read index status",
         "tags": [
           "index"
+        ]
+      }
+    },
+    "/interactions/{interaction_id}": {
+      "get": {
+        "description": "Return one interaction with the current user's votes. Used after a refresh.",
+        "operationId": "get_interaction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interaction_id",
+            "required": true,
+            "schema": {
+              "title": "Interaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Read a stored search or ask",
+        "tags": [
+          "retrieval"
         ]
       }
     },

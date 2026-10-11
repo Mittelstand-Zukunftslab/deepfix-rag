@@ -115,6 +115,62 @@ class AskResponse(ApiModel):
     hits: list[HitResponse]
 
 
+class InteractionResponse(ApiModel):
+    """A stored search or ask, including the current user's votes."""
+
+    interaction_id: str
+    kind: Literal["retrieval", "ask"]
+    query: str
+    answer: str | None = None
+    error: str | None = None
+    vote: Literal["up", "down"] | None = None
+    hits: list[HitResponse]
+
+
+class FeedbackRequest(ApiModel):
+    """A thumbs-up, thumbs-down, or clear on a passage or an answer."""
+
+    interaction_id: str = Field(min_length=1)
+    target: Literal["passage", "answer"]
+    rank: int | None = Field(default=None, ge=1)
+    action: Literal["up", "down", "clear"]
+
+
+class FeedbackResponse(ApiModel):
+    """The user's current vote after the event was stored."""
+
+    interaction_id: str
+    target: Literal["passage", "answer"]
+    rank: int | None = None
+    vote: Literal["up", "down"] | None = None
+
+
+class ConfigApprovalResponse(ApiModel):
+    """Answer approval for the interactions that used one champion config."""
+
+    config_path: str
+    up: int
+    down: int
+    rate: float | None = None
+
+
+class FeedbackSummaryResponse(ApiModel):
+    """Vote, dataset, and outbox counts for an admin."""
+
+    passage_up: int
+    passage_down: int
+    answer_up: int
+    answer_down: int
+    dev_question_count: int
+    holdout_question_count: int
+    answer_approval_rate: float | None = None
+    answer_approval_by_config: list[ConfigApprovalResponse]
+    unsynced_event_count: int
+    no_trace_event_count: int
+    product_experiment_url: str | None = None
+    feedback_experiment_url: str | None = None
+
+
 class DocumentResponse(ApiModel):
     """A non-deleted workspace document. Extracted text stays on disk."""
 

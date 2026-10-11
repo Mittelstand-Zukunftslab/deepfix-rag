@@ -10,10 +10,11 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from deepfix_rag.accounts import init_db
-from deepfix_rag.api.routes import admin, auth, documents, health, index, retrieval
+from deepfix_rag.api.routes import admin, auth, documents, feedback, health, index, retrieval
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.config.settings import settings as default_settings
 from deepfix_rag.documents import init_documents, prepare_workspace
+from deepfix_rag.feedback import FeedbackWorker
 from deepfix_rag.indexing import IndexCoordinator
 
 
@@ -51,9 +52,13 @@ def create_app(
         )
         app.state.index = coordinator
         coordinator.startup()
+        worker = FeedbackWorker(app.state.settings.product_db_path)
+        app.state.feedback = worker
+        worker.start()
         try:
             yield
         finally:
+            worker.stop()
             coordinator.close()
 
     app = FastAPI(
@@ -81,6 +86,7 @@ def create_app(
     app.include_router(documents.router)
     app.include_router(index.router)
     app.include_router(retrieval.router)
+    app.include_router(feedback.router)
     for route in app.routes:
         if isinstance(route, APIRoute):
             route.responses.pop(422, None)

@@ -4,6 +4,7 @@ import { Suspense, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
 import { AskPage } from "@/features/chat/chat-page";
+import { nextVoteAction } from "@/features/feedback/vote-actions";
 import { indexQueryOptions } from "@/features/index/index-queries";
 import { libraryQueryOptions } from "@/features/library/library-queries";
 import { LibraryPage } from "@/features/library/library-page";
@@ -44,6 +45,8 @@ describe("Dashboard pages", () => {
     expect(screen.getByText("harbor.txt")).toBeTruthy();
     expect(screen.getByText("0.820")).toBeTruthy();
     expect(screen.getByText("The harbor budget was approved.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mark passage as relevant" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mark passage as not relevant" })).toBeTruthy();
   });
 
   it("search explains when nothing matched", () => {
@@ -77,6 +80,17 @@ describe("Dashboard pages", () => {
       answer.compareDocumentPosition(passages) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getByText("harbor.txt")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mark answer as good" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mark answer as bad" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mark passage as relevant" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mark passage as not relevant" })).toBeTruthy();
+  });
+
+  it("pressing the filled thumb clears and the other thumb switches", () => {
+    expect(nextVoteAction("up", "up")).toBe("clear");
+    expect(nextVoteAction("up", "down")).toBe("down");
+    expect(nextVoteAction(null, "down")).toBe("down");
+    expect(nextVoteAction("down", "down")).toBe("clear");
   });
 
   it("ask shows a generation error above the passages", () => {
