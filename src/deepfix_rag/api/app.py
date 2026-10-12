@@ -10,12 +10,22 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from deepfix_rag.accounts import init_db
-from deepfix_rag.api.routes import admin, auth, documents, feedback, health, index, retrieval
+from deepfix_rag.api.routes import (
+    admin,
+    auth,
+    documents,
+    feedback,
+    health,
+    index,
+    optimization,
+    retrieval,
+)
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.config.settings import settings as default_settings
 from deepfix_rag.documents import init_documents, prepare_workspace
 from deepfix_rag.feedback import FeedbackWorker
 from deepfix_rag.indexing import IndexCoordinator
+from deepfix_rag.optimization import fail_interrupted, init_optimization
 
 
 def validation_detail(exc: RequestValidationError) -> str:
@@ -43,6 +53,8 @@ def create_app(
     async def lifespan(app: FastAPI):
         init_db(app.state.settings.product_db_path)
         init_documents(app.state.settings.product_db_path)
+        init_optimization(app.state.settings.product_db_path)
+        fail_interrupted(app.state.settings.product_db_path)
         prepare_workspace(app.state.settings.workspace_dir)
         coordinator = IndexCoordinator(
             app.state.settings.workspace_dir,
@@ -87,6 +99,7 @@ def create_app(
     app.include_router(index.router)
     app.include_router(retrieval.router)
     app.include_router(feedback.router)
+    app.include_router(optimization.router)
     for route in app.routes:
         if isinstance(route, APIRoute):
             route.responses.pop(422, None)

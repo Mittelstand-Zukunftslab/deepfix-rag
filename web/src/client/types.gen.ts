@@ -391,6 +391,50 @@ export type LogoutResponse = {
 };
 
 /**
+ * OptimizationRunResponse
+ *
+ * The run recorded by a start request. Holdout questions are not included.
+ */
+export type OptimizationRunResponse = {
+    /**
+     * Dev Count
+     */
+    dev_count: number;
+    /**
+     * Ended At
+     */
+    ended_at: string | null;
+    /**
+     * Holdout Count
+     */
+    holdout_count: number;
+    /**
+     * New Dev Count
+     */
+    new_dev_count: number;
+    /**
+     * Reason
+     */
+    reason: string | null;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Status
+     */
+    status: 'running' | 'skipped' | 'rejected' | 'promoted' | 'succeeded' | 'failed';
+    /**
+     * Trigger
+     */
+    trigger: 'cron' | 'manual';
+};
+
+/**
  * QueryRequest
  *
  * A search or ask question.
@@ -428,6 +472,15 @@ export type RoleUpdateRequest = {
      * Role
      */
     role: 'member' | 'admin';
+};
+
+/**
+ * StartOptimizationRequest
+ *
+ * Start the optimization job now. The nightly schedule calls the same function.
+ */
+export type StartOptimizationRequest = {
+    [key: string]: unknown;
 };
 
 /**
@@ -559,6 +612,43 @@ export type RebuildIndexResponses = {
 };
 
 export type RebuildIndexResponse = RebuildIndexResponses[keyof RebuildIndexResponses];
+
+export type StartOptimizationRunData = {
+    body: StartOptimizationRequest;
+    path?: never;
+    query?: never;
+    url: '/admin/optimization/run';
+};
+
+export type StartOptimizationRunErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * The request conflicts with the current state.
+     */
+    409: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type StartOptimizationRunError = StartOptimizationRunErrors[keyof StartOptimizationRunErrors];
+
+export type StartOptimizationRunResponses = {
+    /**
+     * Successful Response
+     */
+    200: OptimizationRunResponse;
+};
+
+export type StartOptimizationRunResponse = StartOptimizationRunResponses[keyof StartOptimizationRunResponses];
 
 export type UpdateUserRoleData = {
     body: RoleUpdateRequest;

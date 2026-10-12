@@ -670,6 +670,86 @@
         "title": "LogoutResponse",
         "type": "object"
       },
+      "OptimizationRunResponse": {
+        "description": "The run recorded by a start request. Holdout questions are not included.",
+        "properties": {
+          "dev_count": {
+            "title": "Dev Count",
+            "type": "integer"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "holdout_count": {
+            "title": "Holdout Count",
+            "type": "integer"
+          },
+          "new_dev_count": {
+            "title": "New Dev Count",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "skipped",
+              "rejected",
+              "promoted",
+              "succeeded",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger": {
+            "enum": [
+              "cron",
+              "manual"
+            ],
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "trigger",
+          "reason",
+          "dev_count",
+          "new_dev_count",
+          "holdout_count",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "OptimizationRunResponse",
+        "type": "object"
+      },
       "QueryRequest": {
         "description": "A search or ask question.",
         "properties": {
@@ -723,6 +803,12 @@
           "role"
         ],
         "title": "RoleUpdateRequest",
+        "type": "object"
+      },
+      "StartOptimizationRequest": {
+        "description": "Start the optimization job now. The nightly schedule calls the same function.",
+        "properties": {},
+        "title": "StartOptimizationRequest",
         "type": "object"
       },
       "TextIssueResponse": {
@@ -926,6 +1012,78 @@
         "summary": "Rebuild the index",
         "tags": [
           "index"
+        ]
+      }
+    },
+    "/admin/optimization/run": {
+      "post": {
+        "description": "Export feedback and start one run, or skip it when too little is labeled.",
+        "operationId": "start_optimization_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartOptimizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Start the optimization job now",
+        "tags": [
+          "optimization"
         ]
       }
     },

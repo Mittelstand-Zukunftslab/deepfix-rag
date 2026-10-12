@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, RetrieveData, RetrieveErrors, RetrieveResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
+import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, RetrieveData, RetrieveErrors, RetrieveResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -31,6 +31,20 @@ export const getFeedbackSummary = <ThrowOnError extends boolean = false>(options
  * Start a full repair rebuild. The current index keeps serving until it succeeds.
  */
 export const rebuildIndex = <ThrowOnError extends boolean = false>(options?: Options<RebuildIndexData, ThrowOnError>): RequestResult<RebuildIndexResponses, RebuildIndexErrors, ThrowOnError> => (options?.client ?? client).post<RebuildIndexResponses, RebuildIndexErrors, ThrowOnError>({ url: '/admin/index/rebuild', ...options });
+
+/**
+ * Start the optimization job now
+ *
+ * Export feedback and start one run, or skip it when too little is labeled.
+ */
+export const startOptimizationRun = <ThrowOnError extends boolean = false>(options: Options<StartOptimizationRunData, ThrowOnError>): RequestResult<StartOptimizationRunResponses, StartOptimizationRunErrors, ThrowOnError> => (options.client ?? client).post<StartOptimizationRunResponses, StartOptimizationRunErrors, ThrowOnError>({
+    url: '/admin/optimization/run',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * Change a user's role

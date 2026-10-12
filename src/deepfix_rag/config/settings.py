@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     DEEPFIX_LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
     DEEPFIX_LLM_MODEL_NAME: str = "openai/gpt-6-luna-pro"
     HERMES_PYTHON: str | None = None
+    OPTIMIZATION_MIN_DEV_QUESTIONS: int = 50
+    OPTIMIZATION_MIN_NEW_DEV_QUESTIONS: int = 10
+    OPTIMIZATION_MIN_HOLDOUT_QUESTIONS: int = 15
+    OPTIMIZATION_MIN_PRIMARY_DELTA: float = 0.025
     OPTIMIZATION_RUN_TIMEOUT_HOURS: float = 3
 
     @property
