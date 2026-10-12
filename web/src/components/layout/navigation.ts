@@ -21,7 +21,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/search", label: "Search", icon: Search },
   { to: "/chat", label: "Ask", icon: MessageSquare },
   { to: "/upload", label: "Library", icon: Library },
-  { to: "/admin", label: "Admin", icon: ShieldCheck, badge: "OPS" },
+  { to: "/admin", label: "Optimization", icon: ShieldCheck },
   { to: "/status", label: "Status", icon: Activity },
 ];
 
