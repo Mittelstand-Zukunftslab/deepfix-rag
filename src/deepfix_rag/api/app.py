@@ -10,9 +10,10 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from deepfix_rag.accounts import init_db
-from deepfix_rag.api.routes import admin, auth, health
+from deepfix_rag.api.routes import admin, auth, documents, health
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.config.settings import settings as default_settings
+from deepfix_rag.documents import init_documents, prepare_workspace
 
 
 def validation_detail(exc: RequestValidationError) -> str:
@@ -34,6 +35,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         init_db(app.state.settings.product_db_path)
+        init_documents(app.state.settings.product_db_path)
+        prepare_workspace(app.state.settings.workspace_dir)
         yield
 
     app = FastAPI(
@@ -58,6 +61,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(admin.router)
+    app.include_router(documents.router)
     for route in app.routes:
         if isinstance(route, APIRoute):
             route.responses.pop(422, None)

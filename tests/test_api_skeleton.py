@@ -64,6 +64,9 @@ def test_every_public_route_declares_a_typed_success_response():
         success = {code: body for code, body in operation["responses"].items() if code[0] == "2"}
         assert success, f"{method.upper()} {path} has no 2xx response"
         for code, body in success.items():
+            if code == "204":
+                assert "content" not in body, f"{method.upper()} {path} 204 must not include a body"
+                continue
             assert body.get("content", {}).get("application/json", {}).get("schema"), (
                 f"{method.upper()} {path} {code} has no response schema"
             )

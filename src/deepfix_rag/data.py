@@ -589,6 +589,36 @@ class LocalFileLoader(BaseLoaderStrategy):
         )
 
 
+def _corpus_json_documents(dir_path: Path) -> list[Document] | None:
+    """Load workspace ``*.json`` corpus files, one document per file.
+
+    Returns ``None`` when the directory has no corpus JSON, so callers can fall
+    back to a general directory scan. ``qa.json`` stays reserved for QA rows.
+    """
+    if not dir_path.is_dir():
+        return None
+    files = sorted(
+        path for path in dir_path.glob("*.json") if path.is_file() and path.name != "qa.json"
+    )
+    if not files:
+        return None
+    documents: list[Document] = []
+    for path in files:
+        item = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(item, dict):
+            raise ValueError(f"Corpus file '{path.name}' must be a JSON object.")
+        doc_id = str(item.get("doc_id") or item.get("id") or path.stem)
+        text = item.get("text", item.get("content", ""))
+        if not isinstance(text, str):
+            raise ValueError(f"Corpus file '{path.name}' has no text.")
+        metadata: dict[str, Any] = {"source": str(path), "doc_id": doc_id}
+        filename = item.get("filename")
+        if isinstance(filename, str):
+            metadata["filename"] = filename
+        documents.append(Document(text=text, id_=doc_id, metadata=metadata))
+    return documents
+
+
 class DirectoryLoader(BaseLoaderStrategy):
     """Loader scanning local directories for documents or QA files."""
 
@@ -596,7 +626,9 @@ class DirectoryLoader(BaseLoaderStrategy):
         self, config: DataLoaderConfig, doc_ids: list[str] | None = None
     ) -> list[Document]:
         LOGGER.info(f"Scanning local directory '{config.path_or_repo}'...")
-        docs = SimpleDirectoryReader(config.path_or_repo).load_data()
+        docs = _corpus_json_documents(Path(config.path_or_repo))
+        if docs is None:
+            docs = SimpleDirectoryReader(config.path_or_repo).load_data()
         return _select_by_ids_and_limit(
             docs,
             get_id=lambda doc: str((doc.metadata or {}).get("doc_id") or doc.id_),

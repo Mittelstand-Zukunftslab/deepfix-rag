@@ -5,6 +5,20 @@ export type ClientOptions = {
 };
 
 /**
+ * Body_create_document
+ */
+export type BodyCreateDocument = {
+    /**
+     * File
+     */
+    file: Blob | File;
+    /**
+     * Reading
+     */
+    reading?: string | null;
+};
+
+/**
  * CredentialsRequest
  *
  * Email and password for register and login.
@@ -18,6 +32,50 @@ export type CredentialsRequest = {
      * Password
      */
     password: string;
+};
+
+/**
+ * DocumentResponse
+ *
+ * A non-deleted workspace document. Extracted text stays on disk.
+ */
+export type DocumentResponse = {
+    /**
+     * Can Delete
+     */
+    can_delete: boolean;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Doc Id
+     */
+    doc_id: string;
+    /**
+     * Filename
+     */
+    filename: string;
+    /**
+     * Index Error
+     */
+    index_error: string | null;
+    /**
+     * Issues
+     */
+    issues: Array<TextIssueResponse>;
+    /**
+     * Media Type
+     */
+    media_type: string;
+    /**
+     * Status
+     */
+    status: 'pending' | 'indexing' | 'indexed' | 'deleting' | 'failed';
+    /**
+     * Uploader Email
+     */
+    uploader_email: string;
 };
 
 /**
@@ -78,6 +136,22 @@ export type RoleUpdateRequest = {
      * Role
      */
     role: 'member' | 'admin';
+};
+
+/**
+ * TextIssueResponse
+ *
+ * A PDF page flagged as scanned or garbled. OCR is not run.
+ */
+export type TextIssueResponse = {
+    /**
+     * Kind
+     */
+    kind: 'scanned' | 'garbled';
+    /**
+     * Page
+     */
+    page: number;
 };
 
 /**
@@ -268,6 +342,100 @@ export type RegisterResponses = {
 };
 
 export type RegisterResponse = RegisterResponses[keyof RegisterResponses];
+
+export type ListDocumentsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/documents';
+};
+
+export type ListDocumentsErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type ListDocumentsError = ListDocumentsErrors[keyof ListDocumentsErrors];
+
+export type ListDocumentsResponses = {
+    /**
+     * Response List Documents
+     *
+     * Successful Response
+     */
+    200: Array<DocumentResponse>;
+};
+
+export type ListDocumentsResponse = ListDocumentsResponses[keyof ListDocumentsResponses];
+
+export type CreateDocumentData = {
+    body: BodyCreateDocument;
+    path?: never;
+    query?: never;
+    url: '/documents';
+};
+
+export type CreateDocumentErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type CreateDocumentError = CreateDocumentErrors[keyof CreateDocumentErrors];
+
+export type CreateDocumentResponses = {
+    /**
+     * Successful Response
+     */
+    201: DocumentResponse;
+};
+
+export type CreateDocumentResponse = CreateDocumentResponses[keyof CreateDocumentResponses];
+
+export type DeleteDocumentData = {
+    body?: never;
+    path: {
+        /**
+         * Doc Id
+         */
+        doc_id: string;
+    };
+    query?: never;
+    url: '/documents/{doc_id}';
+};
+
+export type DeleteDocumentErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type DeleteDocumentError = DeleteDocumentErrors[keyof DeleteDocumentErrors];
+
+export type DeleteDocumentResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type DeleteDocumentResponse = DeleteDocumentResponses[keyof DeleteDocumentResponses];
 
 export type HealthData = {
     body?: never;

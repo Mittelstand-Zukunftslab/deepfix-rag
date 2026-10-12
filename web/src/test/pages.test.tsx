@@ -4,9 +4,9 @@ import { Suspense, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
 import { ChatPage } from "@/features/chat/chat-page";
-import { GalleryPage } from "@/features/gallery/gallery-page";
+import { LibraryPage } from "@/features/library/library-page";
 import { SearchPage } from "@/features/search/search-page";
-import { UploadPage } from "@/features/upload/upload-page";
+import type { LibraryDocument } from "@/services/library-service";
 
 const renderWithQuery = (ui: ReactNode) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -38,13 +38,46 @@ describe("Dashboard pages", () => {
     });
   });
 
-  it("upload lists recent files", async () => {
-    renderWithQuery(<UploadPage />);
-    expect(await screen.findByText("4 files")).toBeTruthy();
+  it("library explains an empty corpus and marks a scanned pdf", () => {
+    renderWithQuery(<LibraryPage documents={[]} />);
+    expect(
+      screen.getByText("No documents yet. Upload a text, Markdown, or PDF file to start."),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Upload a file")).toBeTruthy();
   });
 
-  it("gallery paginates 36 documents", async () => {
-    renderWithQuery(<GalleryPage />);
-    expect(await screen.findByText("36", { selector: "strong" })).toBeTruthy();
+  it("library shows scanned and garbled pages", () => {
+    const documents: LibraryDocument[] = [
+      {
+        doc_id: "ws_scan",
+        filename: "scan.pdf",
+        media_type: "application/pdf",
+        status: "failed",
+        index_error: "No extractable text. This PDF looks scanned, and OCR is not available.",
+        issues: [{ page: 1, kind: "scanned" }],
+        uploader_email: "ada@example.com",
+        created_at: "2026-10-11T12:00:00.000Z",
+        can_delete: true,
+      },
+      {
+        doc_id: "ws_cipher",
+        filename: "cipher.pdf",
+        media_type: "application/pdf",
+        status: "pending",
+        index_error: null,
+        issues: [{ page: 2, kind: "garbled" }],
+        uploader_email: "bea@example.com",
+        created_at: "2026-10-11T12:05:00.000Z",
+        can_delete: false,
+      },
+    ];
+    renderWithQuery(<LibraryPage documents={documents} />);
+    expect(screen.getByText("Page 1 looks scanned")).toBeTruthy();
+    expect(
+      screen.getByText("No extractable text. This PDF looks scanned, and OCR is not available."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete scan.pdf" })).toBeTruthy();
+    expect(screen.getByText("Page 2 has garbled text")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Delete cipher.pdf" })).toBeNull();
   });
 });
