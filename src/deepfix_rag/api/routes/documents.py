@@ -59,6 +59,8 @@ def create_document(
         )
     except UploadRejected as exc:
         raise HTTPException(status_code=BAD_REQUEST, detail=str(exc)) from exc
+    if document.status != "failed":
+        request.app.state.index.schedule_if_unserved()
     return _response(document)
 
 

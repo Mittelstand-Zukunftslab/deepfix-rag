@@ -10,10 +10,11 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from deepfix_rag.accounts import init_db
-from deepfix_rag.api.routes import admin, auth, documents, health
+from deepfix_rag.api.routes import admin, auth, documents, health, index
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.config.settings import settings as default_settings
 from deepfix_rag.documents import init_documents, prepare_workspace
+from deepfix_rag.indexing import IndexCoordinator
 
 
 def validation_detail(exc: RequestValidationError) -> str:
@@ -28,7 +29,7 @@ def validation_detail(exc: RequestValidationError) -> str:
     return str(error.get("msg") or "Invalid input.")
 
 
-def create_app(app_settings: Settings | None = None) -> FastAPI:
+def create_app(app_settings: Settings | None = None, *, embed_model: Any = None) -> FastAPI:
     """Build the API with its routers and CORS limited to the configured web origin."""
     app_settings = app_settings or default_settings
 
@@ -37,7 +38,17 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         init_db(app.state.settings.product_db_path)
         init_documents(app.state.settings.product_db_path)
         prepare_workspace(app.state.settings.workspace_dir)
-        yield
+        coordinator = IndexCoordinator(
+            app.state.settings.workspace_dir,
+            app.state.settings.product_db_path,
+            embed_model=embed_model,
+        )
+        app.state.index = coordinator
+        coordinator.startup()
+        try:
+            yield
+        finally:
+            coordinator.close()
 
     app = FastAPI(
         title="DeepFix Product API",
@@ -62,6 +73,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(admin.router)
     app.include_router(documents.router)
+    app.include_router(index.router)
     for route in app.routes:
         if isinstance(route, APIRoute):
             route.responses.pop(422, None)

@@ -54,6 +54,26 @@ class LogoutResponse(ApiModel):
     status: Literal["ok"] = "ok"
 
 
+class IndexStatusResponse(ApiModel):
+    """Overall state of the shared serving index."""
+
+    status: Literal[
+        "empty",
+        "updating",
+        "rebuilding",
+        "ready",
+        "ready_with_errors",
+        "failed",
+    ]
+    document_count: int
+    chunk_count: int
+    pending_document_count: int
+    updated_at: str | None = None
+    config_path: str
+    serving_build_id: str | None = None
+    error: str | None = None
+
+
 class TextIssueResponse(ApiModel):
     """A PDF page flagged as scanned or garbled. OCR is not run."""
 

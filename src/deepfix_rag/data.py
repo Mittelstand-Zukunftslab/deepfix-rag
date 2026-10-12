@@ -525,6 +525,17 @@ class LocalFileLoader(BaseLoaderStrategy):
     def load_corpus(
         self, config: DataLoaderConfig, doc_ids: list[str] | None = None
     ) -> list[Document]:
+        path = Path(config.path_or_repo)
+        if path.is_dir():
+            LOGGER.info(f"Loading corpus JSON files from '{path}'...")
+            documents = _corpus_json_documents(path) or []
+            return _select_by_ids_and_limit(
+                documents,
+                get_id=lambda doc: str(doc.id_),
+                doc_ids=doc_ids,
+                limit=config.limit,
+                include_required=doc_ids is not None,
+            )
         LOGGER.info(f"Loading local file '{config.path_or_repo}'...")
 
         def _docs() -> Iterable[Document]:
