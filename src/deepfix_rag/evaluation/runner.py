@@ -570,9 +570,15 @@ class EvaluationRunner:
         retrieval_evaluator: RetrievalEvaluator | None = None,
         generation_evaluator: GenerationEvaluator | None = None,
         tracker: EvaluationTracker | None = None,
+        embed_model: Any = None,
+        llm: Any = None,
+        persist: bool = True,
     ) -> None:
         self.config = config
         self.cutoff_k = config.eval.cutoff_k
+        self.embed_model = embed_model
+        self.llm = llm
+        self.persist = persist
 
         self.retrieval_evaluator = retrieval_evaluator or RetrievalEvaluator(
             measures=config.eval.retrieval_metrics,
@@ -696,7 +702,8 @@ class EvaluationRunner:
             limit=self.config.data.limit,
         )
 
-        self.tracker.setup()
+        if self.persist:
+            self.tracker.setup()
 
         qrels_df = DataLoader.to_qrels_df(qa_pairs)
 
@@ -706,7 +713,11 @@ class EvaluationRunner:
             f"Running evaluation with concurrency={concurrency_limit}, retrieval_only={self.config.retrieval_only}"
         )
 
-        workflow = RAGWorkflow(config=self.config)
+        workflow = RAGWorkflow(
+            config=self.config,
+            embed_model=self.embed_model,
+            llm=self.llm,
+        )
         await workflow.run(ingest=True)
 
         async def _run(qa: QARecord, i: int) -> CaseResult:
@@ -823,7 +834,8 @@ class EvaluationRunner:
             "retrieval_only": self.config.retrieval_only,
             "cutoff_k": self.cutoff_k,
         }
-        self.tracker.log_run(run_name=run_name, params=run_params, summary=summary)
+        if self.persist:
+            self.tracker.log_run(run_name=run_name, params=run_params, summary=summary)
 
         return summary
 
@@ -838,11 +850,19 @@ async def run_evaluation(
     max_concurrency: int | None = None,
     retrieval_only: bool | None = None,
     records: list[QARecord] | None = None,
+    embed_model: Any = None,
+    llm: Any = None,
+    persist: bool = True,
 ) -> EvaluationSummary:
     """Module-level façade orchestrating EvaluationRunner."""
     if config is None:
         raise QAValidationError("A config is required.")
-    runner = EvaluationRunner(config=config)
+    runner = EvaluationRunner(
+        config=config,
+        embed_model=embed_model,
+        llm=llm,
+        persist=persist,
+    )
     return await runner.run(
         dataset_path=dataset_path,
         run_name=run_name,

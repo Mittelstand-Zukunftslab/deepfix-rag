@@ -124,6 +124,57 @@
         "title": "ConfigApprovalResponse",
         "type": "object"
       },
+      "ConfigChange": {
+        "description": "One field from a champion diff. ``before`` is the previous champion.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          }
+        },
+        "required": [
+          "before",
+          "after"
+        ],
+        "title": "ConfigChange",
+        "type": "object"
+      },
       "CredentialsRequest": {
         "description": "Email and password for register and login.",
         "properties": {
@@ -750,6 +801,223 @@
         "title": "OptimizationRunResponse",
         "type": "object"
       },
+      "OptimizationRunSummary": {
+        "description": "One stored optimization run, without holdout question text.",
+        "properties": {
+          "dev_delta": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dev Delta"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "holdout_delta": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Delta"
+          },
+          "holdout_losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Losses"
+          },
+          "holdout_wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Wins"
+          },
+          "mlflow_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mlflow Run Id"
+          },
+          "mlflow_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mlflow Url"
+          },
+          "primary_metric": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Metric"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "skipped",
+              "rejected",
+              "promoted",
+              "succeeded",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger": {
+            "enum": [
+              "cron",
+              "manual"
+            ],
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "trigger",
+          "reason",
+          "primary_metric",
+          "dev_delta",
+          "holdout_delta",
+          "holdout_wins",
+          "holdout_losses",
+          "mlflow_run_id",
+          "mlflow_url",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "OptimizationRunSummary",
+        "type": "object"
+      },
+      "OptimizationStatusResponse": {
+        "description": "Schedule, champion diff, and the 20 most recent runs.",
+        "properties": {
+          "agent_available": {
+            "title": "Agent Available",
+            "type": "boolean"
+          },
+          "champion_config_path": {
+            "title": "Champion Config Path",
+            "type": "string"
+          },
+          "champion_diff": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ConfigChange"
+            },
+            "title": "Champion Diff",
+            "type": "object"
+          },
+          "cron": {
+            "title": "Cron",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/OptimizationRunSummary"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cron",
+          "timezone",
+          "enabled",
+          "next_run_at",
+          "agent_available",
+          "champion_config_path",
+          "champion_diff",
+          "runs"
+        ],
+        "title": "OptimizationStatusResponse",
+        "type": "object"
+      },
       "QueryRequest": {
         "description": "A search or ask question.",
         "properties": {
@@ -832,6 +1100,26 @@
           "kind"
         ],
         "title": "TextIssueResponse",
+        "type": "object"
+      },
+      "UpdateOptimizationRequest": {
+        "description": "A five-field cron expression and whether the nightly job is enabled.",
+        "properties": {
+          "cron": {
+            "minLength": 1,
+            "title": "Cron",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cron",
+          "enabled"
+        ],
+        "title": "UpdateOptimizationRequest",
         "type": "object"
       },
       "UserResponse": {
@@ -1012,6 +1300,108 @@
         "summary": "Rebuild the index",
         "tags": [
           "index"
+        ]
+      }
+    },
+    "/admin/optimization": {
+      "get": {
+        "description": "Return the nightly schedule, the champion diff, and recent runs.",
+        "operationId": "get_optimization_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "Show the optimization schedule and recent runs",
+        "tags": [
+          "optimization"
+        ]
+      },
+      "patch": {
+        "description": "Store a five-field cron expression. An invalid one leaves the schedule unchanged.",
+        "operationId": "update_optimization_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOptimizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "Change the nightly optimization schedule",
+        "tags": [
+          "optimization"
         ]
       }
     },

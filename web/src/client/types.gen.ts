@@ -71,6 +71,22 @@ export type ConfigApprovalResponse = {
 };
 
 /**
+ * ConfigChange
+ *
+ * One field from a champion diff. ``before`` is the previous champion.
+ */
+export type ConfigChange = {
+    /**
+     * After
+     */
+    after: string | number | number | boolean | null;
+    /**
+     * Before
+     */
+    before: string | number | number | boolean | null;
+};
+
+/**
  * CredentialsRequest
  *
  * Email and password for register and login.
@@ -435,6 +451,112 @@ export type OptimizationRunResponse = {
 };
 
 /**
+ * OptimizationRunSummary
+ *
+ * One stored optimization run, without holdout question text.
+ */
+export type OptimizationRunSummary = {
+    /**
+     * Dev Delta
+     */
+    dev_delta: {
+        [key: string]: number;
+    } | null;
+    /**
+     * Ended At
+     */
+    ended_at: string | null;
+    /**
+     * Holdout Delta
+     */
+    holdout_delta: {
+        [key: string]: number;
+    } | null;
+    /**
+     * Holdout Losses
+     */
+    holdout_losses: number | null;
+    /**
+     * Holdout Wins
+     */
+    holdout_wins: number | null;
+    /**
+     * Mlflow Run Id
+     */
+    mlflow_run_id: string | null;
+    /**
+     * Mlflow Url
+     */
+    mlflow_url: string | null;
+    /**
+     * Primary Metric
+     */
+    primary_metric: string | null;
+    /**
+     * Reason
+     */
+    reason: string | null;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Status
+     */
+    status: 'running' | 'skipped' | 'rejected' | 'promoted' | 'succeeded' | 'failed';
+    /**
+     * Trigger
+     */
+    trigger: 'cron' | 'manual';
+};
+
+/**
+ * OptimizationStatusResponse
+ *
+ * Schedule, champion diff, and the 20 most recent runs.
+ */
+export type OptimizationStatusResponse = {
+    /**
+     * Agent Available
+     */
+    agent_available: boolean;
+    /**
+     * Champion Config Path
+     */
+    champion_config_path: string;
+    /**
+     * Champion Diff
+     */
+    champion_diff: {
+        [key: string]: ConfigChange;
+    };
+    /**
+     * Cron
+     */
+    cron: string;
+    /**
+     * Enabled
+     */
+    enabled: boolean;
+    /**
+     * Next Run At
+     */
+    next_run_at: string | null;
+    /**
+     * Runs
+     */
+    runs: Array<OptimizationRunSummary>;
+    /**
+     * Timezone
+     */
+    timezone: string;
+};
+
+/**
  * QueryRequest
  *
  * A search or ask question.
@@ -497,6 +619,22 @@ export type TextIssueResponse = {
      * Page
      */
     page: number;
+};
+
+/**
+ * UpdateOptimizationRequest
+ *
+ * A five-field cron expression and whether the nightly job is enabled.
+ */
+export type UpdateOptimizationRequest = {
+    /**
+     * Cron
+     */
+    cron: string;
+    /**
+     * Enabled
+     */
+    enabled: boolean;
 };
 
 /**
@@ -612,6 +750,68 @@ export type RebuildIndexResponses = {
 };
 
 export type RebuildIndexResponse = RebuildIndexResponses[keyof RebuildIndexResponses];
+
+export type GetOptimizationStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/admin/optimization';
+};
+
+export type GetOptimizationStatusErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+};
+
+export type GetOptimizationStatusError = GetOptimizationStatusErrors[keyof GetOptimizationStatusErrors];
+
+export type GetOptimizationStatusResponses = {
+    /**
+     * Successful Response
+     */
+    200: OptimizationStatusResponse;
+};
+
+export type GetOptimizationStatusResponse = GetOptimizationStatusResponses[keyof GetOptimizationStatusResponses];
+
+export type UpdateOptimizationScheduleData = {
+    body: UpdateOptimizationRequest;
+    path?: never;
+    query?: never;
+    url: '/admin/optimization';
+};
+
+export type UpdateOptimizationScheduleErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+};
+
+export type UpdateOptimizationScheduleError = UpdateOptimizationScheduleErrors[keyof UpdateOptimizationScheduleErrors];
+
+export type UpdateOptimizationScheduleResponses = {
+    /**
+     * Successful Response
+     */
+    200: OptimizationStatusResponse;
+};
+
+export type UpdateOptimizationScheduleResponse = UpdateOptimizationScheduleResponses[keyof UpdateOptimizationScheduleResponses];
 
 export type StartOptimizationRunData = {
     body: StartOptimizationRequest;

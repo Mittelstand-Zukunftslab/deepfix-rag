@@ -171,6 +171,51 @@ class FeedbackSummaryResponse(ApiModel):
     feedback_experiment_url: str | None = None
 
 
+class ConfigChange(ApiModel):
+    """One field from a champion diff. ``before`` is the previous champion."""
+
+    before: str | int | float | bool | None = None
+    after: str | int | float | bool | None = None
+
+
+class OptimizationRunSummary(ApiModel):
+    """One stored optimization run, without holdout question text."""
+
+    run_id: str
+    status: Literal["running", "skipped", "rejected", "promoted", "succeeded", "failed"]
+    trigger: Literal["cron", "manual"]
+    reason: str | None = None
+    primary_metric: str | None = None
+    dev_delta: dict[str, float] | None = None
+    holdout_delta: dict[str, float] | None = None
+    holdout_wins: int | None = None
+    holdout_losses: int | None = None
+    mlflow_run_id: str | None = None
+    mlflow_url: str | None = None
+    started_at: str
+    ended_at: str | None = None
+
+
+class OptimizationStatusResponse(ApiModel):
+    """Schedule, champion diff, and the 20 most recent runs."""
+
+    cron: str
+    timezone: str
+    enabled: bool
+    next_run_at: str | None = None
+    agent_available: bool
+    champion_config_path: str
+    champion_diff: dict[str, ConfigChange]
+    runs: list[OptimizationRunSummary]
+
+
+class UpdateOptimizationRequest(ApiModel):
+    """A five-field cron expression and whether the nightly job is enabled."""
+
+    cron: str = Field(min_length=1)
+    enabled: bool
+
+
 class StartOptimizationRequest(ApiModel):
     """Start the optimization job now. The nightly schedule calls the same function."""
 

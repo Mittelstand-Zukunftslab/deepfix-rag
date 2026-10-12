@@ -50,7 +50,7 @@ elif mode == "null":
     }), encoding="utf-8")
 elif mode == "candidate":
     target = out / "candidate.yaml"
-    target.write_text("changed: true\\n", encoding="utf-8")
+    target.write_text("not: [\\n", encoding="utf-8")
     (out / "result.json").write_text(json.dumps({
         "candidate_config_path": str(target),
         "primary_metric": "ndcg",
@@ -272,9 +272,9 @@ def test_null_candidate_succeeds_and_a_candidate_does_not_replace_the_champion(
     again = start_optimization_run(db_path, workspace, trigger="manual", options=options)
     wait_for_run(again.run_id)
     stored = get_run(db_path, again.run_id)
-    assert stored.status == "succeeded"
+    assert stored.status == "rejected"
+    assert stored.reason == "The candidate config could not be read."
     assert stored.candidate_config_path is not None
-    assert stored.primary_metric == "ndcg"
     assert champion.read_text(encoding="utf-8") == before
 
 
