@@ -3,6 +3,7 @@
 export const config = {
   appName: "Papergnx.ai",
   appVersion: "v3.2",
-  apiBaseUrl: String(import.meta.env["VITE_API_BASE_URL"] ?? "http://localhost:8000"),
+  // Browser calls stay on this origin. The dev server and production server proxy `/api`.
+  apiBaseUrl: "/api",
   mockLatencyMs: Number(import.meta.env["VITE_MOCK_LATENCY_MS"] ?? 250),
 } as const;

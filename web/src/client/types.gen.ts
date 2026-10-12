@@ -5,6 +5,46 @@ export type ClientOptions = {
 };
 
 /**
+ * CredentialsRequest
+ *
+ * Email and password for register and login.
+ */
+export type CredentialsRequest = {
+    /**
+     * Email
+     */
+    email: string;
+    /**
+     * Password
+     */
+    password: string;
+};
+
+/**
+ * ErrorResponse
+ *
+ * Body returned for every 4xx and 5xx response.
+ */
+export type ErrorResponse = {
+    /**
+     * Detail
+     *
+     * Human-readable explanation of what went wrong.
+     */
+    detail: string;
+};
+
+/**
+ * HTTPValidationError
+ */
+export type HttpValidationError = {
+    /**
+     * Detail
+     */
+    detail?: Array<ValidationError>;
+};
+
+/**
  * HealthResponse
  *
  * Liveness probe payload.
@@ -15,6 +55,219 @@ export type HealthResponse = {
      */
     status: 'ok';
 };
+
+/**
+ * LogoutResponse
+ *
+ * Confirmation that the session cookie was cleared.
+ */
+export type LogoutResponse = {
+    /**
+     * Status
+     */
+    status: 'ok';
+};
+
+/**
+ * RoleUpdateRequest
+ *
+ * New role for an existing account.
+ */
+export type RoleUpdateRequest = {
+    /**
+     * Role
+     */
+    role: 'member' | 'admin';
+};
+
+/**
+ * UserResponse
+ *
+ * A signed-in account. The password hash is never included.
+ */
+export type UserResponse = {
+    /**
+     * Email
+     */
+    email: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Role
+     */
+    role: 'member' | 'admin';
+};
+
+/**
+ * ValidationError
+ */
+export type ValidationError = {
+    /**
+     * Context
+     */
+    ctx?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Input
+     */
+    input?: unknown;
+    /**
+     * Location
+     */
+    loc: Array<string | number>;
+    /**
+     * Message
+     */
+    msg: string;
+    /**
+     * Error Type
+     */
+    type: string;
+};
+
+export type UpdateUserRoleData = {
+    body: RoleUpdateRequest;
+    path: {
+        /**
+         * User Id
+         */
+        user_id: string;
+    };
+    query?: never;
+    url: '/admin/users/{user_id}';
+};
+
+export type UpdateUserRoleErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * The request conflicts with the current state.
+     */
+    409: ErrorResponse;
+};
+
+export type UpdateUserRoleError = UpdateUserRoleErrors[keyof UpdateUserRoleErrors];
+
+export type UpdateUserRoleResponses = {
+    /**
+     * Successful Response
+     */
+    200: UserResponse;
+};
+
+export type UpdateUserRoleResponse = UpdateUserRoleResponses[keyof UpdateUserRoleResponses];
+
+export type LoginData = {
+    body: CredentialsRequest;
+    path?: never;
+    query?: never;
+    url: '/auth/login';
+};
+
+export type LoginErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type LoginError = LoginErrors[keyof LoginErrors];
+
+export type LoginResponses = {
+    /**
+     * Successful Response
+     */
+    200: UserResponse;
+};
+
+export type LoginResponse = LoginResponses[keyof LoginResponses];
+
+export type LogoutData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/auth/logout';
+};
+
+export type LogoutResponses = {
+    /**
+     * Successful Response
+     */
+    200: LogoutResponse;
+};
+
+export type LogoutResponse2 = LogoutResponses[keyof LogoutResponses];
+
+export type MeData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/auth/me';
+};
+
+export type MeErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type MeError = MeErrors[keyof MeErrors];
+
+export type MeResponses = {
+    /**
+     * Successful Response
+     */
+    200: UserResponse;
+};
+
+export type MeResponse = MeResponses[keyof MeResponses];
+
+export type RegisterData = {
+    body: CredentialsRequest;
+    path?: never;
+    query?: never;
+    url: '/auth/register';
+};
+
+export type RegisterErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * The request conflicts with the current state.
+     */
+    409: ErrorResponse;
+};
+
+export type RegisterError = RegisterErrors[keyof RegisterErrors];
+
+export type RegisterResponses = {
+    /**
+     * Successful Response
+     */
+    201: UserResponse;
+};
+
+export type RegisterResponse = RegisterResponses[keyof RegisterResponses];
 
 export type HealthData = {
     body?: never;

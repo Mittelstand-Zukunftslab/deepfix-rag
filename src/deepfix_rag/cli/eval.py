@@ -13,7 +13,37 @@ from deepfix_rag.cli.ui import (
     print_success,
 )
 from deepfix_rag.cli.utils import load_rag_config
+from deepfix_rag.data import QAValidationError
 from deepfix_rag.evaluation.runner import run_evaluation
+
+DELTA_KEYS = [
+    "faithfulness",
+    "context_precision",
+    "context_recall",
+    "answer_relevancy",
+    "contextual_relevancy",
+    "ndcg",
+    "recall",
+    "precision",
+    "deflection_rate",
+    "retrieval_induced_error_count",
+    "retrieval_induced_error_rate",
+    "errors",
+]
+
+
+def metric_delta(candidate: dict, baseline: dict) -> dict:
+    """Subtract baseline metrics. A metric missing on either side is left out."""
+    delta: dict = {}
+    for key in DELTA_KEYS:
+        if key not in candidate or key not in baseline:
+            continue
+        candidate_value = candidate[key]
+        baseline_value = baseline[key]
+        if candidate_value is None or baseline_value is None:
+            continue
+        delta[key] = candidate_value - baseline_value
+    return delta
 
 
 def compute_error_reduction(
@@ -138,6 +168,8 @@ def eval_cmd(
         )
     except typer.Exit:
         raise
+    except QAValidationError as e:
+        emit_error(str(e), code=EXIT_VALIDATION_ERROR, json_output=json_output)
     except RuntimeError as e:
         emit_error(str(e), code=EXIT_RUNTIME_ERROR, json_output=json_output)
     except Exception as e:
@@ -187,6 +219,8 @@ def eval_cmd(
         )
     except typer.Exit:
         raise
+    except QAValidationError as e:
+        emit_error(str(e), code=EXIT_VALIDATION_ERROR, json_output=json_output)
     except RuntimeError as e:
         emit_error(str(e), code=EXIT_RUNTIME_ERROR, json_output=json_output)
     except Exception as e:
@@ -198,28 +232,7 @@ def eval_cmd(
 
     baseline_result = {k: v for k, v in baseline_summary.items() if k != "rows"}
 
-    delta_keys = [
-        "faithfulness",
-        "context_precision",
-        "context_recall",
-        "answer_relevancy",
-        "contextual_relevancy",
-        "ndcg",
-        "recall",
-        "precision",
-        "deflection_rate",
-        "retrieval_induced_error_count",
-        "retrieval_induced_error_rate",
-        "errors",
-    ]
-    delta = {}
-    for key in delta_keys:
-        c_val = candidate_result.get(key)
-        b_val = baseline_result.get(key)
-        if c_val is None or b_val is None:
-            delta[key] = None
-        else:
-            delta[key] = c_val - b_val
+    delta = metric_delta(candidate_result, baseline_result)
 
     reduction_pct, target_met = compute_error_reduction(
         baseline_result.get("retrieval_induced_error_count"),
