@@ -7,7 +7,6 @@ import pytest
 from typer.testing import CliRunner
 
 from deepfix_rag.config.schema import DataLoaderConfig, RAGConfig
-from deepfix_rag.config.settings import settings
 from deepfix_rag.pipeline import RAGWorkflow
 
 
