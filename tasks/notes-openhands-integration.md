@@ -39,6 +39,19 @@ Each run is one trace. The root span is `deepfix_optimization`, with `agent.step
 
 Each run writes `runs/<run_id>/job.json`, starts `scripts/openhands_runner.py` with the workspace as its working directory, and waits. The default timeout is `OPTIMIZATION_RUN_TIMEOUT_HOURS` (3). On timeout the API kills the child's process group.
 
-The runner builds one `Agent` with the terminal tool (subprocess backend) and the file editor, and runs one `Conversation` with `max_iteration_per_run` from the job (default 15). The system message tells the agent that no human is watching and that it must end with the finish action. If the agent stops with a plain message instead, the runner replies "Please continue…" at most twice, as the SDK FAQ recommends. The finish message is the final response. Conversation state is kept under `runs/<run_id>/.openhands`, and token usage is written to `runs/<run_id>/agent.log`. The runner writes `runs/<run_id>/agent_output.json` with the final response, or with the error when the conversation ends in any status other than `finished`. Candidate configs and indexes are written only under that run directory. Indexing, eval, and config changes happen when the agent shells out to `deepfix`.
+The runner builds one `Agent` with the terminal tool (subprocess backend) and the file editor, and runs one `Conversation` with `max_iteration_per_run` from the job (default 15). The system message tells the agent that no human is watching, that a reviewer checks its work only from the conversation, and that it must end with the finish action, whose message is the final response. Conversation state is kept under `runs/<run_id>/.openhands`. Candidate configs and indexes are written only under that run directory. Indexing, eval, and config changes happen when the agent shells out to `deepfix`.
+
+## Goal completion loop
+
+The prompt is pursued as a [goal](https://docs.openhands.dev/sdk/guides/convo-goal). After every agent run that ends in `finished`, a second LLM instance (same model, `usage_id` `goal-judge`) audits the transcript for evidence that the objective is provably done. If it is not, the judge's `missing` text is sent back to the agent and the conversation continues, for at most `OPTIMIZATION_GOAL_ROUNDS` audit rounds (default 3). The optimization prompt therefore states its completion criteria: `result.json` exists with the required keys, and the conversation shows the `deepfix eval` output behind `primary_metric` and the printed file.
+
+The SDK's judge transcript keeps only text content, which drops the agent's tool calls, so it cannot see which command produced an output or the finish message. The runner passes the judge a copy of the events with each action written out as an assistant turn (`[terminal] {"command": ...}`, `[finish] <message>`). The conversation itself is unchanged.
+
+`agent_output.json` holds the final response, the error, and a `goal` record (`status`, `rounds`, `score`, `missing`).
+
+- A run that hits `max_iteration_per_run`, gets stuck, or errors stops the job with that error and is not judged.
+- A goal that is still not met after the last round is reported as "The goal was not met after N audit rounds: <missing>". The API still scores a valid `result.json` itself, because the judge only checks the transcript, never candidate quality.
+
+`agent.log` has one line per audit and the agent's and judge's token usage. The budget is up to `OPTIMIZATION_GOAL_ROUNDS` × `max_iteration_per_run` agent steps, all within `OPTIMIZATION_RUN_TIMEOUT_HOURS`.
 
 Outside Compose the child is the same OS user as the API. It is never told the API-private directory and it cannot promote itself. In Compose, run the child as a separate user that can write the workspace and cannot read the API-private directory. The SDK's Docker workspace is the stronger sandbox if that is needed later.
