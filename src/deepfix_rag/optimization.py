@@ -92,6 +92,7 @@ class OptimizationSettings:
     min_holdout_questions: int = 15
     min_primary_delta: float = 0.025
     timeout_seconds: float = 3 * 60 * 60
+    goal_rounds: int = 3
     interpreter: Path | None = None
     model: str = "openai/gpt-6-luna-pro"
     base_url: str | None = "https://openrouter.ai/api/v1"
@@ -117,6 +118,7 @@ def settings_from(
         min_holdout_questions=settings.OPTIMIZATION_MIN_HOLDOUT_QUESTIONS,
         min_primary_delta=settings.OPTIMIZATION_MIN_PRIMARY_DELTA,
         timeout_seconds=settings.OPTIMIZATION_RUN_TIMEOUT_HOURS * 60 * 60,
+        goal_rounds=settings.OPTIMIZATION_GOAL_ROUNDS,
         interpreter=Path(raw_interpreter) if raw_interpreter else None,
         model=model,
         base_url=base_url,
@@ -157,7 +159,10 @@ def optimization_prompt(
         f"Finish by writing {run_dir / 'result.json'} as JSON with the keys "
         "candidate_config_path (a path or null), primary_metric, summary, "
         "and mlflow_run_id (a string or null). "
-        "Set candidate_config_path to null when you do not recommend a change."
+        "Set candidate_config_path to null when you do not recommend a change. "
+        "The task is complete only when that file exists with those keys and this "
+        "conversation shows the deepfix eval output that primary_metric comes from "
+        "and the output of printing that file."
     )
 
 
@@ -391,6 +396,7 @@ def _start_thread(
                 base_url=options.base_url,
                 api_key=options.api_key,
                 interpreter=interpreter,
+                goal_rounds=options.goal_rounds,
                 timeout_seconds=options.timeout_seconds,
                 runner_script=options.runner_script,
                 source_env=options.source_env,

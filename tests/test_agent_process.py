@@ -186,6 +186,7 @@ def test_job_uses_the_openrouter_key_and_hides_private_paths(tmp_path: Path) -> 
     assert job["prompt"] == prompt
     assert job["api_key"] == "openrouter-key"
     assert job["max_iterations"] == 15
+    assert job["goal_rounds"] == 3
     assert "product-key" not in json.dumps(job)
     assert str(private) not in json.dumps(job)
     child_env = json.loads((workspace / "env.json").read_text(encoding="utf-8"))
@@ -208,14 +209,27 @@ def test_job_uses_the_openrouter_key_and_hides_private_paths(tmp_path: Path) -> 
         )
     assert not (workspace / "runs" / "run2").exists()
 
+    with pytest.raises(AgentRunError):
+        run_agent_job(
+            workspace,
+            "run3",
+            prompt="hi",
+            model="openai/gpt-6-luna-pro",
+            base_url="https://openrouter.ai/api/v1",
+            api_key="openrouter-key",
+            interpreter=Path(sys.executable),
+            goal_rounds=0,
+        )
+
 
 @pytest.mark.integration
-def test_runner_reports_an_invalid_job(tmp_path: Path) -> None:
+@pytest.mark.parametrize("key", ["max_iterations", "goal_rounds"])
+def test_runner_reports_an_invalid_job(tmp_path: Path, key: str) -> None:
     workspace = tmp_path / "workspace"
     run_dir = workspace / "runs" / "bad"
     run_dir.mkdir(parents=True)
     (run_dir / "job.json").write_text(
-        json.dumps({"prompt": "hi", "model": "m", "max_iterations": 0}), encoding="utf-8"
+        json.dumps({"prompt": "hi", "model": "m", key: 0}), encoding="utf-8"
     )
     completed = subprocess.run(
         [sys.executable, str(default_runner_script()), "bad"],
@@ -226,7 +240,7 @@ def test_runner_reports_an_invalid_job(tmp_path: Path) -> None:
     )
     assert completed.returncode == 1
     payload = json.loads((run_dir / "agent_output.json").read_text(encoding="utf-8"))
-    assert payload == {"final_response": None, "error": "max_iterations must be at least 1."}
+    assert payload == {"final_response": None, "error": f"{key} must be at least 1."}
 
 
 @pytest.mark.integration
@@ -293,10 +307,12 @@ def test_agent_turn_runs_deepfix_help(tmp_path: Path) -> None:
     assert api_key, "DEEPFIX_LLM_API_KEY is not set"
     prompt = (
         "Use the terminal tool to run exactly this command and nothing else: deepfix --help\n"
-        "Copy that command's complete stdout into your final response, unchanged."
+        "The task is complete only when your final response contains the line that "
+        "starts with 'Usage:' from that command's output, as plain text."
     )
+    workspace = tmp_path / "workspace"
     result = run_agent_job(
-        tmp_path / "workspace",
+        workspace,
         "help1",
         prompt=prompt,
         model=model,
@@ -304,10 +320,15 @@ def test_agent_turn_runs_deepfix_help(tmp_path: Path) -> None:
         api_key=api_key,
         interpreter=interpreter,
         max_iterations=6,
-        timeout_seconds=180,
+        timeout_seconds=600,
         private_paths=(),
     )
     assert result.timed_out is False
     assert result.error is None
     assert result.final_response is not None
     assert "Usage: deepfix" in re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", result.final_response)
+    output = json.loads(
+        (workspace / "runs" / "help1" / "agent_output.json").read_text(encoding="utf-8")
+    )
+    assert output["goal"]["status"] == "complete"
+    assert 1 <= output["goal"]["rounds"] <= 3

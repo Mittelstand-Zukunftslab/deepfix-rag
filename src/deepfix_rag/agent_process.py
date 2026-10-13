@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 DEFAULT_TIMEOUT_SECONDS = 3 * 60 * 60
 DEFAULT_ITERATIONS = 15
+DEFAULT_GOAL_ROUNDS = 3
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _PASSTHROUGH = (
     "DEEPFIX_LLM_BASE_URL",
@@ -117,6 +118,7 @@ def run_agent_job(
     api_key: str | None,
     interpreter: Path,
     max_iterations: int = DEFAULT_ITERATIONS,
+    goal_rounds: int = DEFAULT_GOAL_ROUNDS,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     runner_script: Path | None = None,
     source_env: Mapping[str, str] | None = None,
@@ -129,6 +131,8 @@ def run_agent_job(
         raise AgentRunError("run_id must be a single path segment.")
     if max_iterations < 1:
         raise AgentRunError("max_iterations must be at least 1.")
+    if goal_rounds < 1:
+        raise AgentRunError("goal_rounds must be at least 1.")
     _reject_private(prompt, private_paths)
     _reject_private(model, private_paths)
     _reject_private(base_url or "", private_paths)
@@ -144,6 +148,7 @@ def run_agent_job(
         "base_url": base_url,
         "api_key": api_key,
         "max_iterations": max_iterations,
+        "goal_rounds": goal_rounds,
     }
     _reject_private(json.dumps(job), private_paths)
     (run_dir / "job.json").write_text(json.dumps(job), encoding="utf-8")

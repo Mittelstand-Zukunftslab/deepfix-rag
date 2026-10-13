@@ -139,6 +139,7 @@ def test_prompt_hides_holdout_and_thresholds_match_the_defaults() -> None:
     assert "deepfix" in prompt and "--json" in prompt
     assert "dense" in prompt and "hybrid" in prompt and "bm25" in prompt
     assert "result.json" in prompt
+    assert "complete only when" in prompt
     assert str(skill_path()) in prompt
     assert skill_path().is_file()
     assert Settings.model_fields["OPTIMIZATION_MIN_DEV_QUESTIONS"].default == 50
@@ -146,6 +147,7 @@ def test_prompt_hides_holdout_and_thresholds_match_the_defaults() -> None:
     assert Settings.model_fields["OPTIMIZATION_MIN_HOLDOUT_QUESTIONS"].default == 15
     assert Settings.model_fields["OPTIMIZATION_MIN_PRIMARY_DELTA"].default == 0.025
     assert Settings.model_fields["OPTIMIZATION_RUN_TIMEOUT_HOURS"].default == 3
+    assert Settings.model_fields["OPTIMIZATION_GOAL_ROUNDS"].default == 3
 
 
 def test_empty_feedback_is_skipped_without_starting_an_agent(

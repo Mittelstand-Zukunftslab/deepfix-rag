@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     OPTIMIZATION_MIN_HOLDOUT_QUESTIONS: int = 15
     OPTIMIZATION_MIN_PRIMARY_DELTA: float = 0.025
     OPTIMIZATION_RUN_TIMEOUT_HOURS: float = 3
+    OPTIMIZATION_GOAL_ROUNDS: int = 3
 
     @property
     def product_db_path(self) -> Path:
