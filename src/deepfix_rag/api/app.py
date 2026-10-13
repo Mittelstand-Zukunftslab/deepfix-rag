@@ -25,7 +25,8 @@ from deepfix_rag.config.settings import settings as default_settings
 from deepfix_rag.documents import init_documents, prepare_workspace
 from deepfix_rag.feedback import FeedbackWorker
 from deepfix_rag.indexing import IndexCoordinator
-from deepfix_rag.optimization import fail_interrupted, init_optimization
+from deepfix_rag.optimization import fail_interrupted, init_optimization, settings_from
+from deepfix_rag.optimization_schedule import OptimizationScheduler
 
 
 def validation_detail(exc: RequestValidationError) -> str:
@@ -67,9 +68,18 @@ def create_app(
         worker = FeedbackWorker(app.state.settings.product_db_path)
         app.state.feedback = worker
         worker.start()
+        scheduler = OptimizationScheduler(
+            app.state.settings.product_db_path,
+            app.state.settings.workspace_dir,
+            options_for=lambda: settings_from(app.state.settings),
+            coordinator_for=lambda: app.state.index,
+        )
+        app.state.optimization = scheduler
+        scheduler.start()
         try:
             yield
         finally:
+            scheduler.stop()
             worker.stop()
             coordinator.close()
 

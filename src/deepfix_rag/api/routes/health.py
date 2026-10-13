@@ -14,5 +14,5 @@ router = APIRouter(tags=["system"])
     summary="Liveness probe",
 )
 async def health() -> HealthResponse:
-    """Report that the process is up. Touches no LLM, embedding, MLflow, or Hermes backend."""
+    """Report that the process is up. Touches no LLM, embedding, MLflow, or agent backend."""
     return HealthResponse()

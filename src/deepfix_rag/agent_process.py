@@ -1,4 +1,4 @@
-"""Start one Hermes agent in a child process and stop it when time runs out."""
+"""Start one OpenHands agent in a child process and stop it when time runs out."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 DEFAULT_TIMEOUT_SECONDS = 3 * 60 * 60
 DEFAULT_ITERATIONS = 15
-_GATEWAY_PORTS = frozenset({8642, 9119})
+DEFAULT_GOAL_ROUNDS = 3
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _PASSTHROUGH = (
     "DEEPFIX_LLM_BASE_URL",
@@ -22,14 +22,16 @@ _PASSTHROUGH = (
     "MLFLOW_TRACKING_URI",
     "DEEPFIX_SERVER_URL",
 )
+_IMPORT_CHECK = "import openhands.sdk, openhands.tools.file_editor, openhands.tools.terminal"
+AGENT_UNAVAILABLE_MESSAGE = "OpenHands is not set up on this server, so a run cannot start."
 
 
 class AgentRunError(Exception):
     """The job is invalid and was not started."""
 
 
-class HermesUnavailable(Exception):
-    """The Hermes interpreter is not configured."""
+class AgentUnavailable(Exception):
+    """The OpenHands interpreter is not configured."""
 
 
 @dataclass(frozen=True)
@@ -43,8 +45,8 @@ class AgentRunResult:
 
 
 def default_runner_script() -> Path:
-    """Standalone runner executed by the Hermes interpreter."""
-    return Path(__file__).resolve().parents[2] / "scripts" / "hermes_runner.py"
+    """Standalone runner executed by the OpenHands interpreter."""
+    return Path(__file__).resolve().parents[2] / "scripts" / "openhands_runner.py"
 
 
 def openrouter_settings(source: Mapping[str, str]) -> tuple[str, str, str | None]:
@@ -62,24 +64,41 @@ def build_child_env(source: Mapping[str, str], api_bin: Path) -> dict[str, str]:
     """Allowlisted environment for the agent child.
 
     ``PATH`` starts with the API virtualenv ``bin`` so ``deepfix`` is this
-    revision. ``OPENROUTER_API_KEY`` is copied from ``DEEPFIX_LLM_API_KEY``.
+    revision. Terminal output is plain text, because the agent reads it.
     """
     env = {key: source[key] for key in _PASSTHROUGH if source.get(key)}
-    openrouter_key = source.get("DEEPFIX_LLM_API_KEY")
-    if openrouter_key:
-        env["OPENROUTER_API_KEY"] = openrouter_key
+    env.update(agent_trace_env(source))
+    env["NO_COLOR"] = "1"
+    env["MLFLOW_DISABLE_AGENT_HINT"] = "1"
     base_path = source.get("PATH", "")
     env["PATH"] = f"{api_bin}{os.pathsep}{base_path}" if base_path else str(api_bin)
     return env
 
 
+def agent_trace_env(source: Mapping[str, str]) -> dict[str, str]:
+    """OTLP settings that send the agent's traces to the MLflow tracking server.
+
+    The names are private to the runner, which turns them into ``OTEL_*`` only for
+    its own tracer. ``deepfix`` commands the agent runs keep their usual MLflow
+    experiment.
+    """
+    tracking_uri = source.get("MLFLOW_TRACKING_URI") or ""
+    experiment_id = source.get("MLFLOW_EXPERIMENT_ID") or ""
+    if urlparse(tracking_uri).scheme not in {"http", "https"} or not experiment_id:
+        return {}
+    return {
+        "DEEPFIX_AGENT_OTLP_ENDPOINT": tracking_uri.rstrip("/"),
+        "DEEPFIX_AGENT_OTLP_HEADERS": f"x-mlflow-experiment-id={experiment_id}",
+    }
+
+
 def interpreter_imports_agent(interpreter: Path) -> bool:
-    """True when this interpreter can import ``AIAgent`` from ``run_agent``."""
+    """True when this interpreter can import the OpenHands SDK and its tools."""
     if not interpreter.is_file():
         return False
     try:
         completed = subprocess.run(
-            [str(interpreter), "-c", "from run_agent import AIAgent"],
+            [str(interpreter), "-c", _IMPORT_CHECK],
             capture_output=True,
             timeout=120,
             check=False,
@@ -99,6 +118,7 @@ def run_agent_job(
     api_key: str | None,
     interpreter: Path,
     max_iterations: int = DEFAULT_ITERATIONS,
+    goal_rounds: int = DEFAULT_GOAL_ROUNDS,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     runner_script: Path | None = None,
     source_env: Mapping[str, str] | None = None,
@@ -111,12 +131,13 @@ def run_agent_job(
         raise AgentRunError("run_id must be a single path segment.")
     if max_iterations < 1:
         raise AgentRunError("max_iterations must be at least 1.")
+    if goal_rounds < 1:
+        raise AgentRunError("goal_rounds must be at least 1.")
     _reject_private(prompt, private_paths)
     _reject_private(model, private_paths)
     _reject_private(base_url or "", private_paths)
-    _reject_gateway(base_url)
     if not interpreter.is_file():
-        raise HermesUnavailable("Hermes is not set up on this server, so a run cannot start.")
+        raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
 
     script = runner_script or default_runner_script()
     run_dir = workspace / "runs" / run_id
@@ -127,6 +148,7 @@ def run_agent_job(
         "base_url": base_url,
         "api_key": api_key,
         "max_iterations": max_iterations,
+        "goal_rounds": goal_rounds,
     }
     _reject_private(json.dumps(job), private_paths)
     (run_dir / "job.json").write_text(json.dumps(job), encoding="utf-8")
@@ -176,13 +198,6 @@ def _reject_private(text: str, private_paths: tuple[str, ...]) -> None:
     for secret in private_paths:
         if secret and secret in text:
             raise AgentRunError("The agent job must not include API-private paths.")
-
-
-def _reject_gateway(base_url: str | None) -> None:
-    if not base_url:
-        return
-    if urlparse(base_url).port in _GATEWAY_PORTS:
-        raise AgentRunError("The Hermes gateway is not used.")
 
 
 def _kill_group(process: subprocess.Popen[str]) -> None:

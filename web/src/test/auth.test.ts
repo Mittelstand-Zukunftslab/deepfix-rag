@@ -37,10 +37,11 @@ describe("auth redirect", () => {
 });
 
 describe("navigation", () => {
-  it("shows Admin only to admins", () => {
+  it("shows Optimization only to admins", () => {
     expect(navigationItems("member").some((item) => item.to === "/admin")).toBe(false);
     expect(navigationItems(null).some((item) => item.to === "/admin")).toBe(false);
-    expect(navigationItems("admin").some((item) => item.to === "/admin")).toBe(true);
+    const item = navigationItems("admin").find((entry) => entry.to === "/admin");
+    expect(item?.label).toBe("Optimization");
   });
 });
 

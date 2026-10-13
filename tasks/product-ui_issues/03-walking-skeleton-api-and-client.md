@@ -7,7 +7,7 @@
 **Status:** done (PR #4). The browser base URL moves to `/api` in ticket 04.
 
 - [x] The API starts with `uv run --env-file .env uvicorn deepfix_rag.api.app:app`.
-- [x] `GET /health` returns HTTP 200 and `{"status": "ok"}` without calling the LLM, embeddings, MLflow, or Hermes.
+- [x] `GET /health` returns HTTP 200 and `{"status": "ok"}` without calling the LLM, embeddings, MLflow, or the optimization agent.
 - [x] Route handlers parse input, call domain code, and serialize output. No retrieval, indexing, or evaluation logic lives in route functions.
 - [x] Errors use `{"detail": "<message>"}` with 400 for bad input, 401 for no session, 403 for wrong role, 404 for unknown ids, 409 for conflicting state, and 503 when a required dependency is unavailable. That body is a Pydantic model named in the route's responses, so it appears in the schema.
 - [x] Every public route declares a Pydantic request body (or form fields) and a Pydantic response model. No public route returns an untyped dict.

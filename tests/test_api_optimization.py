@@ -21,7 +21,7 @@ def settings(tmp_path) -> Settings:
         ALLOWED_EMAIL_DOMAINS="example.com",
         WEB_ORIGIN="http://localhost:8080",
         MLFLOW_TRACKING_URI=f"sqlite:///{tmp_path / 'mlflow.db'}",
-        HERMES_PYTHON=None,
+        OPENHANDS_PYTHON=None,
     )
 
 
@@ -86,7 +86,7 @@ def test_a_running_job_returns_conflict(settings: Settings) -> None:
         assert conflict.json()["detail"] == "A run is already in progress."
 
 
-def test_missing_hermes_returns_service_unavailable(settings: Settings) -> None:
+def test_missing_openhands_returns_service_unavailable(settings: Settings) -> None:
     open_settings = settings.model_copy(
         update={
             "OPTIMIZATION_MIN_DEV_QUESTIONS": 0,

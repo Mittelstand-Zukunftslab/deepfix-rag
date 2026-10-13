@@ -228,6 +228,73 @@ class IndexCoordinator:
         except Exception:
             LOGGER.exception("Could not schedule an index rebuild")
 
+    def serving_build_id(self) -> str | None:
+        """Return the build id the serving symlink points at."""
+        return self._pointer_build_id()
+
+    def build_beside(self, config: RAGConfig) -> str:
+        """Build a full index beside the serving one and leave the pointer alone."""
+        if config.retrieval.backend not in _ALLOWED_BACKENDS:
+            raise UnsupportedIndexBackend
+        build_id = uuid.uuid4().hex
+        build_dir = self._build_path(build_id)
+        bound = bind_locations(config, self.workspace, build_dir)
+        build_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            documents = self._indexable_documents(bound)
+            if not documents:
+                raise IndexEmpty
+            workflow = RAGWorkflow(config=bound, embed_model=self.embed_model, llm=self.llm)
+            index = workflow._build_index(documents)
+            manifest = {
+                "build_id": build_id,
+                "index_time": index_time_signature(bound),
+                "chunk_count": workflow._count_index_chunks(index),
+                "document_ids": [str(document.id_) for document in documents],
+                "created_at": _now(),
+            }
+            (build_dir / _MANIFEST).write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            self._delete_build(build_id)
+            raise
+        return build_id
+
+    def switch_serving(self, build_id: str) -> None:
+        """Point the serving symlink at a finished build and load it.
+
+        The previous build stays on disk until the pointer has moved, so a
+        failed switch can load it again.
+        """
+        lease = self.checkout()
+        try:
+            self._publish(build_id)
+            self._switch_pointer(build_id)
+            self._set_error(None)
+        except Exception:
+            if lease is not None:
+                self._publish(lease.build_id)
+                self._switch_pointer(lease.build_id)
+            raise
+        finally:
+            if lease is not None:
+                self.release(lease)
+
+    def reload_champion(self) -> None:
+        """Load the current champion against the index that is already serving."""
+        pointer = self._pointer_build_id()
+        if pointer is None:
+            raise ChampionConfigError
+        self._publish(pointer)
+
+    def discard_build(self, build_id: str) -> None:
+        """Delete a build that is not serving."""
+        if build_id == self._pointer_build_id():
+            return
+        self._delete_build(build_id)
+
     def start_rebuild(self) -> None:
         """Queue one full rebuild, or raise when one is already running or queued."""
         with self._lock:

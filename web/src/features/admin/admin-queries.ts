@@ -1,14 +1,16 @@
-import { queryOptions, useMutation } from "@tanstack/react-query";
+import { queryOptions } from "@tanstack/react-query";
 
-import type { MetricsRange } from "@/schemas/metrics";
-import { metricsService } from "@/services/metrics-service";
+import { optimizationService, type OptimizationStatus } from "@/services/optimization-service";
 
-export const engineMetricsQueryOptions = (range: MetricsRange) =>
+export function optimizationPollInterval(runs: { status: string }[] | undefined): number | false {
+  return runs?.some((run) => run.status === "running") ? 5000 : false;
+}
+
+export const optimizationQueryOptions = () =>
   queryOptions({
-    queryKey: ["engine-metrics", range],
-    queryFn: () => metricsService.getEngineMetrics(range),
+    queryKey: ["optimization"],
+    queryFn: () => optimizationService.status(),
+    refetchInterval: (query) => optimizationPollInterval(query.state.data?.runs),
   });
 
-export function useTriggerOptimization() {
-  return useMutation({ mutationFn: metricsService.triggerOptimization });
-}
+export type { OptimizationStatus };

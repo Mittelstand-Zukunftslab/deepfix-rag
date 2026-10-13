@@ -2,26 +2,26 @@
 
 ## Introduction
 
-DeepFix today is a deterministic CLI (`deepfix`) plus an agent loop. Engineers load data, build a LanceDB index, run retrieval or full RAG, score results with DeepEval, and let Hermes optimize the pipeline. That is powerful for the team and invisible to everyone else.
+DeepFix today is a deterministic CLI (`deepfix`) plus an agent loop. Engineers load data, build a LanceDB index, run retrieval or full RAG, score results with DeepEval, and let an agent optimize the pipeline. That is powerful for the team and invisible to everyone else.
 
-This feature turns that pipeline into a small internal product. A FastAPI service wraps the existing domain layer and publishes its OpenAPI schema. A TanStack Start app is the interface. Its TypeScript client is generated from that schema with `@hey-api/openapi-ts`, so the screens never hand-write request types. Signed-in members share **one workspace corpus**: they upload text, Markdown, and PDF files, search the index, and ask questions. Thumbs up and thumbs down on retrieved passages and on answers are stored, traced in MLflow, and turned into an evaluation dataset. Admins, and only admins, open an Optimization section that shows the nightly schedule and can start that same job immediately. The job runs Hermes through its Python library in a child process that the API starts, watches, and can kill. It does not use the Hermes gateway.
+This feature turns that pipeline into a small internal product. A FastAPI service wraps the existing domain layer and publishes its OpenAPI schema. A TanStack Start app is the interface. Its TypeScript client is generated from that schema with `@hey-api/openapi-ts`, so the screens never hand-write request types. Signed-in members share **one workspace corpus**: they upload text, Markdown, and PDF files, search the index, and ask questions. Thumbs up and thumbs down on retrieved passages and on answers are stored, traced in MLflow, and turned into an evaluation dataset. Admins, and only admins, open an Optimization section that shows the nightly schedule and can start that same job immediately. The job runs an OpenHands agent through the Software Agent SDK in a child process that the API starts, watches, and can kill, and traces it in MLflow.
 
 The feedback loop is the point of the feature, so this PRD is strict about three things:
 
 1. **Votes must become labels that can judge a different config.** Passage votes decide whether a document is relevant or negative for a question. Nothing the current champion produced on its own (its unvoted top hit, its answer text) is ever used as a label, because that would score every alternative config as worse than the champion.
-2. **Optimization must not grade itself.** Feedback is split by question into a `dev` set Hermes optimizes on and a `holdout` set that never leaves the API process. A candidate is promoted only if it also holds up on `holdout`.
-3. **The API owns run state and promotion.** Hermes proposes a candidate config. The API decides whether a run starts, re-scores the candidate itself on `dev` and `holdout`, decides whether it is promoted, and decides when the live index is rebuilt.
+2. **Optimization must not grade itself.** Feedback is split by question into a `dev` set the agent optimizes on and a `holdout` set that never leaves the API process. A candidate is promoted only if it also holds up on `holdout`.
+3. **The API owns run state and promotion.** The agent proposes a candidate config. The API decides whether a run starts, re-scores the candidate itself on `dev` and `holdout`, decides whether it is promoted, and decides when the live index is rebuilt.
 
 ## Goals
 
 - Give members a signed-in app where they can upload documents into one shared corpus, search it, and ask grounded questions.
 - Record thumbs up and thumbs down on passages and answers, never lose a vote, and mirror every vote to MLflow as feedback on the trace of the request it judges.
 - Turn passage votes into a `dev`/`holdout` evaluation dataset that can score any candidate config.
-- Let admins inspect the nightly Hermes optimization job, change its schedule, and start it on demand.
+- Let admins inspect the nightly optimization job, change its schedule, and start it on demand.
 - Promote a config only when the API's own re-score shows it beats the champion on `dev` by the quality gate and does not regress on `holdout`.
-- Keep product API code thin: FastAPI calls `deepfix_rag` domain functions. The Hermes agent calls the `deepfix` CLI for index, eval, and config changes.
+- Keep product API code thin: FastAPI calls `deepfix_rag` domain functions. The OpenHands agent calls the `deepfix` CLI for index, eval, and config changes.
 - Generate the frontend API client from FastAPI's OpenAPI schema with `@hey-api/openapi-ts`. The schema is the contract.
-- Ship a pilot that one team runs on one server: one API process (which launches Hermes runs as child processes), the web app, and Docker Compose for MLflow and the diagnostic server. Not a multi-tenant SaaS.
+- Ship a pilot that one team runs on one server: one API process (which launches OpenHands runs as child processes), the web app, and Docker Compose for MLflow and the diagnostic server. Not a multi-tenant SaaS.
 
 ## User Stories
 
@@ -31,7 +31,7 @@ Stories are ordered by dependency. Implementation tickets live in `tasks/product
 | :--- | :--- | :--- | :--- |
 | US-001 Query service | 01 | US-010 Ask | 09 |
 | US-002 Multi-label eval records | 02 | US-011 Votes and MLflow outbox | 10, 11 |
-| US-003 Hermes agent runner | 13 | US-012 Feedback dataset | 12 |
+| US-003 OpenHands agent runner | 13 | US-012 Feedback dataset | 12 |
 | US-004, US-005 API shell and generated client | 03 | US-013 Workspace layout | 05, 13 |
 | US-006 Accounts and roles | 04 | US-014 Run lifecycle and promotion | 14, 15 |
 | US-007 Upload and Library | 05 | US-015, US-016 Optimization screen and Run now | 16 |
@@ -71,18 +71,20 @@ Stories are ordered by dependency. Implementation tickets live in `tasks/product
 - [ ] Unit tests cover single-`doc_id`, multi-`doc_ids`, missing-`answer`, both-keys rows, a retrieved negative lowering precision, an unjudged hit left out of precision, a negative-only row that is not unanswerable, an unchanged benchmark row that has no `negative_doc_ids`, and in-memory records scoring the same as the same rows loaded from a file.
 - [ ] `uv run --env-file .env pytest -v -m "not network and not e2e"` passes.
 
-### US-003: Hermes agent runner in a child process
-**Description:** As a developer, I want each optimization run to execute Hermes through its Python library in a separate process, so a run can be time-limited and killed, a crash cannot take down the API, and Hermes dependencies stay out of the `deepfix_rag` environment.
+### US-003: OpenHands agent runner in a child process
+**Description:** As a developer, I want each optimization run to execute an OpenHands agent through the Software Agent SDK in a separate process, so a run can be time-limited and killed, a crash cannot take down the API, SDK dependencies stay out of the `deepfix_rag` environment, and every run is traced in MLflow.
 
-**Context:** [Using Hermes as a Python library](https://hermes-agent.nousresearch.com/docs/guides/python-library#basic-usage) exposes `AIAgent` from `run_agent`. `run_conversation()` returns `final_response` and `messages`. Hermes does not publish a wheel: the runtime is a checkout of `https://github.com/NousResearch/hermes-agent.git`. An agent instance is not safe to share across runs. A Python thread cannot be killed, so an in-process agent cannot honor a timeout.
+**Context:** The [OpenHands Software Agent SDK](https://docs.openhands.dev/sdk) (`openhands-sdk`, `openhands-tools`) builds an `Agent` from an `LLM` and tools, and runs it in a `Conversation` until it calls the finish action or hits `max_iteration_per_run`. Its [goal completion loop](https://docs.openhands.dev/sdk/guides/convo-goal) has a second judge LLM audit the transcript after each run and re-prompt the agent until the objective is provably done or a round cap is reached. LLM calls go through LiteLLM, so OpenRouter models need the `openrouter/` prefix. Tracing is OpenTelemetry, configured with `OTEL_EXPORTER_OTLP_*`, which MLflow ingests. A Python thread cannot be killed, so an in-process agent cannot honor a timeout.
 
 **Acceptance Criteria:**
-- [ ] A pinned Hermes commit, the checkout path, and the interpreter of a dedicated Hermes virtual environment (`HERMES_PYTHON`) are recorded in `tasks/notes-hermes-integration.md`. That environment has Hermes and its dependencies and does not have `deepfix_rag` installed.
-- [ ] A standalone runner script (for example `scripts/hermes_runner.py`, no `deepfix_rag` imports) runs under `HERMES_PYTHON`. It reads a job file (`runs/<run_id>/job.json`: prompt, model settings, iteration limit), builds one `AIAgent` with `quiet_mode=True`, `skip_memory=True`, and `max_iterations` from the job, calls `run_conversation(user_message=..., task_id=run_id)`, and writes `runs/<run_id>/agent_output.json` with `final_response` and an error, if any.
+- [ ] The pinned SDK version, the virtual environment path, and its interpreter (`OPENHANDS_PYTHON`) are recorded in `tasks/notes-openhands-integration.md`. That environment has the SDK and its tools and does not have `deepfix_rag` installed.
+- [ ] A standalone runner script (`scripts/openhands_runner.py`, no `deepfix_rag` imports) runs under `OPENHANDS_PYTHON`. It reads a job file (`runs/<run_id>/job.json`: prompt, model settings, iteration limit), builds one `Agent` with the terminal and file editor tools, runs one `Conversation` with `max_iteration_per_run` from the job, and writes `runs/<run_id>/agent_output.json` with the final response and an error, if any. A conversation that does not end in `finished` is an error.
+- [ ] The prompt is pursued as a goal: a judge LLM audits each finished run and sends unmet requirements back to the agent, for at most `OPTIMIZATION_GOAL_ROUNDS` (default 3) rounds. The optimization prompt states its completion criteria (`result.json` written, with the eval output behind it shown in the conversation).
 - [ ] A domain helper in `deepfix_rag` writes the job file, starts the runner as a child process with working directory `/workspace`, and waits for it. When the run exceeds `OPTIMIZATION_RUN_TIMEOUT_HOURS` (default 3), the helper kills the process group and reports a timeout.
-- [ ] The child's environment is built from an explicit allowlist: LLM base URL, key, and model; `MLFLOW_TRACKING_URI`; `DEEPFIX_SERVER_URL`; and a `PATH` whose first entry is the API virtual environment's `bin/`, so `deepfix` resolves to the same code revision as the API. The product database path, the API-private data directory, and any session secret are not in the environment or the prompt.
-- [ ] The agent's terminal tool is enabled. Indexing, eval, and config mutation happen only when the agent shells out to `deepfix`. The runner does not call the Hermes gateway on ports 8642 or 9119.
-- [ ] A test, skipped only when `HERMES_PYTHON` is unset or cannot import `run_agent`, runs one agent turn whose prompt is to execute `deepfix --help` and asserts the command's usage text appears in `final_response`. A second test starts a runner that sleeps past a short timeout and asserts the process is gone afterwards.
+- [ ] The child's environment is built from an explicit allowlist: LLM base URL, key, and model; `MLFLOW_TRACKING_URI`; `DEEPFIX_SERVER_URL`; the agent's OTLP settings; and a `PATH` whose first entry is the API virtual environment's `bin/`, so `deepfix` resolves to the same code revision as the API. The product database path, the API-private data directory, and any session secret are not in the environment or the prompt.
+- [ ] When `MLFLOW_TRACKING_URI` is an HTTP URL and `MLFLOW_EXPERIMENT_ID` is set, each run is one MLflow trace tagged with the run id. The `deepfix` commands the agent runs do not inherit the OTLP settings.
+- [ ] The agent's terminal tool is enabled. Indexing, eval, and config mutation happen only when the agent shells out to `deepfix`.
+- [ ] A test, skipped only when `OPENHANDS_PYTHON` is unset or cannot import the SDK, runs one agent turn whose prompt is to execute `deepfix --help` and asserts the command's usage text appears in the final response. A second test starts a runner that sleeps past a short timeout and asserts the process is gone afterwards.
 - [ ] `uv run ruff check` and `uv run ruff format --check` pass.
 
 ### US-004: FastAPI service shell
@@ -90,9 +92,9 @@ Stories are ordered by dependency. Implementation tickets live in `tasks/product
 
 **Acceptance Criteria:**
 - [x] The app lives in `src/deepfix_rag/api/` and starts with `uv run --env-file .env uvicorn deepfix_rag.api.app:app`. It runs with exactly one worker process (see Technical Considerations: Process model).
-- [x] `GET /health` returns HTTP 200 and `{"status": "ok"}` without calling the LLM, embeddings, MLflow, or Hermes.
+- [x] `GET /health` returns HTTP 200 and `{"status": "ok"}` without calling the LLM, embeddings, MLflow, or the optimization agent.
 - [x] Route handlers parse input, call domain code (US-001 service, data loaders, eval runner), and serialize output. No retrieval, indexing, or evaluation logic lives in route functions.
-- [x] Errors use `{"detail": "<message>"}` with 400 for bad input, 401 for no session, 403 for wrong role, 404 for unknown ids, 409 for conflicting state, and 503 when a required dependency (ready index, or the Hermes runtime) is unavailable. That body is a Pydantic model named in the route's `responses`, so it appears in the schema.
+- [x] Errors use `{"detail": "<message>"}` with 400 for bad input, 401 for no session, 403 for wrong role, 404 for unknown ids, 409 for conflicting state, and 503 when a required dependency (ready index, or the OpenHands runtime) is unavailable. That body is a Pydantic model named in the route's `responses`, so it appears in the schema.
 - [x] Every public route declares a Pydantic request body (or form fields) and a Pydantic response model. No public route returns an untyped `dict`.
 - [x] Every public route sets an explicit `operation_id` in snake_case (`health`, `register`, `login`, and so on). FastAPI must not invent ids from function names.
 - [x] The app has no `/internal` routes. Optimization calls Python functions in-process. `GET /openapi.json` lists only the public product routes, and a test asserts no path starts with `/internal`.
@@ -228,18 +230,18 @@ Stories are ordered by dependency. Implementation tickets live in `tasks/product
 - [ ] Unit tests cover per-passage net votes, a down-voted passage not cancelling an up-voted passage of the same document, a negative-only document, ties left unlabeled, deleted-document exclusion, inclusion of a negative-only question, exclusion of a question with no remaining labels, split stability, and that no export path writes holdout rows to a file.
 
 ### US-013: Workspace layout for the agent
-**Description:** As a developer, I need the Hermes agent to reach the corpus, the champion config, the `dev` dataset, and the `deepfix` CLI, and nothing that would let it see `holdout` or product state.
+**Description:** As a developer, I need the optimization agent to reach the corpus, the champion config, the `dev` dataset, and the `deepfix` CLI, and nothing that would let it see `holdout` or product state.
 
 **Acceptance Criteria:**
 - [ ] The API process uses one workspace directory, `/workspace` in Compose and a `tmp_path` equivalent in tests, containing `corpus/`, `indexes/`, `feedback/`, `configs/`, and `runs/`.
 - [ ] The product database and session secrets live in an API-private directory outside `/workspace`. No holdout file exists anywhere (US-012).
 - [ ] The champion config lives at `/workspace/configs/champion.yaml`. Only API code writes it. It is seeded from `configs/default.yaml` on first start, with the location fields set as in US-008. Previous champions are archived under `/workspace/configs/history/`.
 - [ ] The agent may write candidate configs and candidate indexes only under `/workspace/runs/<run_id>/`.
-- [ ] There is no second Hermes container and no `DEEPFIX_INTERNAL_TOKEN`. The Compose `hermes` gateway is not on the optimization path.
+- [ ] There is no second agent container and no `DEEPFIX_INTERNAL_TOKEN`. The Compose `hermes` gateway is not on the optimization path.
 - [ ] In Compose, the agent child process runs as a separate unprivileged user that can write `/workspace` and cannot read the API-private directory. Outside Compose (local development), this is a documented procedure boundary: the agent is never told the path and cannot promote itself.
 
 ### US-014: Optimization run lifecycle owned by the API
-**Description:** As an AI engineer, I want every optimization run, scheduled or manual, to start, finish, and promote through the API, so run state is visible and promotion is checked against data Hermes cannot see.
+**Description:** As an AI engineer, I want every optimization run, scheduled or manual, to start, finish, and promote through the API, so run state is visible and promotion is checked against data the agent cannot see.
 
 **Acceptance Criteria:**
 - [ ] Gate thresholds are server settings: `OPTIMIZATION_MIN_DEV_QUESTIONS` (default 50), `OPTIMIZATION_MIN_NEW_DEV_QUESTIONS` (default 10), `OPTIMIZATION_MIN_HOLDOUT_QUESTIONS` (default 15), `OPTIMIZATION_MIN_PRIMARY_DELTA` (default 0.025), and `OPTIMIZATION_RUN_TIMEOUT_HOURS` (default 3).
@@ -259,22 +261,22 @@ Stories are ordered by dependency. Implementation tickets live in `tasks/product
 - [ ] Integration tests exercise skip, conflict, rejection, and promotion by calling the lifecycle functions with `tmp_path` workspaces, the sample corpus, and a hand-written `result.json`, using `--retrieval-only`. Those tests do not start the agent. No mocks of the pipeline or eval runner.
 
 ### US-015: Admin view of the optimization schedule
-**Description:** As an admin, I want to see the scheduled optimization job and recent runs so I know what Hermes is doing to the pipeline.
+**Description:** As an admin, I want to see the scheduled optimization job and recent runs so I know what the agent is doing to the pipeline.
 
 **Acceptance Criteria:**
 - [ ] The Optimization screen is an admin-only route. It replaces the current mock Admin metrics screen. Members who open the URL see "This page is only available to admins." and no controls.
 - [ ] On API startup, the process starts an in-process scheduler for the job `deepfix-optimize-workspace`. The default schedule is `0 2 * * *` in `Europe/Berlin` (02:00 every day). The scheduled callback is the same function as Run now.
 - [ ] `GET /admin/optimization` returns the cron expression, timezone, enabled flag, and next run time computed by that scheduler, plus the 20 most recent runs from the API's own run table: status (`running`, `skipped`, `rejected`, `promoted`, `succeeded`, `failed`), trigger (`cron` or `manual`), start and end times, reason, primary metric, `dev` and `holdout` deltas, holdout wins and losses, and MLflow link.
-- [ ] If `HERMES_PYTHON` is unset, cannot import `run_agent`, or the LLM settings are missing, the response still returns the schedule and run history, with `agent_available: false`. The screen shows "Hermes is not set up on this server, so a run cannot start. The schedule and history are still shown." and disables Run now.
+- [ ] If `OPENHANDS_PYTHON` is unset, cannot import the SDK, or the LLM settings are missing, the response still returns the schedule and run history, with `agent_available: false`. The screen shows "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown." and disables Run now.
 - [ ] The screen shows the current champion config path and a diff against the previous champion (from `configs/history/`), rendered from `deepfix diff-config` JSON.
 - [ ] Typecheck passes.
 - [ ] Verify in browser.
 
 ### US-016: Run the optimization job now
-**Description:** As an admin, I want to start the same Hermes job on demand instead of waiting for the nightly run.
+**Description:** As an admin, I want to start the same optimization job on demand instead of waiting for the nightly run.
 
 **Acceptance Criteria:**
-- [ ] `POST /admin/optimization/run` starts the same job as the scheduler, with trigger `manual`. It does not submit a different prompt and does not call the Hermes gateway.
+- [ ] `POST /admin/optimization/run` starts the same job as the scheduler, with trigger `manual`. It does not submit a different prompt.
 - [ ] The button label is "Run now". It is disabled while any run is `running`, with the note "A run is already in progress."
 - [ ] Members receive 403. An admin request while a run is `running` receives 409. If the agent is not available, the route returns 503.
 - [ ] A manual run that is skipped shows the reason with the actual counts, for example "Skipped: 14 labeled questions in dev, 50 needed."
@@ -309,14 +311,14 @@ Stories are ordered by dependency. Implementation tickets live in `tasks/product
 - FR-9: The system must snapshot every returned hit (rank, `doc_id`, `passage_key`, text, score) and every answer per interaction, and trace each Search and Ask request in MLflow experiment `deepfix_product` without failing the request when tracing fails.
 - FR-10: The system must store votes as an append-only event log keyed by user and target, confirm a vote once it is committed locally, and mirror it to MLflow with `mlflow.log_feedback` through a retrying outbox that gives up only on interactions without a trace.
 - FR-11: The system must derive eval labels only from passage votes. A document is relevant for a question when at least one of its passages has a positive net vote, and negative when none does and at least one has a negative net vote. Ties, unvoted documents, deleted documents, and unvoted champion output are not labels. A question is exported when it has at least one relevant or negative document.
-- FR-12: The system must split feedback questions deterministically by query hash into `dev` (80%) and `holdout` (20%), expose only `dev` to Hermes, keep `holdout` in memory only, and log each snapshot to MLflow experiment `deepfix_product_feedback` without the holdout rows.
+- FR-12: The system must split feedback questions deterministically by query hash into `dev` (80%) and `holdout` (20%), expose only `dev` to the agent, keep `holdout` in memory only, and log each snapshot to MLflow experiment `deepfix_product_feedback` without the holdout rows.
 - FR-13: The system must report answer votes as an approval rate per champion config, not as eval labels.
 - FR-14: The workspace directory contains the corpus, indexes, `dev` feedback, champion config, and run directories. The product database lives outside it. The agent runs in a child process with the workspace as its working directory and an allowlisted environment.
-- FR-15: Every optimization run, cron or manual, starts through one in-process function. It skips the run when `dev`, new `dev`, or `holdout` questions are below their configured minimums, and the admin route returns 409 when a run is active. A run that starts launches a new Hermes child process.
+- FR-15: Every optimization run, cron or manual, starts through one in-process function. It skips the run when `dev`, new `dev`, or `holdout` questions are below their configured minimums, and the admin route returns 409 when a run is active. A run that starts launches a new OpenHands child process.
 - FR-16: The API must promote a candidate only when it validates, uses an allowed backend, passes the `dev` quality gate on the API's own re-score (primary delta at least the configured minimum, no negative secondary delta), and does not regress `holdout` (primary delta at least 0 and holdout wins at least losses). The agent does not apply this gate. Query-time changes reload against the current index; index-time changes require a successful blue-green rebuild before the champion and index switch together.
-- FR-17: The API process must schedule one job, `deepfix-optimize-workspace`, default `0 2 * * *` in `Europe/Berlin`, and let admins trigger it, change its cron expression, and enable or disable it. The schedule is not a Hermes gateway cron job.
+- FR-17: The API process must schedule one job, `deepfix-optimize-workspace`, default `0 2 * * *` in `Europe/Berlin`, and let admins trigger it, change its cron expression, and enable or disable it. The schedule is not an agent-side cron job.
 - FR-18: Runs that exceed the configured timeout must be killed and marked `failed`. Runs left `running` by a restart must be marked `failed`.
-- FR-19: Secrets (LLM keys, MLflow credentials, session secret) must stay on the server. The browser never receives them, and it never talks to Hermes directly.
+- FR-19: Secrets (LLM keys, MLflow credentials, session secret) must stay on the server. The browser never receives them, and it never talks to the agent directly.
 
 ## Non-Goals
 
@@ -327,8 +329,8 @@ Stories are ordered by dependency. Implementation tickets live in `tasks/product
 - Multi-turn chat memory, suggested questions, and user-written corrected answers.
 - Using answer votes or champion answers as reference answers for answer correctness.
 - Graded relevance beyond binary labels, and passage-level eval labels. A document is relevant, negative, or unlabeled for a question.
-- A custom optimizer inside FastAPI. The Hermes agent forms the hypothesis and runs `deepfix`. API code applies the quality gate and the holdout check.
-- Driving optimization through the Hermes gateway HTTP API (ports 8642 and 9119) or through Hermes gateway cron.
+- A custom optimizer inside FastAPI. The OpenHands agent forms the hypothesis and runs `deepfix`. API code applies the quality gate and the holdout check.
+- Driving optimization through the Hermes gateway HTTP API (ports 8642 and 9119), Hermes gateway cron, or the OpenHands agent server.
 - Rolling back to a previous champion from the UI.
 - Launching Optuna HPO (`deepfix hpo`) from the UI.
 - Editing YAML configs by hand in the UI.
@@ -360,7 +362,7 @@ The mock "Data visualization" gallery is removed. The System status page stays a
 
 ## Technical Considerations
 
-- **Layers.** Domain code (US-001 service, US-002 eval changes, feedback export, run lifecycle rules, the Hermes runner launcher) lives in `deepfix_rag` modules and is tested without HTTP. `src/deepfix_rag/api/` only parses, calls, and serializes, mirroring the CLI rule in `AGENTS.md`.
+- **Layers.** Domain code (US-001 service, US-002 eval changes, feedback export, run lifecycle rules, the OpenHands runner launcher) lives in `deepfix_rag` modules and is tested without HTTP. `src/deepfix_rag/api/` only parses, calls, and serializes, mirroring the CLI rule in `AGENTS.md`.
 - **Frontend.** The TanStack Start app lives in `web/`. It talks to the API only through the client `@hey-api/openapi-ts` generates from `web/openapi.json`, which is FastAPI's own schema (`app.openapi()`, also served at `GET /openapi.json`). `web/src/api.ts` sets the base URL and `credentials: 'include'`. Regenerating the client is part of CI, so a Pydantic model change that is not exported fails the build.
 - **Same-origin API.** The browser calls `/api/*` on the web origin, and the web server proxies to FastAPI (Vite proxy in development, the TanStack Start server in production). That keeps the `SameSite=Lax` session cookie working wherever the app is deployed and removes the need for CORS in production. Server-side rendering calls `API_INTERNAL_URL` and forwards the request's `Cookie` header from `web/src/api.ts`.
 - **Web conventions.** `web/AGENTS.md` rules still apply. `src/services/*` become thin wrappers over the generated SDK, so features keep calling services. Zod schemas in `src/schemas/` are kept for form validation only; API types come from `src/client`. `web/` is synced with Lovable, so published history on the connected branch is never rewritten.
@@ -372,7 +374,7 @@ The mock "Data visualization" gallery is removed. The System status page stays a
 - **Promotion and index-time keys.** Index-time keys are `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, and `retrieval.bit_width`. Everything else (for example `top_k`, fusion weights, BM25 parameters, reranking, and generation settings) is query-time and reloads the query service without rebuilding. Index-time changes build a complete candidate index beside the serving index, and the API switches the config and index together only after that build passes.
 - **Promotion gate statistics.** With few questions, one question flipping moves a metric by several points, so the defaults ask for 50 `dev` and 15 `holdout` questions before a run starts, and the holdout check requires wins at least equal to losses in addition to a non-negative mean delta. All thresholds are settings, so the pilot can tune them without code changes.
 - **Holdout isolation.** `holdout` exists only in memory inside the API process, recomputed from the database when the gate needs it. It is never written to the workspace, the API-private directory, or MLflow. The agent runs in a child process with an allowlisted environment, and in Compose as a separate user that cannot read the API-private directory. Because the API re-scores `dev` itself, a misreported agent number cannot get a candidate promoted.
-- **Hermes.** Each run starts a new child process under a dedicated Hermes virtual environment (`HERMES_PYTHON`) built from a pinned checkout of `NousResearch/hermes-agent`, as described in the [Python library guide](https://hermes-agent.nousresearch.com/docs/guides/python-library#basic-usage). The child constructs one `AIAgent` (`quiet_mode=True`, `skip_memory=True`, `max_iterations=15`) and exits when `run_conversation` returns. A child process can be killed on timeout, cannot crash the API, and keeps Hermes dependencies out of the `deepfix_rag` environment. The agent shells out to the `deepfix` binary from the API's own virtual environment, so no separate `uv tool install` is needed and the CLI always matches the API revision. The nightly schedule is an in-process scheduler, not the Hermes gateway.
+- **OpenHands.** Each run starts a new child process under a dedicated OpenHands virtual environment (`OPENHANDS_PYTHON`) with pinned `openhands-sdk` and `openhands-tools`, as described in the [SDK documentation](https://docs.openhands.dev/sdk). The child builds one `Agent` with the terminal and file editor tools, runs one `Conversation` (`max_iteration_per_run=15`) under the SDK goal completion loop (at most 3 judge rounds), and exits when it finishes. A child process can be killed on timeout, cannot crash the API, and keeps SDK dependencies out of the `deepfix_rag` environment. The agent shells out to the `deepfix` binary from the API's own virtual environment, so no separate `uv tool install` is needed and the CLI always matches the API revision. Conversation traces go to MLflow through OTLP. The nightly schedule is an in-process scheduler.
 - **Run ownership.** Run history, skip decisions, timeouts, and promotions live in the API's run table.
 - **Performance targets (pilot VM, corpus up to 2,000 documents).** `POST /retrieval` p95 ≤ 2 s with `top_k ≤ 20` and reranking off. `POST /ask` p95 ≤ 15 s. `POST /feedback` p95 ≤ 200 ms, since it only writes locally.
 - **Tests.** API tests use the `api` marker. Indexing and query tests use `sample_corpus_path`, `sample_qa_path`, and `populated_sample_index_dir`. Eval tests use `--retrieval-only`. Temporary SQLite files and a temporary local MLflow tracking directory are allowed. No mocks of domain logic, per `AGENTS.md`.

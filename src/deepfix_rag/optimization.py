@@ -1,8 +1,8 @@
 """Optimization runs owned by the API.
 
 The same function starts a scheduled run and a manual one. It exports a feedback
-snapshot, skips when too little is labeled, and otherwise launches one Hermes child.
-Promotion is a later step: this module never replaces the champion.
+snapshot, skips when too little is labeled, and otherwise launches one OpenHands child.
+When the child names a candidate, API code scores it and may promote it.
 """
 
 from collections.abc import Mapping
@@ -20,10 +20,17 @@ import uuid
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from deepfix_rag.accounts import connect
-from deepfix_rag.agent_process import HermesUnavailable, run_agent_job
-from deepfix_rag.config.settings import Settings
+from deepfix_rag.agent_process import (
+    AGENT_UNAVAILABLE_MESSAGE,
+    AgentUnavailable,
+    interpreter_imports_agent,
+    run_agent_job,
+)
+from deepfix_rag.config.settings import LOGGER, Settings
 from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.feedback import export_feedback
+from deepfix_rag.indexing import IndexCoordinator
+from deepfix_rag.promotion import PromotionDecision, apply_candidate
 
 RunStatus = Literal["running", "skipped", "rejected", "promoted", "succeeded", "failed"]
 RunTrigger = Literal["cron", "manual"]
@@ -70,6 +77,10 @@ class OptimizationRun:
     mlflow_run_id: str | None
     started_at: str
     ended_at: str | None
+    dev_delta: dict[str, float] | None = None
+    holdout_delta: dict[str, float] | None = None
+    holdout_wins: int | None = None
+    holdout_losses: int | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +92,7 @@ class OptimizationSettings:
     min_holdout_questions: int = 15
     min_primary_delta: float = 0.025
     timeout_seconds: float = 3 * 60 * 60
+    goal_rounds: int = 3
     interpreter: Path | None = None
     model: str = "openai/gpt-6-luna-pro"
     base_url: str | None = "https://openrouter.ai/api/v1"
@@ -99,13 +111,14 @@ def settings_from(
 
     env = os.environ if source_env is None else source_env
     model, base_url, api_key = openrouter_settings(env)
-    raw_interpreter = settings.HERMES_PYTHON
+    raw_interpreter = settings.OPENHANDS_PYTHON
     return OptimizationSettings(
         min_dev_questions=settings.OPTIMIZATION_MIN_DEV_QUESTIONS,
         min_new_dev_questions=settings.OPTIMIZATION_MIN_NEW_DEV_QUESTIONS,
         min_holdout_questions=settings.OPTIMIZATION_MIN_HOLDOUT_QUESTIONS,
         min_primary_delta=settings.OPTIMIZATION_MIN_PRIMARY_DELTA,
         timeout_seconds=settings.OPTIMIZATION_RUN_TIMEOUT_HOURS * 60 * 60,
+        goal_rounds=settings.OPTIMIZATION_GOAL_ROUNDS,
         interpreter=Path(raw_interpreter) if raw_interpreter else None,
         model=model,
         base_url=base_url,
@@ -146,7 +159,10 @@ def optimization_prompt(
         f"Finish by writing {run_dir / 'result.json'} as JSON with the keys "
         "candidate_config_path (a path or null), primary_metric, summary, "
         "and mlflow_run_id (a string or null). "
-        "Set candidate_config_path to null when you do not recommend a change."
+        "Set candidate_config_path to null when you do not recommend a change. "
+        "The task is complete only when that file exists with those keys and this "
+        "conversation shows the deepfix eval output that primary_metric comes from "
+        "and the output of printing that file."
     )
 
 
@@ -173,10 +189,15 @@ def init_optimization(db_path: Path) -> None:
                 summary TEXT,
                 pid INTEGER,
                 started_at TEXT NOT NULL,
-                ended_at TEXT
+                ended_at TEXT,
+                dev_delta TEXT,
+                holdout_delta TEXT,
+                holdout_wins INTEGER,
+                holdout_losses INTEGER
             )
             """
         )
+        _ensure_score_columns(conn)
 
 
 def start_optimization_run(
@@ -185,6 +206,7 @@ def start_optimization_run(
     *,
     trigger: RunTrigger,
     options: OptimizationSettings,
+    coordinator: IndexCoordinator | None = None,
 ) -> OptimizationRun:
     """Export feedback, then skip, refuse, or start one background agent run."""
     init_optimization(db_path)
@@ -205,8 +227,8 @@ def start_optimization_run(
             len(exported.holdout),
             options,
         )
-        if reason is None and not _interpreter_ready(options.interpreter):
-            raise HermesUnavailable("Hermes is not set up on this server, so a run cannot start.")
+        if reason is None and not _can_launch(options):
+            raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
         status: RunStatus = "skipped" if reason is not None else "running"
         conn.execute(
             """
@@ -231,8 +253,40 @@ def start_optimization_run(
             ),
         )
     if status == "running":
-        _start_thread(db_path, workspace, run_id, exported.dev_path, options)
+        _start_thread(db_path, workspace, run_id, exported.dev_path, options, coordinator)
     return get_run(db_path, run_id)
+
+
+def recent_runs(db_path: Path, limit: int = 20) -> list[OptimizationRun]:
+    """Return the newest runs, newest first."""
+    init_optimization(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM optimization_runs
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [_run_from_row(row) for row in rows]
+
+
+def mlflow_run_url(run_id: str | None) -> str | None:
+    """Link for an HTTP tracking server. A local SQLite store has no page to open."""
+    if not run_id:
+        return None
+    try:
+        import mlflow
+
+        tracking = mlflow.get_tracking_uri()
+        if not tracking.startswith("http"):
+            return None
+        experiment_id = mlflow.get_run(run_id).info.experiment_id
+    except Exception:
+        LOGGER.debug("Could not build an MLflow URL for %s", run_id, exc_info=True)
+        return None
+    return f"{tracking.rstrip('/')}/#/experiments/{experiment_id}/runs/{run_id}"
 
 
 def get_run(db_path: Path, run_id: str) -> OptimizationRun:
@@ -255,8 +309,11 @@ def finish_run(
     *,
     runner_error: str | None,
     timed_out: bool,
+    coordinator: IndexCoordinator | None = None,
+    min_primary_delta: float = 0.025,
+    private_paths: tuple[str, ...] = (),
 ) -> None:
-    """Apply result.json. A timeout always fails the run, and the champion stays put."""
+    """Apply result.json. A candidate is scored here and is not trusted on its own."""
     if timed_out:
         _finish(db_path, run_id, status="failed", reason=_TIMED_OUT)
         return
@@ -264,16 +321,32 @@ def finish_run(
     if result is None:
         _finish(db_path, run_id, status="failed", reason=runner_error or _INVALID_RESULT)
         return
-    _finish(
+    if result.candidate_config_path is None:
+        _finish(
+            db_path,
+            run_id,
+            status="succeeded",
+            reason=result.summary,
+            primary_metric=result.primary_metric,
+            candidate_config_path=None,
+            mlflow_run_id=result.mlflow_run_id,
+            summary=result.summary,
+        )
+        return
+    stored = get_run(db_path, run_id)
+    decision = apply_candidate(
         db_path,
-        run_id,
-        status="succeeded",
-        reason=result.summary,
-        primary_metric=result.primary_metric,
+        workspace,
+        snapshot_id=stored.snapshot_id,
         candidate_config_path=result.candidate_config_path,
-        mlflow_run_id=result.mlflow_run_id,
+        primary_metric=result.primary_metric,
         summary=result.summary,
+        mlflow_run_id=result.mlflow_run_id,
+        min_primary_delta=min_primary_delta,
+        coordinator=coordinator,
+        private_paths=private_paths,
     )
+    _store_decision(db_path, run_id, decision)
 
 
 def fail_interrupted(db_path: Path) -> int:
@@ -307,10 +380,11 @@ def _start_thread(
     run_id: str,
     dev_path: Path,
     options: OptimizationSettings,
+    coordinator: IndexCoordinator | None,
 ) -> None:
     interpreter = options.interpreter
     if interpreter is None:
-        raise HermesUnavailable("Hermes is not set up on this server, so a run cannot start.")
+        raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
 
     def _target() -> None:
         try:
@@ -322,6 +396,7 @@ def _start_thread(
                 base_url=options.base_url,
                 api_key=options.api_key,
                 interpreter=interpreter,
+                goal_rounds=options.goal_rounds,
                 timeout_seconds=options.timeout_seconds,
                 runner_script=options.runner_script,
                 source_env=options.source_env,
@@ -340,6 +415,9 @@ def _start_thread(
             run_id,
             runner_error=outcome.error,
             timed_out=outcome.timed_out,
+            coordinator=coordinator,
+            min_primary_delta=options.min_primary_delta,
+            private_paths=options.private_paths,
         )
 
     thread = threading.Thread(target=_target, name=f"optimization-{run_id}", daemon=True)
@@ -372,6 +450,33 @@ def _skip_reason(
 
 def _interpreter_ready(interpreter: Path | None) -> bool:
     return interpreter is not None and interpreter.is_file()
+
+
+def _can_launch(options: OptimizationSettings) -> bool:
+    """True when this process can start the child that the run will use."""
+    if not _interpreter_ready(options.interpreter):
+        return False
+    if not options.api_key or not options.base_url or not options.model:
+        return False
+    if options.runner_script is not None:
+        return options.runner_script.is_file()
+    assert options.interpreter is not None
+    return interpreter_imports_agent(options.interpreter)
+
+
+_import_cache: dict[str, bool] = {}
+
+
+def agent_available(options: OptimizationSettings) -> bool:
+    """True when OpenHands can be started. The import check is cached for this process."""
+    if not _interpreter_ready(options.interpreter) or options.interpreter is None:
+        return False
+    if not options.api_key or not options.base_url or not options.model:
+        return False
+    key = str(options.interpreter)
+    if key not in _import_cache:
+        _import_cache[key] = interpreter_imports_agent(options.interpreter)
+    return _import_cache[key]
 
 
 def _running_id(conn: sqlite3.Connection) -> str | None:
@@ -425,6 +530,26 @@ def _kill_pid(pid: int | None) -> None:
         return
 
 
+def _store_decision(db_path: Path, run_id: str, decision: PromotionDecision) -> None:
+    status: RunStatus = (
+        decision.status if decision.status in {"rejected", "promoted", "failed"} else "failed"
+    )
+    _finish(
+        db_path,
+        run_id,
+        status=status,
+        reason=decision.reason,
+        primary_metric=decision.primary_metric,
+        candidate_config_path=decision.candidate_config_path,
+        mlflow_run_id=decision.mlflow_run_id,
+        summary=decision.summary,
+        dev_delta=decision.dev_delta,
+        holdout_delta=decision.holdout_delta,
+        holdout_wins=decision.holdout_wins,
+        holdout_losses=decision.holdout_losses,
+    )
+
+
 def _finish(
     db_path: Path,
     run_id: str,
@@ -435,13 +560,18 @@ def _finish(
     candidate_config_path: str | None = None,
     mlflow_run_id: str | None = None,
     summary: str | None = None,
+    dev_delta: dict[str, float] | None = None,
+    holdout_delta: dict[str, float] | None = None,
+    holdout_wins: int | None = None,
+    holdout_losses: int | None = None,
 ) -> None:
     with connect(db_path) as conn:
         conn.execute(
             """
             UPDATE optimization_runs
             SET status = ?, reason = ?, primary_metric = ?, candidate_config_path = ?,
-                mlflow_run_id = ?, summary = ?, ended_at = ?, pid = NULL
+                mlflow_run_id = ?, summary = ?, ended_at = ?, pid = NULL,
+                dev_delta = ?, holdout_delta = ?, holdout_wins = ?, holdout_losses = ?
             WHERE run_id = ? AND status = 'running'
             """,
             (
@@ -452,6 +582,10 @@ def _finish(
                 mlflow_run_id,
                 summary,
                 _now(),
+                _dump_delta(dev_delta),
+                _dump_delta(holdout_delta),
+                holdout_wins,
+                holdout_losses,
                 run_id,
             ),
         )
@@ -472,7 +606,38 @@ def _run_from_row(row: sqlite3.Row) -> OptimizationRun:
         mlflow_run_id=row["mlflow_run_id"],
         started_at=row["started_at"],
         ended_at=row["ended_at"],
+        dev_delta=_load_delta(row["dev_delta"]),
+        holdout_delta=_load_delta(row["holdout_delta"]),
+        holdout_wins=row["holdout_wins"],
+        holdout_losses=row["holdout_losses"],
     )
+
+
+def _ensure_score_columns(conn: sqlite3.Connection) -> None:
+    existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(optimization_runs)")}
+    for name, column_type in (
+        ("dev_delta", "TEXT"),
+        ("holdout_delta", "TEXT"),
+        ("holdout_wins", "INTEGER"),
+        ("holdout_losses", "INTEGER"),
+    ):
+        if name not in existing:
+            conn.execute(f"ALTER TABLE optimization_runs ADD COLUMN {name} {column_type}")
+
+
+def _dump_delta(delta: dict[str, float] | None) -> str | None:
+    if delta is None:
+        return None
+    return json.dumps(delta)
+
+
+def _load_delta(raw: str | None) -> dict[str, float] | None:
+    if raw is None:
+        return None
+    loaded = json.loads(raw)
+    if not isinstance(loaded, dict):
+        return None
+    return {str(key): float(value) for key, value in loaded.items()}
 
 
 def _now() -> str:
