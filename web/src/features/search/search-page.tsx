@@ -1,48 +1,70 @@
-import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import {
-  ChevronDown,
-  Droplet,
-  FileText,
-  Flame,
-  Landmark,
-  Router,
-  Search,
-  ThumbsDown,
-  ThumbsUp,
-  Trash2,
-  type LucideIcon,
-} from "lucide-react";
-import type { FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import { TopBar } from "@/components/layout/app-shell";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
-import { formatCurrency, formatDate, formatNumber } from "@/lib/format";
-import type { SearchResult } from "@/schemas/document";
-import { searchService } from "@/services/search-service";
-import { useSearchStore } from "@/stores/search-store";
+import { VoteButtons, type Vote } from "@/features/feedback/vote-buttons";
 import { IndexPreparing } from "@/features/index/index-preparing";
+import { feedbackService } from "@/services/feedback-service";
+import { searchService, type SearchHit } from "@/services/search-service";
 
-import { searchQueryOptions } from "./search-queries";
+const SEARCH_INTERACTION = "deepfix.search.interaction";
 
-const ICONS: Record<string, LucideIcon> = {
-  "Utility bill": FileText,
-  "Municipal water": Droplet,
-  "Escrow utility": Landmark,
-  "Natural gas": Flame,
-  Telecom: Router,
-  Sanitation: Trash2,
-};
+export function SearchPage({
+  indexReady = true,
+  hits,
+  searchedQuery = null,
+}: {
+  indexReady?: boolean;
+  hits?: SearchHit[];
+  searchedQuery?: string | null;
+}) {
+  const [draft, setDraft] = useState(searchedQuery ?? "");
+  const [activeQuery, setActiveQuery] = useState<string | null>(searchedQuery);
+  const [results, setResults] = useState<SearchHit[] | null>(hits ?? null);
+  const [interactionId, setInteractionId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
 
-export function SearchPage({ indexReady = true }: { indexReady?: boolean }) {
-  const { draft, filters, setDraft, submit, resetFilters } = useSearchStore();
-  const { data = [], isFetching } = useQuery({
-    ...searchQueryOptions(filters),
-    placeholderData: keepPreviousData,
-  });
+  useEffect(() => {
+    if (hits !== undefined) return;
+    const stored = window.sessionStorage.getItem(SEARCH_INTERACTION);
+    if (!stored) return;
+    void feedbackService
+      .read(stored)
+      .then((interaction) => {
+        if (interaction.kind !== "retrieval") return;
+        setDraft(interaction.query);
+        setActiveQuery(interaction.query);
+        setResults(interaction.hits);
+        setInteractionId(interaction.interaction_id);
+      })
+      .catch(() => undefined);
+  }, [hits]);
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    const query = draft.trim();
+    if (!query) {
+      setError("Enter a query.");
+      return;
+    }
+    setPending(true);
+    setError(null);
+    try {
+      const response = await searchService.search(query);
+      setActiveQuery(query);
+      setResults(response.hits);
+      setInteractionId(response.interaction_id);
+      window.sessionStorage.setItem(SEARCH_INTERACTION, response.interaction_id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to search. Try again.");
+    } finally {
+      setPending(false);
+    }
+  };
+
   if (!indexReady) {
     return (
       <>
@@ -54,142 +76,80 @@ export function SearchPage({ indexReady = true }: { indexReady?: boolean }) {
     );
   }
 
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    submit();
+  const shown = results ?? [];
+  const empty = activeQuery != null && shown.length === 0 && !pending && !error;
+
+  const choosePassage = async (hit: SearchHit, action: "up" | "down" | "clear") => {
+    const vote: Vote = action === "clear" ? null : action;
+    if (!interactionId) {
+      setResults((current) =>
+        (current ?? []).map((item) => (item.rank === hit.rank ? { ...item, vote } : item)),
+      );
+      return;
+    }
+    const saved = await feedbackService.submit({
+      interactionId,
+      target: "passage",
+      rank: hit.rank,
+      action,
+    });
+    setResults((current) =>
+      (current ?? []).map((item) =>
+        item.rank === hit.rank ? { ...item, vote: saved.vote ?? null } : item,
+      ),
+    );
   };
 
   return (
     <>
       <TopBar title="Search" />
-      <div className="mx-auto flex max-w-5xl flex-col gap-6 px-8 py-6">
-        <Card className="flex flex-col gap-5 p-5 shadow-soft">
-          <form
-            onSubmit={onSubmit}
-            className="flex items-center gap-3 rounded-lg bg-surface-low px-4 py-2"
-          >
-            <Search className="size-5 text-muted-foreground" />
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-10 sm:px-8">
+        <form onSubmit={onSubmit} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm font-medium text-foreground">
+            Search
             <Input
-              aria-label="Search documents"
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              className="border-0 shadow-none"
+              onChange={(event) => setDraft(event.target.value)}
+              className="h-11 text-base md:text-base"
             />
-            <Button type="submit">Search</Button>
-          </form>
-          <div className="flex flex-wrap items-center gap-3">
-            {filters.docType ? <FilterChip label={`Doc type: ${filters.docType}`} /> : null}
-            {filters.period ? <FilterChip label={`Period: ${filters.period}`} /> : null}
-            {filters.minAmount ? (
-              <Badge variant="match">{`> ${formatCurrency(filters.minAmount)}`}</Badge>
-            ) : null}
-            <Button variant="link" size="sm" className="ml-auto" onClick={resetFilters}>
-              Reset filters
-            </Button>
-          </div>
-        </Card>
-
-        <div className="flex items-center justify-between px-1">
-          <p className="text-label-lg text-foreground">
-            Results{" "}
-            <span className="text-label-md text-muted-foreground">({data.length} matches)</span>
+          </label>
+          <Button type="submit" className="h-11" disabled={pending} aria-busy={pending}>
+            {pending ? "Searching" : "Search"}
+          </Button>
+        </form>
+        {error ? (
+          <p role="alert" className="text-sm font-medium text-destructive">
+            {error}
           </p>
-          <p className="text-label-md text-muted-foreground">
-            Sort: <span className="text-foreground">Relevance</span>
+        ) : null}
+        {empty ? (
+          <p className="text-body-md text-muted-foreground">
+            No passages matched &quot;{activeQuery}&quot;.
           </p>
-        </div>
-
-        <ul className="flex flex-col gap-3" aria-busy={isFetching}>
-          {data.map((r) => (
-            <ResultRow key={r.id} result={r} />
-          ))}
-        </ul>
-
-        <div className="flex items-center justify-between px-1 text-label-md text-muted-foreground">
-          <span>
-            Showing 1–{data.length} of {data.length} results
-          </span>
-          <div className="flex gap-2">
-            <Button variant="ghost" size="sm" disabled>
-              Previous
-            </Button>
-            <Button variant="soft" size="sm" disabled>
-              Next
-            </Button>
-          </div>
-        </div>
+        ) : null}
+        {shown.length > 0 ? (
+          <ol className="flex flex-col gap-3">
+            {shown.map((hit) => (
+              <li key={`${hit.doc_id}-${hit.rank}`}>
+                <Card className="flex flex-col gap-2 p-5 shadow-soft">
+                  <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-body-sm text-muted-foreground">
+                    <span className="tabular-nums">{hit.rank}</span>
+                    <span className="text-label-lg text-foreground">{hit.document_filename}</span>
+                    <span className="tabular-nums">{hit.score.toFixed(3)}</span>
+                  </p>
+                  <p className="text-body-md text-foreground">{hit.text}</p>
+                  <VoteButtons
+                    vote={hit.vote ?? null}
+                    upLabel="Mark passage as relevant"
+                    downLabel="Mark passage as not relevant"
+                    onAction={(action) => void choosePassage(hit, action)}
+                  />
+                </Card>
+              </li>
+            ))}
+          </ol>
+        ) : null}
       </div>
     </>
-  );
-}
-
-function FilterChip({ label }: { label: string }) {
-  return (
-    <Badge variant="soft" className="gap-1 py-1.5">
-      {label}
-      <ChevronDown className="size-3" />
-    </Badge>
-  );
-}
-
-function ResultRow({ result }: { result: SearchResult }) {
-  const vote = useSearchStore((s) => s.votes[result.id]);
-  const setVote = useSearchStore((s) => s.vote);
-  const feedback = useMutation({ mutationFn: searchService.sendFeedback });
-  const Icon = ICONS[result.subtype] ?? FileText;
-
-  const handleVote = (v: "up" | "down") => {
-    setVote(result.id, v);
-    feedback.mutate({ documentId: result.id, vote: v });
-  };
-
-  return (
-    <li>
-      <Card className="flex items-center gap-5 px-5 py-5 shadow-soft">
-        <div className="flex size-10 items-center justify-center rounded-lg bg-surface-low text-primary">
-          <Icon className="size-5" />
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-label-lg text-foreground">{result.title}</h2>
-            <Badge variant="match">{formatNumber(result.matchScore)} % match</Badge>
-          </div>
-          <p className="text-body-sm text-muted-foreground">
-            {result.subtype} • {formatDate(result.date)} •{" "}
-            <span className="font-medium text-foreground">{formatCurrency(result.amount)}</span>
-          </p>
-        </div>
-        <Button
-          variant="icon"
-          size="icon"
-          aria-label="Helpful"
-          aria-pressed={vote === "up"}
-          onClick={() => handleVote("up")}
-        >
-          <ThumbsUp className={vote === "up" ? "fill-accent text-primary" : undefined} />
-        </Button>
-        <Button
-          variant="icon"
-          size="icon"
-          aria-label="Not helpful"
-          aria-pressed={vote === "down"}
-          onClick={() => handleVote("down")}
-        >
-          <ThumbsDown
-            className={vote === "down" ? "fill-surface-high text-destructive" : undefined}
-          />
-        </Button>
-      </Card>
-    </li>
-  );
-}
-
-export function SearchPageSkeleton() {
-  return (
-    <div className="flex flex-col gap-3 p-8">
-      {[1, 2, 3].map((i) => (
-        <Skeleton key={i} className="h-20 w-full" />
-      ))}
-    </div>
   );
 }

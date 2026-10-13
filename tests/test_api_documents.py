@@ -75,7 +75,9 @@ def test_workspace_layout_and_champion_seed(
     assert "source_type: directory" in text
 
     champion.write_text("kept: true\n", encoding="utf-8")
-    with TestClient(create_app(document_settings, embed_model=MockEmbedding(embed_dim=16))) as again:
+    with TestClient(
+        create_app(document_settings, embed_model=MockEmbedding(embed_dim=16))
+    ) as again:
         again.get("/health")
     assert champion.read_text(encoding="utf-8") == "kept: true\n"
 
@@ -238,6 +240,7 @@ def test_delete_permissions(client: TestClient, document_settings: Settings) -> 
     client.post("/auth/logout")
     _login(client, "ada@example.com")
     assert client.delete(f"/documents/{doc_id}").status_code == 204
+    client.app.state.index.wait()
     assert client.get("/documents").json() == []
     assert not (document_settings.workspace_dir / "corpus" / f"{doc_id}.json").exists()
     with connect(document_settings.product_db_path) as conn:
@@ -257,3 +260,5 @@ def test_delete_permissions(client: TestClient, document_settings: Settings) -> 
     client.post("/auth/logout")
     _login(client, "admin@example.com")
     assert client.delete(f"/documents/{other_id}").status_code == 204
+    client.app.state.index.wait()
+    assert client.get("/documents").json() == []

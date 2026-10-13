@@ -10,18 +10,27 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import queue
 import shutil
 import threading
+import time
 import uuid
 
 from llama_index.core.base.embeddings.base import BaseEmbedding
+from llama_index.core.base.llms.base import BaseLLM
+from llama_index.core.schema import Document
 from pydantic import ValidationError
 
 from deepfix_rag.accounts import connect
 from deepfix_rag.config.schema import DataSourceType, RAGConfig, RetrievalBackend
 from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.data import DataLoader, _corpus_json_documents
-from deepfix_rag.documents import init_documents
+from deepfix_rag.documents import (
+    document_source,
+    documents_with_status,
+    init_documents,
+    set_document_status,
+)
 from deepfix_rag.pipeline import RAGWorkflow
 from deepfix_rag.service import QueryService
 
@@ -116,13 +125,18 @@ class IndexCoordinator:
         db_path: Path,
         *,
         embed_model: BaseEmbedding | None = None,
+        llm: BaseLLM | None = None,
     ) -> None:
         self.workspace = workspace
         self.db_path = db_path
         self.embed_model = embed_model
+        self.llm = llm
         self._lock = threading.Lock()
         self._rebuilding = False
-        self._thread: threading.Thread | None = None
+        self._rebuild_queued = False
+        self._jobs: queue.Queue[tuple[str, str]] = queue.Queue()
+        self._writer = threading.Thread(target=self._writer_loop, name="index-writer", daemon=True)
+        self._writer.start()
         self._service: QueryService | None = None
         self._build_id: str | None = None
         self._refs: dict[str, int] = {}
@@ -136,12 +150,12 @@ class IndexCoordinator:
             self.refresh()
         except Exception:
             LOGGER.exception("Index startup failed")
+        self._requeue_interrupted()
 
     def close(self) -> None:
-        """Wait for an in-flight rebuild before the process drops the coordinator."""
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=60)
+        """Finish the current index job, then stop the writer."""
+        self._jobs.put(("stop", ""))
+        self._writer.join(timeout=120)
 
     def refresh(self) -> None:
         """Reload the champion and rebuild when the serving index cannot answer."""
@@ -182,6 +196,18 @@ class IndexCoordinator:
         self.start_rebuild()
         return self.snapshot()
 
+    def on_document_added(self, doc_id: str) -> None:
+        """Index one new document, or rebuild when nothing is serving yet."""
+        with self._lock:
+            served = self._service is not None
+        if not served:
+            self.schedule_if_unserved()
+        self._jobs.put(("upsert", doc_id))
+
+    def on_document_removed(self, doc_id: str) -> None:
+        """Queue removal of one document's chunks. Search keeps reading meanwhile."""
+        self._jobs.put(("delete", doc_id))
+
     def schedule_if_unserved(self) -> None:
         """Start the first build after a document arrives and no index is serving."""
         try:
@@ -203,23 +229,24 @@ class IndexCoordinator:
             LOGGER.exception("Could not schedule an index rebuild")
 
     def start_rebuild(self) -> None:
-        """Start one background rebuild, or raise when one is already running."""
+        """Queue one full rebuild, or raise when one is already running or queued."""
         with self._lock:
-            if self._rebuilding:
+            if self._rebuilding or self._rebuild_queued:
                 raise RebuildInProgress
-            self._rebuilding = True
-        thread = threading.Thread(target=self._run_rebuild, name="index-rebuild", daemon=True)
-        self._thread = thread
-        thread.start()
+            self._rebuild_queued = True
+        self._jobs.put(("rebuild", ""))
 
-    def wait(self, timeout: float = 60) -> None:
-        """Block until the current rebuild thread finishes."""
-        thread = self._thread
-        if thread is None:
-            return
-        thread.join(timeout)
-        if thread.is_alive():
+    def wait(self, timeout: float = 120) -> None:
+        """Block until every queued index job has finished."""
+        if timeout < 0:
             raise TimeoutError("The rebuild did not finish.")
+        deadline = time.monotonic() + timeout
+        with self._jobs.all_tasks_done:
+            while self._jobs.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("The rebuild did not finish.")
+                self._jobs.all_tasks_done.wait(remaining)
 
     def checkout(self) -> IndexLease | None:
         """Pin the serving query service so a later switch keeps its build directory."""
@@ -244,7 +271,7 @@ class IndexCoordinator:
     def snapshot(self) -> IndexSnapshot:
         """Return the status shown by the Library and by Search and Ask."""
         with self._lock:
-            rebuilding = self._rebuilding
+            rebuilding = self._rebuilding or self._rebuild_queued
             service = self._service
             build_id = self._build_id if service is not None else None
             error = self._error
@@ -252,7 +279,7 @@ class IndexCoordinator:
         counts = self._document_counts()
         if rebuilding:
             status = "rebuilding"
-        elif counts["updating"] > 0:
+        elif counts["updating"] > 0 or (service is not None and counts["pending"] > 0):
             status = "updating"
         elif service is None and error:
             status = "failed"
@@ -279,7 +306,71 @@ class IndexCoordinator:
         except RebuildInProgress:
             return
 
+    def _writer_loop(self) -> None:
+        while True:
+            kind, doc_id = self._jobs.get()
+            try:
+                if kind == "stop":
+                    return
+                if kind == "rebuild":
+                    self._run_rebuild()
+                elif kind == "upsert":
+                    self._upsert_document(doc_id)
+                elif kind == "delete":
+                    self._delete_document(doc_id)
+            except Exception:
+                LOGGER.exception("Index writer failed a %s job", kind)
+            finally:
+                self._jobs.task_done()
+
+    def _requeue_interrupted(self) -> None:
+        for doc_id in documents_with_status(self.db_path, ("pending", "indexing")):
+            self._jobs.put(("upsert", doc_id))
+        for doc_id in documents_with_status(self.db_path, ("deleting",)):
+            self._jobs.put(("delete", doc_id))
+
+    def _upsert_document(self, doc_id: str) -> None:
+        source = document_source(self.db_path, doc_id)
+        if source is None or self._service is None:
+            return
+        text, filename = source
+        set_document_status(self.db_path, doc_id, "indexing")
+        try:
+            self._service.replace_document(
+                Document(text=text, id_=doc_id, metadata={"doc_id": doc_id, "filename": filename})
+            )
+        except Exception as exc:
+            LOGGER.exception("Could not index %s", doc_id)
+            set_document_status(
+                self.db_path,
+                doc_id,
+                "failed",
+                index_error=str(exc).strip() or "The document could not be indexed.",
+            )
+            return
+        set_document_status(self.db_path, doc_id, "indexed", indexed=True)
+
+    def _delete_document(self, doc_id: str) -> None:
+        try:
+            if self._service is not None:
+                self._service.remove_document(doc_id)
+            (self.workspace / "corpus" / f"{doc_id}.json").unlink(missing_ok=True)
+        except Exception as exc:
+            LOGGER.exception("Could not delete %s from the index", doc_id)
+            set_document_status(
+                self.db_path,
+                doc_id,
+                "deleting",
+                index_error=str(exc).strip()
+                or "The document could not be removed from the index.",
+            )
+            return
+        set_document_status(self.db_path, doc_id, "deleting", deleted=True)
+
     def _run_rebuild(self) -> None:
+        with self._lock:
+            self._rebuilding = True
+            self._rebuild_queued = False
         build_id = uuid.uuid4().hex
         build_dir = self._build_path(build_id)
         try:
@@ -290,7 +381,7 @@ class IndexCoordinator:
             documents = self._indexable_documents(config)
             if not documents:
                 raise IndexEmpty
-            workflow = RAGWorkflow(config=config, embed_model=self.embed_model)
+            workflow = RAGWorkflow(config=config, embed_model=self.embed_model, llm=self.llm)
             index = workflow._build_index(documents)
             chunk_count = workflow._count_index_chunks(index)
             manifest = {
@@ -323,7 +414,7 @@ class IndexCoordinator:
     def _publish(self, build_id: str) -> None:
         build_dir = self._build_path(build_id)
         config = bind_locations(self._read_champion(), self.workspace, build_dir)
-        service = QueryService(config, build_dir, embed_model=self.embed_model)
+        service = QueryService(config, build_dir, embed_model=self.embed_model, llm=self.llm)
         with self._lock:
             previous = self._build_id
             self._service = service
@@ -397,6 +488,13 @@ class IndexCoordinator:
     def _chunk_count(self, build_id: str | None) -> int:
         if build_id is None:
             return 0
+        with self._lock:
+            service = self._service if self._build_id == build_id else None
+        if service is not None:
+            try:
+                return service.chunk_count()
+            except Exception:
+                LOGGER.debug("Could not count live chunks", exc_info=True)
         manifest = self._read_manifest(build_id)
         if manifest is None:
             return 0

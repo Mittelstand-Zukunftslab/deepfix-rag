@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     PRODUCT_DATA_DIR: Path = Path.home() / ".deepfix" / "product"
     WORKSPACE_DIR: Path = Path.home() / ".deepfix" / "workspace"
     ALLOWED_EMAIL_DOMAINS: str = ""
+    MAX_DISPLAYED_HITS: int = 10
 
     @property
     def product_db_path(self) -> Path:

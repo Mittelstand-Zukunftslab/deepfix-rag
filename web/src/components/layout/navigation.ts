@@ -19,7 +19,7 @@ export interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { to: "/search", label: "Search", icon: Search },
-  { to: "/chat", label: "Chat", icon: MessageSquare },
+  { to: "/chat", label: "Ask", icon: MessageSquare },
   { to: "/upload", label: "Library", icon: Library },
   { to: "/admin", label: "Admin", icon: ShieldCheck, badge: "OPS" },
   { to: "/status", label: "Status", icon: Activity },

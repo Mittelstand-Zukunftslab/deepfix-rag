@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
+import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, RetrieveData, RetrieveErrors, RetrieveResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -19,6 +19,13 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
 };
 
 /**
+ * Summarize feedback
+ *
+ * Return vote, dataset, and outbox counts. Members receive 403.
+ */
+export const getFeedbackSummary = <ThrowOnError extends boolean = false>(options?: Options<GetFeedbackSummaryData, ThrowOnError>): RequestResult<GetFeedbackSummaryResponses, GetFeedbackSummaryErrors, ThrowOnError> => (options?.client ?? client).get<GetFeedbackSummaryResponses, GetFeedbackSummaryErrors, ThrowOnError>({ url: '/admin/feedback/summary', ...options });
+
+/**
  * Rebuild the index
  *
  * Start a full repair rebuild. The current index keeps serving until it succeeds.
@@ -32,6 +39,20 @@ export const rebuildIndex = <ThrowOnError extends boolean = false>(options?: Opt
  */
 export const updateUserRole = <ThrowOnError extends boolean = false>(options: Options<UpdateUserRoleData, ThrowOnError>): RequestResult<UpdateUserRoleResponses, UpdateUserRoleErrors, ThrowOnError> => (options.client ?? client).patch<UpdateUserRoleResponses, UpdateUserRoleErrors, ThrowOnError>({
     url: '/admin/users/{user_id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Ask a question
+ *
+ * Answer one question from the current index. Earlier questions are not included.
+ */
+export const askQuestion = <ThrowOnError extends boolean = false>(options: Options<AskQuestionData, ThrowOnError>): RequestResult<AskQuestionResponses, AskQuestionErrors, ThrowOnError> => (options.client ?? client).post<AskQuestionResponses, AskQuestionErrors, ThrowOnError>({
+    url: '/ask',
     ...options,
     headers: {
         'Content-Type': 'application/json',
@@ -111,6 +132,20 @@ export const createDocument = <ThrowOnError extends boolean = false>(options: Op
 export const deleteDocument = <ThrowOnError extends boolean = false>(options: Options<DeleteDocumentData, ThrowOnError>): RequestResult<DeleteDocumentResponses, DeleteDocumentErrors, ThrowOnError> => (options.client ?? client).delete<DeleteDocumentResponses, DeleteDocumentErrors, ThrowOnError>({ url: '/documents/{doc_id}', ...options });
 
 /**
+ * Vote on a passage or an answer
+ *
+ * Store one vote event and return. MLflow is updated later by the outbox.
+ */
+export const submitFeedback = <ThrowOnError extends boolean = false>(options: Options<SubmitFeedbackData, ThrowOnError>): RequestResult<SubmitFeedbackResponses, SubmitFeedbackErrors, ThrowOnError> => (options.client ?? client).post<SubmitFeedbackResponses, SubmitFeedbackErrors, ThrowOnError>({
+    url: '/feedback',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Liveness probe
  *
  * Report that the process is up. Touches no LLM, embedding, MLflow, or Hermes backend.
@@ -123,3 +158,24 @@ export const health = <ThrowOnError extends boolean = false>(options?: Options<H
  * Return the shared index status for any signed-in user.
  */
 export const getIndexStatus = <ThrowOnError extends boolean = false>(options?: Options<GetIndexStatusData, ThrowOnError>): RequestResult<GetIndexStatusResponses, GetIndexStatusErrors, ThrowOnError> => (options?.client ?? client).get<GetIndexStatusResponses, GetIndexStatusErrors, ThrowOnError>({ url: '/index', ...options });
+
+/**
+ * Read a stored search or ask
+ *
+ * Return one interaction with the current user's votes. Used after a refresh.
+ */
+export const getInteraction = <ThrowOnError extends boolean = false>(options: Options<GetInteractionData, ThrowOnError>): RequestResult<GetInteractionResponses, GetInteractionErrors, ThrowOnError> => (options.client ?? client).get<GetInteractionResponses, GetInteractionErrors, ThrowOnError>({ url: '/interactions/{interaction_id}', ...options });
+
+/**
+ * Search the corpus
+ *
+ * Return ranked passages. This route never calls the generation model.
+ */
+export const retrieve = <ThrowOnError extends boolean = false>(options: Options<RetrieveData, ThrowOnError>): RequestResult<RetrieveResponses, RetrieveErrors, ThrowOnError> => (options.client ?? client).post<RetrieveResponses, RetrieveErrors, ThrowOnError>({
+    url: '/retrieval',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});

@@ -223,6 +223,20 @@ def list_documents(
     return [_record(row, user_id, role) for row in rows]
 
 
+def document_filenames(db_path: Path, doc_ids: list[str]) -> dict[str, str]:
+    """Return filenames for the given document ids. Missing ids are omitted."""
+    if not doc_ids:
+        return {}
+    init_documents(db_path)
+    placeholders = ", ".join("?" for _ in doc_ids)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT doc_id, filename FROM documents WHERE doc_id IN ({placeholders})",
+            doc_ids,
+        ).fetchall()
+    return {row["doc_id"]: row["filename"] for row in rows}
+
+
 def delete_document(
     db_path: Path,
     workspace: Path,
@@ -230,7 +244,8 @@ def delete_document(
     user_id: str,
     role: str,
 ) -> None:
-    """Soft-delete a document and remove its corpus file."""
+    """Mark a document deleting. The index writer removes its chunks and corpus file."""
+    del workspace  # The writer deletes the corpus file after the chunks are gone.
     init_documents(db_path)
     with connect(db_path) as conn:
         row = conn.execute("SELECT * FROM documents WHERE doc_id = ?", (doc_id,)).fetchone()
@@ -238,11 +253,104 @@ def delete_document(
             raise UnknownDocumentError
         if role != "admin" and row["uploaded_by"] != user_id:
             raise DeleteForbiddenError
+        if row["status"] == "deleting":
+            return
         conn.execute(
-            "UPDATE documents SET deleted_at = ? WHERE doc_id = ?",
-            (_iso(_now()), doc_id),
+            "UPDATE documents SET status = 'deleting', index_error = NULL WHERE doc_id = ?",
+            (doc_id,),
         )
-    (workspace / "corpus" / f"{doc_id}.json").unlink(missing_ok=True)
+
+
+def document_source(db_path: Path, doc_id: str) -> tuple[str, str] | None:
+    """Return text and filename for a document that can still be indexed."""
+    init_documents(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT text, filename, status, deleted_at
+            FROM documents
+            WHERE doc_id = ?
+            """,
+            (doc_id,),
+        ).fetchone()
+    if row is None or row["deleted_at"] is not None:
+        return None
+    if row["status"] in {"deleting", "failed"} and not row["text"]:
+        return None
+    if row["status"] == "deleting":
+        return None
+    return row["text"], row["filename"]
+
+
+def documents_with_status(db_path: Path, statuses: tuple[str, ...]) -> list[str]:
+    """Return ids of non-deleted documents in one of ``statuses``."""
+    if not statuses:
+        return []
+    init_documents(db_path)
+    placeholders = ", ".join("?" for _ in statuses)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT doc_id FROM documents
+            WHERE deleted_at IS NULL AND status IN ({placeholders})
+            ORDER BY created_at
+            """,
+            statuses,
+        ).fetchall()
+    return [row["doc_id"] for row in rows]
+
+
+def set_document_status(
+    db_path: Path,
+    doc_id: str,
+    status: DocumentStatus,
+    *,
+    index_error: str | None = None,
+    indexed: bool = False,
+    deleted: bool = False,
+) -> None:
+    """Move one document along the indexing state machine."""
+    init_documents(db_path)
+    moment = _iso(_now())
+    with connect(db_path) as conn:
+        if status == "deleting" and not deleted:
+            conn.execute(
+                """
+                UPDATE documents
+                SET index_error = ?
+                WHERE doc_id = ? AND deleted_at IS NULL
+                """,
+                (index_error, doc_id),
+            )
+            return
+        if deleted:
+            conn.execute(
+                """
+                UPDATE documents
+                SET status = ?, index_error = ?, deleted_at = ?
+                WHERE doc_id = ? AND deleted_at IS NULL
+                """,
+                (status, index_error, moment, doc_id),
+            )
+            return
+        if indexed:
+            conn.execute(
+                """
+                UPDATE documents
+                SET status = ?, index_error = ?, indexed_at = ?
+                WHERE doc_id = ? AND deleted_at IS NULL AND status != 'deleting'
+                """,
+                (status, index_error, moment, doc_id),
+            )
+            return
+        conn.execute(
+            """
+            UPDATE documents
+            SET status = ?, index_error = ?
+            WHERE doc_id = ? AND deleted_at IS NULL AND status != 'deleting'
+            """,
+            (status, index_error, doc_id),
+        )
 
 
 def _seed_champion(workspace: Path, default_config: Path) -> Path:
