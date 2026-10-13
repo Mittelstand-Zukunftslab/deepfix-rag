@@ -135,8 +135,17 @@ def test_prompt_hides_holdout_and_thresholds_match_the_defaults() -> None:
         run_id="run1",
         workspace=Path("/data/workspace"),
         dev_path=Path("/data/workspace/feedback/snap/feedback_dev.jsonl"),
+        min_primary_delta=0.025,
     )
     assert "holdout" not in prompt.lower()
+    assert "at least 0.025" in prompt
+    stricter = optimization_prompt(
+        run_id="run1",
+        workspace=Path("/data/workspace"),
+        dev_path=Path("/data/workspace/feedback/snap/feedback_dev.jsonl"),
+        min_primary_delta=0.1,
+    )
+    assert "at least 0.1 " in stricter
     assert "deepfix" in prompt and "--json" in prompt
     assert "workspace" in prompt
     assert "--dataset /data/workspace/feedback/snap/feedback_dev.jsonl" in prompt
