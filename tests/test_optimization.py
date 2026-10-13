@@ -1,4 +1,4 @@
-"""Optimization runs skip, conflict, and finish without starting Hermes."""
+"""Optimization runs skip, conflict, and finish without starting OpenHands."""
 
 import json
 import os

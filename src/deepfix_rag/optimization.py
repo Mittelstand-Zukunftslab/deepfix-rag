@@ -1,7 +1,7 @@
 """Optimization runs owned by the API.
 
 The same function starts a scheduled run and a manual one. It exports a feedback
-snapshot, skips when too little is labeled, and otherwise launches one Hermes child.
+snapshot, skips when too little is labeled, and otherwise launches one OpenHands child.
 When the child names a candidate, API code scores it and may promote it.
 """
 
@@ -20,7 +20,12 @@ import uuid
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from deepfix_rag.accounts import connect
-from deepfix_rag.agent_process import HermesUnavailable, interpreter_imports_agent, run_agent_job
+from deepfix_rag.agent_process import (
+    AGENT_UNAVAILABLE_MESSAGE,
+    AgentUnavailable,
+    interpreter_imports_agent,
+    run_agent_job,
+)
 from deepfix_rag.config.settings import LOGGER, Settings
 from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.feedback import export_feedback
@@ -105,7 +110,7 @@ def settings_from(
 
     env = os.environ if source_env is None else source_env
     model, base_url, api_key = openrouter_settings(env)
-    raw_interpreter = settings.HERMES_PYTHON
+    raw_interpreter = settings.OPENHANDS_PYTHON
     return OptimizationSettings(
         min_dev_questions=settings.OPTIMIZATION_MIN_DEV_QUESTIONS,
         min_new_dev_questions=settings.OPTIMIZATION_MIN_NEW_DEV_QUESTIONS,
@@ -218,7 +223,7 @@ def start_optimization_run(
             options,
         )
         if reason is None and not _can_launch(options):
-            raise HermesUnavailable("Hermes is not set up on this server, so a run cannot start.")
+            raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
         status: RunStatus = "skipped" if reason is not None else "running"
         conn.execute(
             """
@@ -374,7 +379,7 @@ def _start_thread(
 ) -> None:
     interpreter = options.interpreter
     if interpreter is None:
-        raise HermesUnavailable("Hermes is not set up on this server, so a run cannot start.")
+        raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
 
     def _target() -> None:
         try:
@@ -457,7 +462,7 @@ _import_cache: dict[str, bool] = {}
 
 
 def agent_available(options: OptimizationSettings) -> bool:
-    """True when Hermes can be started. The import check is cached for this process."""
+    """True when OpenHands can be started. The import check is cached for this process."""
     if not _interpreter_ready(options.interpreter) or options.interpreter is None:
         return False
     if not options.api_key or not options.base_url or not options.model:

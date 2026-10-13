@@ -183,7 +183,7 @@ export const submitFeedback = <ThrowOnError extends boolean = false>(options: Op
 /**
  * Liveness probe
  *
- * Report that the process is up. Touches no LLM, embedding, MLflow, or Hermes backend.
+ * Report that the process is up. Touches no LLM, embedding, MLflow, or agent backend.
  */
 export const health = <ThrowOnError extends boolean = false>(options?: Options<HealthData, ThrowOnError>): RequestResult<HealthResponses, unknown, ThrowOnError> => (options?.client ?? client).get<HealthResponses, unknown, ThrowOnError>({ url: '/health', ...options });
 

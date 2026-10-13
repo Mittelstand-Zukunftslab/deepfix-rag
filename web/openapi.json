@@ -1986,7 +1986,7 @@
     },
     "/health": {
       "get": {
-        "description": "Report that the process is up. Touches no LLM, embedding, MLflow, or Hermes backend.",
+        "description": "Report that the process is up. Touches no LLM, embedding, MLflow, or agent backend.",
         "operationId": "health",
         "responses": {
           "200": {
