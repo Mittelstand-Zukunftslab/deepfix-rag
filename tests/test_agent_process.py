@@ -74,7 +74,9 @@ def test_openrouter_key_comes_from_deepfix_llm_api_key() -> None:
 
 
 @pytest.mark.unit
-def test_child_env_keeps_the_openrouter_key_and_drops_secrets(tmp_path: Path) -> None:
+def test_child_env_keeps_openrouter_and_retrieval_settings_and_drops_secrets(
+    tmp_path: Path,
+) -> None:
     api_bin = tmp_path / "bin"
     private = tmp_path / "private"
     source = {
@@ -88,6 +90,19 @@ def test_child_env_keeps_the_openrouter_key_and_drops_secrets(tmp_path: Path) ->
         "DEEPFIX_SERVER_URL": "http://127.0.0.1:8844",
         "PRODUCT_DATA_DIR": str(private),
         "SECRET_SESSION_TOKEN": "session-secret",
+        "EMBEDDING_BASE_URL": "https://embed.example/v1",
+        "EMBEDDING_API_KEY": "embedding-key",
+        "EMBEDDING_MODEL": "embed-model",
+        "COHERE_BASE_URL": "https://cohere.example/v2",
+        "COHERE_API_KEY": "cohere-key",
+        "COHERE_MODEL": "rerank-model",
+        "MLFLOW_DEV_RAG_EXPERIMENT": "dev-rag",
+        "LLM_BASE_URL": "https://llm.example/v1",
+        "LLM_MODEL": "product-model",
+        "LLM_JUDGE_MODEL": "judge-model",
+        "S3_ACCESS_KEY": "s3-secret",
+        "HF_TOKEN": "hf-secret",
+        "DEEPFIX_API_KEY": "api-secret",
     }
     env = build_child_env(source, api_bin)
     assert env["PATH"].startswith(str(api_bin) + os.pathsep)
@@ -99,6 +114,38 @@ def test_child_env_keeps_the_openrouter_key_and_drops_secrets(tmp_path: Path) ->
     assert "SECRET_SESSION_TOKEN" not in env
     assert str(private) not in " ".join(env.values())
     assert "session-secret" not in " ".join(env.values())
+    for key in (
+        "EMBEDDING_BASE_URL",
+        "EMBEDDING_API_KEY",
+        "EMBEDDING_MODEL",
+        "COHERE_BASE_URL",
+        "COHERE_API_KEY",
+        "COHERE_MODEL",
+        "MLFLOW_DEV_RAG_EXPERIMENT",
+    ):
+        assert env[key] == source[key]
+    for key in (
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_JUDGE_MODEL",
+        "S3_ACCESS_KEY",
+        "HF_TOKEN",
+        "DEEPFIX_API_KEY",
+    ):
+        assert key not in env
+    assert "product-key" not in " ".join(env.values())
+
+
+@pytest.mark.unit
+def test_child_env_omits_unset_retrieval_settings(tmp_path: Path) -> None:
+    env = build_child_env(
+        {"PATH": "/usr/bin", "EMBEDDING_API_KEY": "", "COHERE_MODEL": "rerank-model"},
+        tmp_path / "bin",
+    )
+    assert env["COHERE_MODEL"] == "rerank-model"
+    assert "EMBEDDING_API_KEY" not in env
+    assert "COHERE_API_KEY" not in env
+    assert "MLFLOW_DEV_RAG_EXPERIMENT" not in env
 
 
 @pytest.mark.unit
@@ -140,6 +187,18 @@ def test_runner_routes_openrouter_models_and_names_conversations() -> None:
     assert isinstance(first, uuid.UUID)
     assert first == runner.conversation_id_for("run1")
     assert first != runner.conversation_id_for("run2")
+
+
+@pytest.mark.unit
+def test_runner_system_message_states_the_step_budget() -> None:
+    message = _runner_module().system_message("run1", 15)
+    assert "runs/run1/" in message
+    assert "15 agent steps" in message
+    assert "without calling finish" in message
+    assert "10 to 12 steps" in message
+    assert "timeout" in message and "30 seconds" in message
+    assert "finish action" in message
+    assert "7 agent steps" in _runner_module().system_message("run1", 7)
 
 
 @pytest.mark.unit

@@ -27,7 +27,9 @@ Set `OPENHANDS_PYTHON` to the interpreter above. Without it, the Optimization sc
 
 The API writes the OpenRouter key from `DEEPFIX_LLM_API_KEY` into the run's `job.json`. The base URL is `DEEPFIX_LLM_BASE_URL` (default `https://openrouter.ai/api/v1`) and the model is `DEEPFIX_LLM_MODEL_NAME`. The runner adds the `openrouter/` prefix that LiteLLM needs to route an OpenRouter model, so `openai/gpt-6-luna-pro` becomes `openrouter/openai/gpt-6-luna-pro`. The product `LLM_API_KEY` is not copied into the child.
 
-The rest of the child environment is `DEEPFIX_LLM_*`, `MLFLOW_TRACKING_URI`, `DEEPFIX_SERVER_URL`, `NO_COLOR=1`, `MLFLOW_DISABLE_AGENT_HINT=1`, and a `PATH` whose first entry is the API virtualenv `bin/`, so `deepfix` is the same revision as the API. The product database path, the API-private directory, and session secrets are not in the environment or the prompt.
+The rest of the child environment is `DEEPFIX_LLM_*`, `MLFLOW_TRACKING_URI`, `DEEPFIX_SERVER_URL`, the embedding and rerank settings (`EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `COHERE_BASE_URL`, `COHERE_API_KEY`, `COHERE_MODEL`), `MLFLOW_DEV_RAG_EXPERIMENT`, `NO_COLOR=1`, `MLFLOW_DISABLE_AGENT_HINT=1`, and a `PATH` whose first entry is the API virtualenv `bin/`, so `deepfix` is the same revision as the API. The product database path, the API-private directory, and session secrets are not in the environment or the prompt. Each passthrough variable is copied only when it is set in the API's environment.
+
+The embedding and Cohere settings are in the child because retrieval-only evaluation embeds queries and reranking calls Cohere. The product generation LLM (`LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_JUDGE_MODEL`) stays out, as do `S3_*`, `HF_TOKEN`, and `DEEPFIX_API_KEY`. The agent therefore has no generation LLM, so it cannot measure query expansion (`retrieval.query_expansion_num` must stay at 1) or any generation metric. Reranking and backend or fusion changes can be measured.
 
 ## MLflow traces
 

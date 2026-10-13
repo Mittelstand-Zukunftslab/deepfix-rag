@@ -21,6 +21,13 @@ _PASSTHROUGH = (
     "DEEPFIX_LLM_MODEL_NAME",
     "MLFLOW_TRACKING_URI",
     "DEEPFIX_SERVER_URL",
+    "EMBEDDING_BASE_URL",
+    "EMBEDDING_API_KEY",
+    "EMBEDDING_MODEL",
+    "COHERE_BASE_URL",
+    "COHERE_API_KEY",
+    "COHERE_MODEL",
+    "MLFLOW_DEV_RAG_EXPERIMENT",
 )
 _IMPORT_CHECK = "import openhands.sdk, openhands.tools.file_editor, openhands.tools.terminal"
 AGENT_UNAVAILABLE_MESSAGE = "OpenHands is not set up on this server, so a run cannot start."
@@ -62,6 +69,10 @@ def openrouter_settings(source: Mapping[str, str]) -> tuple[str, str, str | None
 
 def build_child_env(source: Mapping[str, str], api_bin: Path) -> dict[str, str]:
     """Allowlisted environment for the agent child.
+
+    Besides the agent's own ``DEEPFIX_LLM_*`` settings, the child gets the embedding
+    and Cohere settings, because retrieval-only evaluation and reranking need them.
+    The product generation LLM (``LLM_*``), storage and ``HF_TOKEN`` secrets stay out.
 
     ``PATH`` starts with the API virtualenv ``bin`` so ``deepfix`` is this
     revision. Terminal output is plain text, because the agent reads it.

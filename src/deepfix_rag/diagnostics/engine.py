@@ -157,7 +157,9 @@ def run_diagnostics(
         data_updates["path_or_repo"] = str(dataset)
         data_updates["source_type"] = None
     if data_updates:
-        resolved_config.data = resolved_config.data.model_copy(update=data_updates)
+        resolved_config.data = DataLoaderConfig.model_validate(
+            {**resolved_config.data.model_dump(), **data_updates}
+        )
 
     ir_ds: InformationRetrievalDataset = prepare_ir_dataset(
         dataset_name=Path(resolved_config.data.path_or_repo).stem or "rag_benchmark",

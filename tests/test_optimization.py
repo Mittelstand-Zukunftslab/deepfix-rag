@@ -23,6 +23,7 @@ from deepfix_rag.optimization import (
     init_optimization,
     optimization_prompt,
     skill_path,
+    skills_dir,
     start_optimization_run,
     wait_for_run,
 )
@@ -134,9 +135,27 @@ def test_prompt_hides_holdout_and_thresholds_match_the_defaults() -> None:
         run_id="run1",
         workspace=Path("/data/workspace"),
         dev_path=Path("/data/workspace/feedback/snap/feedback_dev.jsonl"),
+        min_primary_delta=0.025,
     )
     assert "holdout" not in prompt.lower()
+    assert "at least 0.025" in prompt
+    stricter = optimization_prompt(
+        run_id="run1",
+        workspace=Path("/data/workspace"),
+        dev_path=Path("/data/workspace/feedback/snap/feedback_dev.jsonl"),
+        min_primary_delta=0.1,
+    )
+    assert "at least 0.1 " in stricter
     assert "deepfix" in prompt and "--json" in prompt
+    assert "workspace" in prompt
+    assert "--dataset /data/workspace/feedback/snap/feedback_dev.jsonl" in prompt
+    assert "/data/workspace/runs/run1/candidate.yaml" in prompt
+    assert "/data/workspace/runs/run1/idx" in prompt
+    assert str(skills_dir()) in prompt
+    assert skills_dir() == skill_path().parent.parent
+    assert (skills_dir() / "rerank-calibration" / "SKILL.md").is_file()
+    assert "candidate_config_path null" in prompt
+    assert "one hypothesis" in prompt.lower()
     assert "dense" in prompt and "hybrid" in prompt and "bm25" in prompt
     assert "result.json" in prompt
     assert "complete only when" in prompt

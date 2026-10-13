@@ -362,7 +362,7 @@ class EvalConfig(BaseModel):
     cutoff_k: int = Field(
         default=5,
         ge=1,
-        description="Evaluation cutoff rank k for retrieval measures (nDCG@k, R@k). Defaults to retrieval.top_k if not specified.",
+        description="Evaluation cutoff rank k for retrieval measures (nDCG@k, R@k, P@k). Independent of retrieval.top_k: only the first k retrieved documents are scored.",
     )
 
 
