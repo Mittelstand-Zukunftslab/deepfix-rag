@@ -1,7 +1,10 @@
 """deepfix eval subcommand."""
 
 import asyncio
+import contextlib
 from pathlib import Path
+import sys
+from typing import Any
 
 import typer
 
@@ -14,7 +17,7 @@ from deepfix_rag.cli.ui import (
 )
 from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.data import QAValidationError
-from deepfix_rag.evaluation.runner import run_evaluation
+from deepfix_rag.evaluation.runner import EvaluationSummary, run_evaluation
 
 DELTA_KEYS = [
     "faithfulness",
@@ -66,6 +69,57 @@ def compute_error_reduction(
     return reduction_pct, target_met
 
 
+def _check_case_errors(
+    summary: EvaluationSummary,
+    label: str,
+    json_output: bool,
+) -> None:
+    """Fail when no case was evaluated; warn on stderr when only some cases errored."""
+    if summary.errors == 0:
+        return
+    if summary.errors == summary.scored:
+        first_error = summary.error_details[0].get("error") if summary.error_details else None
+        emit_error(
+            f"{label}: all {summary.errors} cases errored, nothing was evaluated. "
+            f"First error: {first_error}",
+            code=EXIT_RUNTIME_ERROR,
+            json_output=json_output,
+        )
+    typer.secho(
+        f"Warning: {label}: {summary.errors} of {summary.scored} cases errored; "
+        "errored cases count as misses in the scores.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+
+
+def _evaluate(
+    label: str,
+    json_output: bool,
+    **evaluation_kwargs: Any,
+) -> EvaluationSummary:
+    """Run one evaluation. With --json, MLflow console output goes to stderr."""
+    try:
+        if json_output:
+            with contextlib.redirect_stdout(sys.stderr):
+                summary = asyncio.run(run_evaluation(**evaluation_kwargs))
+        else:
+            summary = asyncio.run(run_evaluation(**evaluation_kwargs))
+    except typer.Exit:
+        raise
+    except QAValidationError as e:
+        emit_error(str(e), code=EXIT_VALIDATION_ERROR, json_output=json_output)
+    except RuntimeError as e:
+        emit_error(str(e), code=EXIT_RUNTIME_ERROR, json_output=json_output)
+    except Exception as e:
+        emit_error(
+            f"{label} failed: {e}",
+            code=EXIT_RUNTIME_ERROR,
+            json_output=json_output,
+        )
+    return summary
+
+
 def eval_cmd(
     config: Path = typer.Option(
         ..., "--config", "-c", help="Path to RAG configuration YAML file."
@@ -86,7 +140,11 @@ def eval_cmd(
         None,
         "--index-dir",
         "-i",
-        help="Directory containing the built vector/lexical index (overrides config.retrieval.lancedb_index_dir).",
+        help=(
+            "Directory containing the built vector/lexical index (overrides "
+            "config.retrieval.lancedb_index_dir for the candidate only). The --compare "
+            "baseline is always scored on the index in its own config."
+        ),
     ),
     compare: Path | None = typer.Option(
         None,
@@ -154,30 +212,18 @@ def eval_cmd(
 
     target_retrieval_only = rag_config.retrieval_only or retrieval_only
 
-    try:
-        candidate_summary = asyncio.run(
-            run_evaluation(
-                dataset_path=target_dataset,
-                config=rag_config,
-                index_dir=target_index_dir,
-                split=target_split,
-                limit=target_limit,
-                max_concurrency=target_concurrency,
-                retrieval_only=target_retrieval_only,
-            )
-        )
-    except typer.Exit:
-        raise
-    except QAValidationError as e:
-        emit_error(str(e), code=EXIT_VALIDATION_ERROR, json_output=json_output)
-    except RuntimeError as e:
-        emit_error(str(e), code=EXIT_RUNTIME_ERROR, json_output=json_output)
-    except Exception as e:
-        emit_error(
-            f"Evaluation failed: {e}",
-            code=EXIT_RUNTIME_ERROR,
-            json_output=json_output,
-        )
+    candidate_summary = _evaluate(
+        "Evaluation",
+        json_output,
+        dataset_path=target_dataset,
+        config=rag_config,
+        index_dir=target_index_dir,
+        split=target_split,
+        limit=target_limit,
+        max_concurrency=target_concurrency,
+        retrieval_only=target_retrieval_only,
+    )
+    _check_case_errors(candidate_summary, "Evaluation", json_output)
 
     candidate_result = {k: v for k, v in candidate_summary.items() if k != "rows"}
 
@@ -204,31 +250,18 @@ def eval_cmd(
             json_output=json_output,
         )
 
-    try:
-        baseline_retrieval_only = retrieval_only or baseline_config.retrieval_only
-        baseline_summary = asyncio.run(
-            run_evaluation(
-                dataset_path=target_dataset,
-                config=baseline_config,
-                index_dir=target_index_dir,
-                split=target_split,
-                limit=target_limit,
-                max_concurrency=target_concurrency,
-                retrieval_only=baseline_retrieval_only,
-            )
-        )
-    except typer.Exit:
-        raise
-    except QAValidationError as e:
-        emit_error(str(e), code=EXIT_VALIDATION_ERROR, json_output=json_output)
-    except RuntimeError as e:
-        emit_error(str(e), code=EXIT_RUNTIME_ERROR, json_output=json_output)
-    except Exception as e:
-        emit_error(
-            f"Baseline evaluation failed: {e}",
-            code=EXIT_RUNTIME_ERROR,
-            json_output=json_output,
-        )
+    baseline_summary = _evaluate(
+        "Baseline evaluation",
+        json_output,
+        dataset_path=target_dataset,
+        config=baseline_config,
+        index_dir=None,
+        split=target_split,
+        limit=target_limit,
+        max_concurrency=target_concurrency,
+        retrieval_only=retrieval_only or baseline_config.retrieval_only,
+    )
+    _check_case_errors(baseline_summary, "Baseline evaluation", json_output)
 
     baseline_result = {k: v for k, v in baseline_summary.items() if k != "rows"}
 

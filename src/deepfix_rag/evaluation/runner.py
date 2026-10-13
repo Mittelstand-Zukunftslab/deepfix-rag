@@ -199,6 +199,7 @@ class EvaluationSummary:
     metrics: dict[str, float] = field(default_factory=dict)
     rows: list[dict[str, Any]] = field(default_factory=list)
     error_details: list[dict[str, Any]] = field(default_factory=list)
+    mlflow_run_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         res: dict[str, Any] = {
@@ -209,6 +210,7 @@ class EvaluationSummary:
             "retrieval_induced_error_count": self.retrieval_induced_error_count,
             "retrieval_induced_error_rate": self.retrieval_induced_error_rate,
             "failure_distribution": self.failure_distribution,
+            "mlflow_run_id": self.mlflow_run_id,
         }
         res.update(self.metrics)
         res["rows"] = self.rows
@@ -534,8 +536,12 @@ class EvaluationTracker:
         params: dict[str, Any],
         summary: EvaluationSummary,
     ) -> None:
-        """Log parameters, sanitized metrics, and table artifacts inside an MLflow run."""
-        with mlflow.start_run(run_name=run_name):
+        """Log parameters, sanitized metrics, and table artifacts inside an MLflow run.
+
+        The id of the MLflow run is stored on ``summary.mlflow_run_id``.
+        """
+        with mlflow.start_run(run_name=run_name) as run:
+            summary.mlflow_run_id = run.info.run_id
             mlflow.log_params(params, synchronous=False)
 
             flat_summary = summary.to_dict()
