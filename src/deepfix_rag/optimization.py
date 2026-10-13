@@ -1,7 +1,7 @@
 """Optimization runs owned by the API.
 
 The same function starts a scheduled run and a manual one. It exports a feedback
-snapshot, skips when too little is labeled, and otherwise launches one Hermes child.
+snapshot, skips when too little is labeled, and otherwise launches one OpenHands child.
 When the child names a candidate, API code scores it and may promote it.
 """
 
@@ -20,7 +20,12 @@ import uuid
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from deepfix_rag.accounts import connect
-from deepfix_rag.agent_process import HermesUnavailable, interpreter_imports_agent, run_agent_job
+from deepfix_rag.agent_process import (
+    AGENT_UNAVAILABLE_MESSAGE,
+    AgentUnavailable,
+    interpreter_imports_agent,
+    run_agent_job,
+)
 from deepfix_rag.config.settings import LOGGER, Settings
 from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.feedback import export_feedback
@@ -87,6 +92,7 @@ class OptimizationSettings:
     min_holdout_questions: int = 15
     min_primary_delta: float = 0.025
     timeout_seconds: float = 3 * 60 * 60
+    goal_rounds: int = 3
     interpreter: Path | None = None
     model: str = "openai/gpt-6-luna-pro"
     base_url: str | None = "https://openrouter.ai/api/v1"
@@ -105,13 +111,14 @@ def settings_from(
 
     env = os.environ if source_env is None else source_env
     model, base_url, api_key = openrouter_settings(env)
-    raw_interpreter = settings.HERMES_PYTHON
+    raw_interpreter = settings.OPENHANDS_PYTHON
     return OptimizationSettings(
         min_dev_questions=settings.OPTIMIZATION_MIN_DEV_QUESTIONS,
         min_new_dev_questions=settings.OPTIMIZATION_MIN_NEW_DEV_QUESTIONS,
         min_holdout_questions=settings.OPTIMIZATION_MIN_HOLDOUT_QUESTIONS,
         min_primary_delta=settings.OPTIMIZATION_MIN_PRIMARY_DELTA,
         timeout_seconds=settings.OPTIMIZATION_RUN_TIMEOUT_HOURS * 60 * 60,
+        goal_rounds=settings.OPTIMIZATION_GOAL_ROUNDS,
         interpreter=Path(raw_interpreter) if raw_interpreter else None,
         model=model,
         base_url=base_url,
@@ -152,7 +159,10 @@ def optimization_prompt(
         f"Finish by writing {run_dir / 'result.json'} as JSON with the keys "
         "candidate_config_path (a path or null), primary_metric, summary, "
         "and mlflow_run_id (a string or null). "
-        "Set candidate_config_path to null when you do not recommend a change."
+        "Set candidate_config_path to null when you do not recommend a change. "
+        "The task is complete only when that file exists with those keys and this "
+        "conversation shows the deepfix eval output that primary_metric comes from "
+        "and the output of printing that file."
     )
 
 
@@ -218,7 +228,7 @@ def start_optimization_run(
             options,
         )
         if reason is None and not _can_launch(options):
-            raise HermesUnavailable("Hermes is not set up on this server, so a run cannot start.")
+            raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
         status: RunStatus = "skipped" if reason is not None else "running"
         conn.execute(
             """
@@ -374,7 +384,7 @@ def _start_thread(
 ) -> None:
     interpreter = options.interpreter
     if interpreter is None:
-        raise HermesUnavailable("Hermes is not set up on this server, so a run cannot start.")
+        raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
 
     def _target() -> None:
         try:
@@ -386,6 +396,7 @@ def _start_thread(
                 base_url=options.base_url,
                 api_key=options.api_key,
                 interpreter=interpreter,
+                goal_rounds=options.goal_rounds,
                 timeout_seconds=options.timeout_seconds,
                 runner_script=options.runner_script,
                 source_env=options.source_env,
@@ -457,7 +468,7 @@ _import_cache: dict[str, bool] = {}
 
 
 def agent_available(options: OptimizationSettings) -> bool:
-    """True when Hermes can be started. The import check is cached for this process."""
+    """True when OpenHands can be started. The import check is cached for this process."""
     if not _interpreter_ready(options.interpreter) or options.interpreter is None:
         return False
     if not options.api_key or not options.base_url or not options.model:

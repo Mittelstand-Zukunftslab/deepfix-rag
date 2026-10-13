@@ -1,18 +1,23 @@
-"""Hermes child process: allowlisted environment, timeout, and one real turn."""
+"""OpenHands child process: allowlisted environment, timeout, and one real turn."""
 
+import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
+from types import ModuleType
+import uuid
 
 import pytest
 
 from deepfix_rag.agent_process import (
     DEFAULT_TIMEOUT_SECONDS,
     AgentRunError,
-    HermesUnavailable,
+    AgentUnavailable,
+    agent_trace_env,
     build_child_env,
     default_runner_script,
     interpreter_imports_agent,
@@ -87,12 +92,54 @@ def test_child_env_keeps_the_openrouter_key_and_drops_secrets(tmp_path: Path) ->
     env = build_child_env(source, api_bin)
     assert env["PATH"].startswith(str(api_bin) + os.pathsep)
     assert env["DEEPFIX_LLM_API_KEY"] == "openrouter-key"
-    assert env["OPENROUTER_API_KEY"] == "openrouter-key"
+    assert "OPENROUTER_API_KEY" not in env
+    assert env["NO_COLOR"] == "1"
     assert "LLM_API_KEY" not in env
     assert "PRODUCT_DATA_DIR" not in env
     assert "SECRET_SESSION_TOKEN" not in env
     assert str(private) not in " ".join(env.values())
     assert "session-secret" not in " ".join(env.values())
+
+
+@pytest.mark.unit
+def test_traces_go_to_the_mlflow_experiment_without_otel_variables(tmp_path: Path) -> None:
+    source = {
+        "PATH": "/usr/bin:/bin",
+        "MLFLOW_TRACKING_URI": "http://127.0.0.1:5000/",
+        "MLFLOW_EXPERIMENT_ID": "7",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318",
+    }
+    env = build_child_env(source, tmp_path / "bin")
+    assert env["DEEPFIX_AGENT_OTLP_ENDPOINT"] == "http://127.0.0.1:5000"
+    assert env["DEEPFIX_AGENT_OTLP_HEADERS"] == "x-mlflow-experiment-id=7"
+    assert not any(key.startswith("OTEL_") for key in env)
+    assert agent_trace_env({"MLFLOW_TRACKING_URI": "http://127.0.0.1:5000"}) == {}
+    assert agent_trace_env({"MLFLOW_TRACKING_URI": "./mlruns", "MLFLOW_EXPERIMENT_ID": "7"}) == {}
+
+
+def _runner_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("openhands_runner", default_runner_script())
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.unit
+def test_runner_routes_openrouter_models_and_names_conversations() -> None:
+    runner = _runner_module()
+    openrouter = "https://openrouter.ai/api/v1"
+    assert runner.litellm_model("openai/gpt-6-luna-pro", openrouter) == (
+        "openrouter/openai/gpt-6-luna-pro"
+    )
+    assert runner.litellm_model("openrouter/openai/gpt-6-luna-pro", openrouter) == (
+        "openrouter/openai/gpt-6-luna-pro"
+    )
+    assert runner.litellm_model("qwen3-8-27b", "https://api.aisc.hpi.de/v1") == "qwen3-8-27b"
+    first = runner.conversation_id_for("run1")
+    assert isinstance(first, uuid.UUID)
+    assert first == runner.conversation_id_for("run1")
+    assert first != runner.conversation_id_for("run2")
 
 
 @pytest.mark.unit
@@ -139,10 +186,11 @@ def test_job_uses_the_openrouter_key_and_hides_private_paths(tmp_path: Path) -> 
     assert job["prompt"] == prompt
     assert job["api_key"] == "openrouter-key"
     assert job["max_iterations"] == 15
+    assert job["goal_rounds"] == 3
     assert "product-key" not in json.dumps(job)
     assert str(private) not in json.dumps(job)
     child_env = json.loads((workspace / "env.json").read_text(encoding="utf-8"))
-    assert child_env["OPENROUTER_API_KEY"] == "openrouter-key"
+    assert child_env["DEEPFIX_LLM_API_KEY"] == "openrouter-key"
     assert "SECRET_SESSION_TOKEN" not in child_env
     assert "PRODUCT_DATA_DIR" not in child_env
 
@@ -161,44 +209,38 @@ def test_job_uses_the_openrouter_key_and_hides_private_paths(tmp_path: Path) -> 
         )
     assert not (workspace / "runs" / "run2").exists()
 
+    with pytest.raises(AgentRunError):
+        run_agent_job(
+            workspace,
+            "run3",
+            prompt="hi",
+            model="openai/gpt-6-luna-pro",
+            base_url="https://openrouter.ai/api/v1",
+            api_key="openrouter-key",
+            interpreter=Path(sys.executable),
+            goal_rounds=0,
+        )
+
 
 @pytest.mark.integration
-def test_runner_rejects_the_hermes_gateway(tmp_path: Path) -> None:
+@pytest.mark.parametrize("key", ["max_iterations", "goal_rounds"])
+def test_runner_reports_an_invalid_job(tmp_path: Path, key: str) -> None:
     workspace = tmp_path / "workspace"
-    run_dir = workspace / "runs" / "gate"
+    run_dir = workspace / "runs" / "bad"
     run_dir.mkdir(parents=True)
     (run_dir / "job.json").write_text(
-        json.dumps(
-            {
-                "prompt": "hi",
-                "model": "m",
-                "base_url": "http://127.0.0.1:8642/v1",
-                "max_iterations": 1,
-            }
-        ),
-        encoding="utf-8",
+        json.dumps({"prompt": "hi", "model": "m", key: 0}), encoding="utf-8"
     )
     completed = subprocess.run(
-        [sys.executable, str(default_runner_script()), "gate"],
+        [sys.executable, str(default_runner_script()), "bad"],
         cwd=workspace,
         capture_output=True,
         text=True,
         check=False,
     )
-    assert completed.returncode != 0
+    assert completed.returncode == 1
     payload = json.loads((run_dir / "agent_output.json").read_text(encoding="utf-8"))
-    assert "gateway" in payload["error"].lower()
-
-    with pytest.raises(AgentRunError):
-        run_agent_job(
-            workspace,
-            "gate2",
-            prompt="hi",
-            model="m",
-            base_url="http://127.0.0.1:9119/v1",
-            api_key=None,
-            interpreter=Path(sys.executable),
-        )
+    assert payload == {"final_response": None, "error": f"{key} must be at least 1."}
 
 
 @pytest.mark.integration
@@ -232,7 +274,7 @@ def test_timeout_kills_the_process_group(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 def test_missing_interpreter_is_unavailable(tmp_path: Path) -> None:
-    with pytest.raises(HermesUnavailable):
+    with pytest.raises(AgentUnavailable):
         run_agent_job(
             tmp_path / "workspace",
             "missing",
@@ -246,10 +288,10 @@ def test_missing_interpreter_is_unavailable(tmp_path: Path) -> None:
 
 @pytest.mark.network
 def test_agent_turn_runs_deepfix_help(tmp_path: Path) -> None:
-    raw = os.environ.get("HERMES_PYTHON")
+    raw = os.environ.get("OPENHANDS_PYTHON")
     interpreter = Path(raw) if raw else None
     if interpreter is None or not interpreter_imports_agent(interpreter):
-        pytest.skip("Hermes interpreter is not configured or cannot import the agent library")
+        pytest.skip("OpenHands interpreter is not configured or cannot import the SDK")
     spec = subprocess.run(
         [
             str(interpreter),
@@ -265,10 +307,12 @@ def test_agent_turn_runs_deepfix_help(tmp_path: Path) -> None:
     assert api_key, "DEEPFIX_LLM_API_KEY is not set"
     prompt = (
         "Use the terminal tool to run exactly this command and nothing else: deepfix --help\n"
-        "Copy that command's complete stdout into your final response, unchanged."
+        "The task is complete only when your final response contains the line that "
+        "starts with 'Usage:' from that command's output, as plain text."
     )
+    workspace = tmp_path / "workspace"
     result = run_agent_job(
-        tmp_path / "workspace",
+        workspace,
         "help1",
         prompt=prompt,
         model=model,
@@ -276,10 +320,15 @@ def test_agent_turn_runs_deepfix_help(tmp_path: Path) -> None:
         api_key=api_key,
         interpreter=interpreter,
         max_iterations=6,
-        timeout_seconds=180,
+        timeout_seconds=600,
         private_paths=(),
     )
     assert result.timed_out is False
     assert result.error is None
     assert result.final_response is not None
-    assert "Usage: deepfix" in result.final_response
+    assert "Usage: deepfix" in re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", result.final_response)
+    output = json.loads(
+        (workspace / "runs" / "help1" / "agent_output.json").read_text(encoding="utf-8")
+    )
+    assert output["goal"]["status"] == "complete"
+    assert 1 <= output["goal"]["rounds"] <= 3

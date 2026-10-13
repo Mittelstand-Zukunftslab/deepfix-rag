@@ -1,7 +1,7 @@
 """In-process schedule for the nightly optimization job.
 
 The job is ``deepfix-optimize-workspace``. It calls the same function as Run now.
-It is not a Hermes gateway cron job.
+It runs inside the API process, not as an agent-side cron job.
 """
 
 from collections.abc import Callable
@@ -12,7 +12,7 @@ import threading
 from zoneinfo import ZoneInfo
 
 from deepfix_rag.accounts import connect
-from deepfix_rag.agent_process import HermesUnavailable
+from deepfix_rag.agent_process import AgentUnavailable
 from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.optimization import (
@@ -218,7 +218,7 @@ class OptimizationScheduler:
                 options=self._options_for(),
                 coordinator=self._coordinator_for(),
             )
-        except (RunInProgress, HermesUnavailable):
+        except (RunInProgress, AgentUnavailable):
             LOGGER.info("Scheduled optimization did not start")
         except Exception:
             LOGGER.exception("Scheduled optimization failed")

@@ -64,7 +64,7 @@ describe("Optimization screen", () => {
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
-  it("disables Run now when Hermes is not set up and still shows the schedule", () => {
+  it("disables Run now when OpenHands is not set up and still shows the schedule", () => {
     render(
       <OptimizationPage
         status={status({ agent_available: false })}
@@ -74,7 +74,7 @@ describe("Optimization screen", () => {
     );
     expect(
       screen.getByText(
-        "Hermes is not set up on this server, so a run cannot start. The schedule and history are still shown.",
+        "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();

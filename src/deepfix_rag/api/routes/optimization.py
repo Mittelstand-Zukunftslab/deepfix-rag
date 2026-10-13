@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from deepfix_rag.agent_process import HermesUnavailable
+from deepfix_rag.agent_process import AgentUnavailable
 from deepfix_rag.api.deps import current_user, get_settings
 from deepfix_rag.api.errors import (
     BAD_REQUEST,
@@ -94,7 +94,7 @@ def start_optimization_run_route(
         )
     except RunInProgress as exc:
         raise HTTPException(status_code=CONFLICT, detail=str(exc)) from exc
-    except HermesUnavailable as exc:
+    except AgentUnavailable as exc:
         raise HTTPException(status_code=SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return _response(run)
 

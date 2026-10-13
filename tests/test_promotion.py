@@ -1,4 +1,4 @@
-"""Promotion scores a hand-written candidate and does not start Hermes."""
+"""Promotion scores a hand-written candidate and does not start OpenHands."""
 
 import asyncio
 import json

@@ -75,16 +75,17 @@ class Settings(BaseSettings):
     WORKSPACE_DIR: Path = Path.home() / ".deepfix" / "workspace"
     ALLOWED_EMAIL_DOMAINS: str = ""
     MAX_DISPLAYED_HITS: int = 10
-    # OpenRouter credentials for the Hermes child. The key is never the product LLM key.
+    # OpenRouter credentials for the OpenHands child. The key is never the product LLM key.
     DEEPFIX_LLM_API_KEY: str | None = None
     DEEPFIX_LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
     DEEPFIX_LLM_MODEL_NAME: str = "openai/gpt-6-luna-pro"
-    HERMES_PYTHON: str | None = None
+    OPENHANDS_PYTHON: str | None = None
     OPTIMIZATION_MIN_DEV_QUESTIONS: int = 50
     OPTIMIZATION_MIN_NEW_DEV_QUESTIONS: int = 10
     OPTIMIZATION_MIN_HOLDOUT_QUESTIONS: int = 15
     OPTIMIZATION_MIN_PRIMARY_DELTA: float = 0.025
     OPTIMIZATION_RUN_TIMEOUT_HOURS: float = 3
+    OPTIMIZATION_GOAL_ROUNDS: int = 3
 
     @property
     def product_db_path(self) -> Path:

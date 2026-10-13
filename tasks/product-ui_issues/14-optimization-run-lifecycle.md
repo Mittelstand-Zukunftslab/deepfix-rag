@@ -1,13 +1,13 @@
 # 14 — Optimization run lifecycle
 
-**What to build:** Every optimization run, scheduled or manual, starts through one function in the API process. That function exports a fresh feedback snapshot, skips the run when there is not enough labeled data, refuses to start a second run while one is active, and otherwise records a running run and launches one Hermes child process. The agent is told to follow the optimization-loop skill against the dev dataset only and to finish by writing a structured result file. The API owns the run record, including killing and failing a run that exceeds its timeout and failing runs interrupted by a restart.
+**What to build:** Every optimization run, scheduled or manual, starts through one function in the API process. That function exports a fresh feedback snapshot, skips the run when there is not enough labeled data, refuses to start a second run while one is active, and otherwise records a running run and launches one OpenHands child process. The agent is told to follow the optimization-loop skill against the dev dataset only and to finish by writing a structured result file. The API owns the run record, including killing and failing a run that exceeds its timeout and failing runs interrupted by a restart.
 
 **Reference:** tasks/prd-product-ui.md, `### US-014: Optimization run lifecycle owned by the API`
 
 **Blocked by:**
 
 - 12 — Feedback evaluation dataset and admin summary
-- 13 — Hermes agent runner in a child process
+- 13 — OpenHands agent runner in a child process
 
 **Status:** ready-for-agent
 
