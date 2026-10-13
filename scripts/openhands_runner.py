@@ -70,6 +70,24 @@ def litellm_model(model: str, base_url: str | None) -> str:
     return model
 
 
+def system_message(run_id: str, max_iterations: int) -> str:
+    """System message suffix that tells the agent its rules and its step budget."""
+    return (
+        "Run deepfix from the terminal for indexing, evaluation, and config changes. "
+        f"Write candidate configs and candidate indexes only under runs/{run_id}/. "
+        "No human is watching this run: never ask for confirmation. A reviewer "
+        "checks your work only from this conversation, so show the command output "
+        "that proves each requirement. "
+        f"Step budget: each round has {max_iterations} agent steps, and a round that uses "
+        "them all without calling finish fails the run. Plan for about 10 to 12 steps. "
+        "Avoid commands with long silent periods, or run them with a timeout parameter "
+        "set high enough: the terminal tool pauses a command after 30 seconds without "
+        "output, and a pause costs a step. "
+        "When the task is done, use the finish action. "
+        "Its message is your final response, so put your complete answer there."
+    )
+
+
 def conversation_id_for(run_id: str) -> uuid.UUID:
     """Stable conversation id, so MLflow traces for one run share a session."""
     return uuid.uuid5(_RUN_NAMESPACE, run_id)
@@ -121,14 +139,7 @@ def _run(
             Tool(name=FileEditorTool.name),
         ],
         agent_context=AgentContext(
-            system_message_suffix=(
-                "Run deepfix from the terminal for indexing, evaluation, and config changes. "
-                f"Write candidate configs and candidate indexes only under runs/{run_id}/. "
-                "No human is watching this run: never ask for confirmation. A reviewer "
-                "checks your work only from this conversation, so show the command output "
-                "that proves each requirement. When the task is done, use the finish action. "
-                "Its message is your final response, so put your complete answer there."
-            ),
+            system_message_suffix=system_message(run_id, max_iterations),
         ),
     )
     conversation = Conversation(

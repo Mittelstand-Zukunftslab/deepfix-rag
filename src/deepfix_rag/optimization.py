@@ -139,6 +139,11 @@ def skill_path() -> Path:
     )
 
 
+def skills_dir() -> Path:
+    """Directory that holds the optimization-loop skill and the pathology skills."""
+    return skill_path().parent.parent
+
+
 def optimization_prompt(
     *,
     run_id: str,
@@ -149,13 +154,20 @@ def optimization_prompt(
     run_dir = workspace / "runs" / run_id
     return (
         f"Follow the procedure in {skill_path()} by running deepfix with --json. "
+        f"The pathology skills it routes to are in the same directory tree: {skills_dir()}. "
+        f"Run every command from the workspace directory {workspace}, which is your current "
+        "directory, with plain `deepfix` (not `uv run deepfix`). "
         "Use only the dense, hybrid, or bm25 retrieval backends. "
-        f"The dev dataset is {dev_path}. "
+        f"The dev dataset is {dev_path}: pass it as `--dataset {dev_path}` to every "
+        "`deepfix eval`. "
         f"The champion config is {workspace / 'configs' / 'champion.yaml'}. "
         f"The champion index directory is {workspace / 'indexes' / 'current'}. "
         f"The corpus directory is {workspace / 'corpus'}. "
-        f"Write candidate configs and candidate indexes only under {run_dir}. "
+        f"The run directory is {run_dir}. Write candidate configs and candidate indexes "
+        f"only under it, for example {run_dir / 'candidate.yaml'} and {run_dir / 'idx'}. "
         "Do not promote a config and do not replace the champion config. "
+        "Test one hypothesis in this run. If it does not clear the gate, do not try "
+        "another: write result.json with candidate_config_path null and finish. "
         f"Finish by writing {run_dir / 'result.json'} as JSON with the keys "
         "candidate_config_path (a path or null), primary_metric, summary, "
         "and mlflow_run_id (a string or null). "
