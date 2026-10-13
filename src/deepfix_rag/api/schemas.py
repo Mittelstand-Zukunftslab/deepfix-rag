@@ -171,6 +171,24 @@ class FeedbackSummaryResponse(ApiModel):
     feedback_experiment_url: str | None = None
 
 
+class StartOptimizationRequest(ApiModel):
+    """Start the optimization job now. The nightly schedule calls the same function."""
+
+
+class OptimizationRunResponse(ApiModel):
+    """The run recorded by a start request. Holdout questions are not included."""
+
+    run_id: str
+    status: Literal["running", "skipped", "rejected", "promoted", "succeeded", "failed"]
+    trigger: Literal["cron", "manual"]
+    reason: str | None = None
+    dev_count: int
+    new_dev_count: int
+    holdout_count: int
+    started_at: str
+    ended_at: str | None = None
+
+
 class DocumentResponse(ApiModel):
     """A non-deleted workspace document. Extracted text stays on disk."""
 

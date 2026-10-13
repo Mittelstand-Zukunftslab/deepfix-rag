@@ -1,5 +1,6 @@
 """Start one Hermes agent in a child process and stop it when time runs out."""
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
 import os
@@ -8,7 +9,6 @@ import re
 import signal
 import subprocess
 import sys
-from typing import Mapping
 from urllib.parse import urlparse
 
 DEFAULT_TIMEOUT_SECONDS = 3 * 60 * 60
@@ -104,6 +104,7 @@ def run_agent_job(
     source_env: Mapping[str, str] | None = None,
     api_bin: Path | None = None,
     private_paths: tuple[str, ...] = (),
+    on_start: Callable[[int], None] | None = None,
 ) -> AgentRunResult:
     """Write the job, run one agent child, and kill its process group on timeout."""
     if _RUN_ID.fullmatch(run_id) is None:
@@ -143,6 +144,8 @@ def run_agent_job(
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+        if on_start is not None:
+            on_start(process.pid)
         try:
             returncode = process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
