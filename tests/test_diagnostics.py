@@ -7,8 +7,8 @@ from deepfix_core.models.api import APIResponse
 import pytest
 from typer.testing import CliRunner
 
-from deepfix_rag.cli.ui import EXIT_SUCCESS, EXIT_VALIDATION_ERROR
-from deepfix_rag.config.schema import DataLoaderConfig, DataPreset, RAGConfig
+from deepfix_rag.cli.ui import EXIT_SUCCESS
+from deepfix_rag.config.schema import DataPreset, RAGConfig
 from deepfix_rag.config.settings import settings
 from deepfix_rag.diagnostics.engine import run_diagnostics
 from deepfix_rag.main import app
@@ -18,7 +18,6 @@ def _write_rag_config(path: Path, cfg: RAGConfig) -> Path:
     """Serialize RAGConfig to YAML at the given path."""
     path.write_text(cfg.to_yaml(), encoding="utf-8")
     return path
-
 
 
 @pytest.mark.integration

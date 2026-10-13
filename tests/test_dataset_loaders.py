@@ -20,7 +20,6 @@ from deepfix_rag.data import (
     HuggingFaceLoader,
     LegalRagBenchLoader,
     QARecord,
-    build_node_parser,
 )
 from deepfix_rag.pipeline import RAGWorkflow
 

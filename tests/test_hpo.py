@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 import yaml
+
 from deepfix_rag.cli.ui import EXIT_SUCCESS, EXIT_VALIDATION_ERROR
 from deepfix_rag.config.hpo import (
     HPOConfig,
@@ -16,6 +17,7 @@ from deepfix_rag.config.schema import (
 )
 from deepfix_rag.hpo import HPOResult, HyperparameterOpt
 from deepfix_rag.main import app
+
 
 @pytest.mark.integration
 def test_hyperparameter_opt_retrieval_only_run(
@@ -150,7 +152,6 @@ def test_cli_hpo_declarative_execution(
     tmp_path: Path,
 ):
     """Verify deepfix hpo executes declaratively from an HPOConfig YAML file."""
-    
 
     base_cfg = RAGConfig()
     base_cfg.retrieval.lancedb_index_dir = str(populated_sample_index_dir)
