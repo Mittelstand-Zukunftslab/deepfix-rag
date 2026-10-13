@@ -2,58 +2,54 @@
 name: embedding-selection
 description: >
   Use when retrieval_miss persists and dense, bm25, and hybrid have not been
-  compared on the same index. The embedding model is the EMBEDDING_MODEL setting,
-  not a RAGConfig field. PCA flags do not change the retrieval index.
+  compared on the same index. Compare retrieval.backend values among dense, bm25
+  and hybrid. PCA flags do not change the retrieval index.
 failure_mode:
   - retrieval_miss
 trigger_conditions:
-  - "failure_distribution.retrieval_miss is high and chunk boundaries are already coherent"
+  - "failure_distribution.retrieval_miss > 0 and recall < 0.8 on eval --json (optimization-loop routing row 4)"
   - "dense, bm25, and hybrid have not been compared with eval --retrieval-only --compare"
 cli_actions:
-  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=dense --json"
-  - "uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=bm25 --json"
-  - "uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json"
+  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=dense --json"
+  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=bm25 --json"
+  - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
 ---
 
-Follow `optimization-loop` for the quality gate, exit codes, and the 15-call budget.
+Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 15-step budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt.
 
-Do not set `data.enable_embedding_pca` or `data.embedding_pca_components` to improve retrieval. PCA is already on by default (200 components) and is only passed into the dataset built for `run-diagnostic`. It is not applied when `index` or `eval` embeds queries. There is no config key for the embedding model; that process uses the `EMBEDDING_MODEL` environment setting and requires a fresh index to take effect.
+PCA (`data.enable_embedding_pca`, `data.embedding_pca_components`) only shapes the dataset built for `run-diagnostic`. It does not touch `index` or `eval`, so do not set it to improve retrieval.
 
 ## When not to use
 
-High `recall` with low `ndcg` is `rerank-calibration`. Cut-off passages are `chunking-tuning`. A dense index that works and a lexical query that does not is `query-rewriting`.
+High `recall` with low `ndcg` is `rerank-calibration`. Cut-off passages are `chunking-tuning`. A hybrid champion with high `recall` and a few misses is `query-rewriting` (fusion tuning).
 
 ## Procedure
 
-Compare backends on the same corpus. Changing among `dense`, `bm25`, and `hybrid` is query-time when the index still has node text. Confirm `diffs` is non-empty.
+One hypothesis per run: pick ONE backend that differs from the champion's (read `retrieval.backend` in `configs/champion.yaml`). A `hybrid` champion usually tries `dense`; a `dense` or `bm25` champion tries `hybrid`. Switching among `dense`, `bm25` and `hybrid` reuses the existing index when node text loads, so there is no re-index and no `--index-dir`. Confirm `diffs` is non-empty.
 
 ```
-uv run deepfix mutate-config --base configs/champion.yaml --output configs/candidate.yaml --set retrieval.backend=dense --json
+deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=dense --json
 ```
 
-```
-uv run deepfix eval --config configs/candidate.yaml --compare configs/champion.yaml --retrieval-only --limit 30 --json
-```
-
-Repeat with `--set retrieval.backend=bm25` and `--set retrieval.backend=hybrid`. Promote only the backend that clears the optimization-loop gate. If hybrid wins on `ndcg` only after rerank, keep the rerank skill's settings rather than fusion weights alone.
-
-To change the embedding model, set `EMBEDDING_MODEL`, then rebuild:
+Compare on the full dev set (no `--limit`). Save the output and print the gate summary as in the loop's step 5, then apply the loop's gate and write `result.json`. This only recommends the backend; the API decides. Primary metric is `recall` when the goal is fewer misses.
 
 ```
-uv run deepfix index --config configs/candidate.yaml --index-dir indexes/candidate --force --json
+deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
+
+Other values for the same slot: `--set retrieval.backend=bm25`, `--set retrieval.backend=hybrid`. If hybrid wins on `ndcg` only after rerank, use `rerank-calibration` instead of fusion weights alone.
 
 ## Valid values
 
-`retrieval.backend`: `bm25`, `dense`, `hybrid`, `graph`, `mixed`. This skill compares the first three. `graph` and `mixed` are index-time and belong to `legal-retrieval-grounding` or `multi-hop-aggregation`.
+`retrieval.backend`: `bm25`, `dense`, `hybrid`, `graph`, `mixed`. This skill compares the first three. `graph` and `mixed` are rejected by the API and are not available in a round.
 
 ## Index-time vs query-time
 
-`retrieval.backend` among `dense`, `bm25`, and `hybrid` is query-time if node text loads. If stderr contains `falling back to dense`, re-index with `index --force`. Changing `EMBEDDING_MODEL` is index-time. PCA fields are diagnostic-only.
+The API counts `retrieval.backend` as index-time and builds its own index for a changed backend. In a round you may still measure a switch among `dense`, `bm25` and `hybrid` on the existing index. If stderr contains `falling back to dense`, the BM25 docstore was empty: re-index into `<run_dir>/idx` (`deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json`) and compare with `--index-dir <run_dir>/idx` before trusting a `bm25` or `hybrid` result.
 
 ## Validated findings
 
-No checked-in A/B result that isolates the embedding model. Related result, from `rerank-calibration`: on legal-rag-bench, dense-only beat a naive 50/50 hybrid until reranking was enabled.
+No checked-in A/B result isolates the backend on product data. Benchmark evidence, from `rerank-calibration`: on legal-rag-bench, dense-only beat a naive 50/50 hybrid until reranking was enabled.
 
 ## Pitfalls
 
