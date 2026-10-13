@@ -42,7 +42,21 @@ deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --forc
 deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
 
-Use `recall` as the primary metric when the goal is fewer misses, `ndcg` when ranking quality is the goal. A hyperparameter search (`deepfix hpo`) is not available in a round.
+Use `recall` as the primary metric when the goal is fewer misses, `ndcg` when ranking quality is the goal. A hyperparameter search (`deepfix hpo`) is not available in a round; see the manual section below.
+
+## Outside a round (manual use only)
+
+`deepfix hpo` searches chunking and retrieval settings with Optuna. Never run it in an API-driven round: it takes far longer than the 15-step budget. The search space and the base config come from the HPO YAML, not from the champion, so copy `configs/hpo.yaml`, set `base_config` to the champion, and pass your own dataset:
+
+```
+deepfix hpo --config <hpo_yaml> --dataset <dataset_path> --retrieval-only --limit 30 --n-trials 10 --tune-chunking --output <out_yaml> --json
+```
+
+- Without `--tune-chunking` (or `tune_chunking: true` in the YAML) chunking is not searched.
+- The default storage is `sqlite:///:memory:`, so the study is lost when the process ends; pass `--storage-uri sqlite:///hpo.db` to keep it.
+- The dense and hybrid search spaces also sample `query_expansion_num` (1-5), which calls an LLM. Set `query_expansion_num_min` and `query_expansion_num_max` to 1 under `search_space.<paradigm>` when no LLM is configured.
+- The run logs to the MLflow experiment named by `MLFLOW_DEV_RAG_EXPERIMENT`, which must already exist.
+- `--output` writes the best config, not a recommendation. Take it through the `optimization-loop` compare on the full dev set before trusting it.
 
 ## Valid values
 
@@ -56,7 +70,7 @@ Semantic splits also use `chunking.semantic_buffer_size` (>= 1) and `chunking.se
 
 ## Index-time vs query-time
 
-Every `chunking.*` field is index-time. Query-time knobs in this skill: none.
+The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Every `chunking.*` field is index-time, so each chunking candidate needs its own `deepfix index` into `<run_dir>/idx`. Keep `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width` equal to the champion: if one differs, the API rebuilds the index for a reason other than the one you measured. Query-time knobs in this skill: none.
 
 ## Validated findings
 

@@ -9,12 +9,14 @@ from typing import Union, get_args, get_origin
 
 from pydantic import BaseModel
 import pytest
+import Stemmer
 from typer.testing import CliRunner
 import yaml
 
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.evaluation.runner import RAGFailureMode
+from deepfix_rag.indexing import index_time_signature
 from deepfix_rag.main import app
 from deepfix_rag.promotion import _ALLOWED_BACKENDS, _HIGHER_IS_BETTER
 
@@ -244,3 +246,75 @@ def test_unrouted_skills_say_they_are_not_for_api_runs(name: str) -> None:
     body = path.read_text(encoding="utf-8").split("---", 2)[2].strip()
     first_paragraph = body.split("\n\n", 1)[0]
     assert re.search(r"(?i)api-driven|manual", first_paragraph), name
+
+
+def test_index_time_keys_are_listed_in_every_pathology_skill() -> None:
+    """Each pathology skill names the keys that `index_time_signature` treats as index-time."""
+    signature = index_time_signature(RAGConfig())
+    expected = ["`chunking.*`" if key == "chunking" else f"`retrieval.{key}`" for key in signature]
+    for name in ROUTED_SKILLS:
+        text = _read(name)
+        missing = [key for key in expected if key not in text]
+        assert not missing, f"{name} does not list index-time keys {missing}"
+    assert set(signature) == {"chunking", "backend", "vector_store", "bit_width"}
+
+
+def test_language_values_are_real_stemmers() -> None:
+    """`retrieval.language` becomes a Snowball stemmer, so skills may only set known ones."""
+    algorithms = set(Stemmer.algorithms())
+    for name in OPTIMIZATION_SKILLS:
+        values = set(re.findall(r"retrieval\.language=([a-z]+)", _read(name)))
+        assert values <= algorithms, f"{name} sets unknown languages {values - algorithms}"
+    listed = set(re.findall(r"`([a-z]+)`", _read("embedding-selection")))
+    assert algorithms <= listed, f"missing stemmers: {algorithms - listed}"
+
+
+def test_hpo_examples_use_real_flags_and_stay_out_of_cli_actions(cli_runner: CliRunner) -> None:
+    """Manual hpo examples use flags the command has; the agent-facing actions omit hpo."""
+    help_text = cli_runner.invoke(app, ["hpo", "--help"]).output
+    commands = [
+        c
+        for name in ROUTED_SKILLS
+        for c in _commands(name, "deepfix hpo")
+        if c.startswith("deepfix hpo --config")
+    ]
+    assert len(commands) >= 2, "manual hpo examples are missing"
+    for command in commands:
+        flags = re.findall(r"(?<!\S)(--[a-z-]+)", command)
+        unknown = [flag for flag in flags if flag not in help_text]
+        assert not unknown, f"`{command}` uses unknown hpo flags {unknown}"
+    for name in ROUTED_SKILLS:
+        actions = _load_frontmatter(SKILLS_ROOT / name / "SKILL.md")["cli_actions"]
+        assert not [a for a in actions if "hpo" in a], f"{name} offers hpo as a round action"
+
+
+def test_agent_skills_never_enable_query_expansion() -> None:
+    """The agent has no generation LLM, so routed skills never set expansion above 1."""
+    for name in (LOOP_SKILL, *ROUTED_SKILLS):
+        values = re.findall(r"retrieval\.query_expansion_num=(\d+)", _read(name))
+        assert all(int(value) <= 1 for value in values), f"{name} sets query expansion"
+
+
+def test_diagnostic_server_binds_to_loopback() -> None:
+    """The unauthenticated analysis server is launched on 127.0.0.1, not on every interface."""
+    commands = _commands("diagnostic-server", "deepfix-server launch")
+    assert commands
+    for command in commands:
+        assert "-host 127.0.0.1" in command, command
+        assert "0.0.0.0" not in command, command
+
+
+def test_eval_cutoff_is_documented_with_its_real_default() -> None:
+    """The loop states the cutoff default, and the schema no longer claims top_k is the default."""
+    default = RAGConfig().eval.cutoff_k
+    text = _read(LOOP_SKILL)
+    assert "`eval.cutoff_k` (default " + str(default) in text
+    description = RAGConfig.model_fields["eval"].annotation.model_fields["cutoff_k"].description
+    assert "Defaults to retrieval.top_k" not in description
+
+
+def test_loop_says_top_k_alone_does_not_move_scores() -> None:
+    """With rerank off, top_k above the cutoff is a no-op for dense and bm25."""
+    text = _read(LOOP_SKILL)
+    assert "`retrieval.top_k` only moves the scores through reranking" in text
+    assert "not a useful hypothesis" in text

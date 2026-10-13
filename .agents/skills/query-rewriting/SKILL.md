@@ -32,6 +32,8 @@ High `recall` and low `ndcg` means the documents were retrieved and then ranked 
 deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.fusion_mode=relative_score --set retrieval.dense_weight=0.7 --set retrieval.bm25_weight=0.3 --json
 ```
 
+Before tuning weights, check that `retrieval.language` in `configs/champion.yaml` matches the corpus text (default `german`). It selects the stemmer on the BM25 side, so a mismatch weakens exactly the exact-term matching that the weights are meant to balance. If it does not match, make the language the one hypothesis of this run (`--set retrieval.language=english`, valid values listed in `embedding-selection`) and leave the fusion settings alone.
+
 Heuristic for the direction: queries with exact terms or acronyms favour more `bm25_weight` (for example 0.3 dense / 0.7 BM25); paraphrased queries favour more `dense_weight`. Choose one setting; do not sweep.
 
 Alternative single hypothesis, BM25 saturation and length normalization:
@@ -46,6 +48,16 @@ deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.
 deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
 
+## Outside a round (manual use only)
+
+Searching the fusion settings with `deepfix hpo` is not available in a round (see `chunking-tuning` for the caveats). The hybrid search space already covers `fusion_modes`, `dense_weight`, `bm25_k1` and `bm25_b`:
+
+```
+deepfix hpo --config <hpo_yaml> --paradigm hybrid --dataset <dataset_path> --retrieval-only --limit 30 --n-trials 20 --output <out_yaml> --json
+```
+
+`<hpo_yaml>` must set `base_config` to the champion and `query_expansion_num_min` and `query_expansion_num_max` to 1 under `search_space.hybrid`. Run the best config through the `optimization-loop` compare before trusting it.
+
 ## Valid values
 
 `retrieval.fusion_mode`: `reciprocal_rerank` (default), `relative_score`, `dist_based_score`, `simple`.
@@ -58,7 +70,7 @@ deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml -
 
 ## Index-time vs query-time
 
-`fusion_mode`, the fusion weights, `bm25_k1` and `bm25_b` are query-time. If stderr contains `falling back to dense`, the BM25 docstore was empty: re-index into `<run_dir>/idx` and compare with `--index-dir <run_dir>/idx` before judging the result.
+`fusion_mode`, the fusion weights, `bm25_k1`, `bm25_b` and `language` are query-time. The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`; this skill changes none of them, so keep them equal to the champion and the candidate reuses its index. If stderr contains `falling back to dense`, the BM25 docstore was empty: re-index into `<run_dir>/idx` and compare with `--index-dir <run_dir>/idx` before judging the result.
 
 ## Validated findings
 

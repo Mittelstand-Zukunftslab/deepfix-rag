@@ -44,11 +44,11 @@ There is no `rerank.threshold` key; a `--set` of that name is silently ignored. 
 
 `rerank.top_n`: integer >= 1 (default 5). This is how many passages the reranker returns.
 
-`retrieval.top_k`: 1-100 (default 10). This is the candidate pool before reranking. Set `top_k` above `top_n`.
+`retrieval.top_k`: 1-100 (default 10). This is the candidate pool before reranking. Set `top_k` above `top_n`, and keep `top_n` at or above `eval.cutoff_k` (default 5): a reranker that returns fewer documents than the cutoff caps `recall` and `precision`. Without rerank, a larger `top_k` alone does not change the scores (see `optimization-loop`).
 
 ## Index-time vs query-time
 
-`rerank.enabled`, `rerank.top_n`, and `retrieval.top_k` are query-time.
+`rerank.enabled`, `rerank.top_n`, and `retrieval.top_k` are query-time. The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`; this skill changes none of them, so the candidate reuses the champion's index and the API does not rebuild one.
 
 ## Validated findings
 

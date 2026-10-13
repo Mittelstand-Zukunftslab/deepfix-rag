@@ -15,7 +15,7 @@ trigger_conditions:
   - "eval --compare JSON is available and the candidate must be recommended or discarded"
 cli_actions:
   - "deepfix eval --config configs/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --json"
-  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.top_k=20 --json"
+  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
   - "deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json"
   - "deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
 ---
@@ -37,7 +37,7 @@ This skill is the whole contract for a round. Pathology skills are sibling folde
 - The working directory is the product workspace: `configs/champion.yaml`, `corpus/`, `indexes/current`, `runs/<run_id>/`. Run plain `deepfix ...` from there. Never `cd` elsewhere, never `uv run`, never pass `--env-file`.
 - `<dev_path>` is the dev dataset named in the prompt. Pass it as `--dataset <dev_path>` to every `eval`. Do not pass it to `index`: indexing reads the corpus from the config.
 - Dev rows have only `query_id`, `query`, `doc_ids` and `negative_doc_ids`. There are no answers and no unanswerable rows. `ndcg` and `precision` are computed over judged documents only.
-- Always use `--retrieval-only`. Metrics are `ndcg`, `recall`, `precision` at cutoff 5.
+- Always use `--retrieval-only`. Metrics are `ndcg`, `recall`, `precision` at the cutoff `eval.cutoff_k` (default 5, set in the config). Only the first `eval.cutoff_k` retrieved documents are scored; `retrieval.top_k` does not set the cutoff.
 - With `--json`, stdout is pure JSON and logs go to stderr.
 - Commands that index or score can run longer than 30 s without output. If the terminal reports a command is still running, wait for it; do not start a second copy.
 
@@ -67,8 +67,10 @@ The thresholds come from a 30-question sample, where one question moves a metric
 3. Write the candidate to `<run_dir>/candidate.yaml` with the pathology skill's `mutate-config` command. Confirm the JSON `diffs` object is non-empty: unknown `--set` keys are silently ignored and the command still exits 0.
 
 ```
-deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.top_k=20 --json
+deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
 ```
+
+The example is the `rerank-calibration` hypothesis. Take the real command from the pathology skill you chose.
 
 4. Re-index only when an index-time key changed (see the section below), into `<run_dir>/idx`. Use `<run_dir>/idx-<name>` if you need a second directory.
 
@@ -121,8 +123,9 @@ A pass here is a recommendation, not a promotion. Do not recommend on `delta < 0
 
 `retrieval.load_if_exists` defaults to true, so an existing index hides index-time edits. The API treats these keys as index-time (`promotion.index_time_signature`) and builds its own index when they differ from the champion: `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, `retrieval.bit_width`.
 
-Query-time (no re-index; the existing index is reused): `retrieval.top_k`, `retrieval.fusion_mode`, `retrieval.dense_weight`, `retrieval.bm25_weight`, `retrieval.bm25_k1`, `retrieval.bm25_b`, `rerank.enabled`, `rerank.top_n`.
+Query-time (no re-index; the existing index is reused): `retrieval.language`, `retrieval.top_k`, `retrieval.fusion_mode`, `retrieval.dense_weight`, `retrieval.bm25_weight`, `retrieval.bm25_k1`, `retrieval.bm25_b`, `rerank.enabled`, `rerank.top_n`.
 
+- `retrieval.top_k` only moves the scores through reranking (it is the pool the reranker sees) or, slightly, through hybrid fusion (each retriever returns `top_k` candidates before they are fused). With rerank off, a `top_k` above `eval.cutoff_k` does not change the dense or bm25 scores: on a 60-document test corpus the top 5 was identical for 10 of 10 queries on dense and on bm25, and changed for 2 of 10 on hybrid. A `top_k`-only candidate is not a useful hypothesis.
 - Any `chunking.*` change needs `deepfix index` into `<run_dir>/idx` before the compare.
 - To measure a `retrieval.backend` switch among `dense`, `bm25` and `hybrid` you may reuse the existing index (no `--index-dir`), as long as node text loads. If stderr says `falling back to dense`, the BM25 docstore was empty: re-index into `<run_dir>/idx` and compare again before trusting the result.
 - Evaluating a candidate without `--index-dir` after `index --force` scores the index path stored in the YAML, which is the champion's.

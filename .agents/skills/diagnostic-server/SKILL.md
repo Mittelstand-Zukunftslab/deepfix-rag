@@ -17,7 +17,7 @@ trigger_conditions:
 cli_actions:
   - "uv tool install git+https://github.com/delcaux-labs/deepfix.git#subdirectory=packages/deepfix-server"
   - "deepfix-server version"
-  - "deepfix-server launch -host 0.0.0.0 -port 8844"
+  - "deepfix-server launch -host 127.0.0.1 -port 8844"
   - "deepfix run-diagnostic --config configs/champion.yaml --dataset <diagnostic_dataset_path> --server-url http://localhost:8844 --limit 30 --json"
 ---
 
@@ -52,7 +52,7 @@ deepfix-server version
 ```
 DEEPFIX_LLM_API_KEY=
 DEEPFIX_LLM_BASE_URL=https://openrouter.ai/api/v1
-DEEPFIX_LLM_MODEL_NAME=qwen/qwen3.8-flash
+DEEPFIX_LLM_MODEL_NAME=openai/gpt-6-luna-pro
 DEEPFIX_LLM_TEMPERATURE=0.7
 DEEPFIX_LLM_MAX_TOKENS=8000
 DEEPFIX_LLM_CACHE=1
@@ -64,12 +64,14 @@ MLFLOW_TRACKING_URI=
 MLFLOW_EXP_NAME=Deepfix-server
 ```
 
+`DEEPFIX_LLM_MODEL_NAME` is any model id your `DEEPFIX_LLM_BASE_URL` serves. `openai/gpt-6-luna-pro` is the value in `example.env` and the `Settings` default; use the same one unless you have a reason to differ.
+
 Do not commit API keys. Do not assume the RAG `.env` in the repo root satisfies these names.
 
-4. Start the server and leave the process running. Flags are single-dash.
+4. Start the server and leave the process running. Flags are single-dash. Bind to `127.0.0.1`, which is where the client looks by default: `0.0.0.0` publishes the server, and the client sends no credentials, on every network interface. Use `0.0.0.0` only inside a container whose published port you control.
 
 ```
-deepfix-server launch -host 0.0.0.0 -port 8844
+deepfix-server launch -host 127.0.0.1 -port 8844
 ```
 
 5. Point the RAG client at it. The client default is already `http://localhost:8844` (`DEEPFIX_SERVER_URL` in `.env` overrides that). `run-diagnostic` does not send `DEEPFIX_API_KEY`.
