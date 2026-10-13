@@ -15,7 +15,10 @@ import uuid
 _DEFAULT_ITERATIONS = 15
 _RUN_NAMESPACE = uuid.UUID("5b1c55a2-6a43-4c1e-9f3e-2f0f3f6f2d11")
 _MAX_NUDGES = 2
-_NUDGE = "Please continue. Use the finish tool when done. DO NOT ask for human help."
+_NUDGE = (
+    "Please continue. When you are done, use the finish tool with your complete answer as "
+    "its message. DO NOT ask for human help."
+)
 
 
 def main(argv: list[str]) -> int:
@@ -103,7 +106,8 @@ def _run(
                 "Run deepfix from the terminal for indexing, evaluation, and config changes. "
                 f"Write candidate configs and candidate indexes only under runs/{run_id}/. "
                 "No human is watching this run: never ask for confirmation. When the task is "
-                "done, use the finish action with a short summary of what you changed."
+                "done, use the finish action. Its message is your final response, so put your "
+                "complete answer there."
             ),
         ),
     )
