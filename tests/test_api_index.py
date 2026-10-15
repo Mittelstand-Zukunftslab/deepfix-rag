@@ -132,7 +132,7 @@ def test_rebuild_switches_the_pointer_and_keeps_the_old_index_on_failure(
     assert ready.chunk_count > 0
     assert ready.document_count == 0
     pointer = workspace / "indexes" / "current"
-    assert pointer.is_symlink()
+    assert pointer.is_symlink() or (hasattr(pointer, "is_junction") and pointer.is_junction())
     assert Path(os.readlink(pointer)).name == ready.serving_build_id
     build_dir = workspace / "indexes" / "builds" / ready.serving_build_id
     assert (build_dir / "deepfix-build.json").is_file()

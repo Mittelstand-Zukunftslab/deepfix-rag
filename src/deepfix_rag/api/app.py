@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from starlette.formparsers import MultiPartParser
 
 from deepfix_rag.accounts import init_db
 from deepfix_rag.api.routes import (
@@ -20,13 +21,44 @@ from deepfix_rag.api.routes import (
     optimization,
     retrieval,
 )
-from deepfix_rag.config.settings import Settings
+from deepfix_rag.config.settings import LOGGER, Settings
 from deepfix_rag.config.settings import settings as default_settings
-from deepfix_rag.documents import init_documents, prepare_workspace
+from deepfix_rag.documents import MAX_UPLOAD_BYTES, init_documents, prepare_workspace
 from deepfix_rag.feedback import FeedbackWorker
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.optimization import fail_interrupted, init_optimization, settings_from
 from deepfix_rag.optimization_schedule import OptimizationScheduler
+
+# Starlette defaults max_part_size to 1MB (1024 * 1024), which causes any multipart field
+# (such as client-side extracted PDF readings or large documents up to MAX_UPLOAD_BYTES) to be
+# rejected with MultiPartException: "Part exceeded maximum size of 1024KB".
+# Increase max_part_size to at least MAX_UPLOAD_BYTES + 5MB margin.
+_DEFAULT_MAX_PART_SIZE = MAX_UPLOAD_BYTES + 5 * 1024 * 1024
+_original_multipart_init = MultiPartParser.__init__
+
+
+def _patched_multipart_init(
+    self: MultiPartParser,
+    headers: Any,
+    stream: Any,
+    *,
+    max_files: int | float = 1000,
+    max_fields: int | float = 1000,
+    max_part_size: int = 1024 * 1024,
+) -> None:
+    if max_part_size < _DEFAULT_MAX_PART_SIZE:
+        max_part_size = _DEFAULT_MAX_PART_SIZE
+    _original_multipart_init(
+        self,
+        headers,
+        stream,
+        max_files=max_files,
+        max_fields=max_fields,
+        max_part_size=max_part_size,
+    )
+
+
+MultiPartParser.__init__ = _patched_multipart_init
 
 
 def validation_detail(exc: RequestValidationError) -> str:
@@ -100,6 +132,7 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        LOGGER.warning("Request validation failed on %s: %s", _request.url.path, exc.errors())
         return JSONResponse(status_code=400, content={"detail": validation_detail(exc)})
 
     app.include_router(health.router)

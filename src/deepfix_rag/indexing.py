@@ -503,26 +503,54 @@ class IndexCoordinator:
             self._set_error(str(exc))
 
     def _switch_pointer(self, build_id: str) -> None:
+        import sys
         indexes = self.workspace / "indexes"
         pointer = indexes / "current"
         temporary = indexes / f".next-{build_id}"
-        if temporary.is_symlink() or temporary.exists():
-            temporary.unlink()
-        temporary.symlink_to(Path("builds") / build_id, target_is_directory=True)
-        if pointer.is_symlink():
+
+        def _is_link(p: Path) -> bool:
+            return p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction())
+
+        def _remove_link(p: Path) -> None:
+            if hasattr(p, "is_junction") and p.is_junction():
+                p.rmdir()
+            elif p.is_symlink():
+                p.unlink()
+            elif p.is_dir() and not any(p.iterdir()):
+                p.rmdir()
+            elif p.exists():
+                p.unlink()
+
+        if _is_link(temporary) or temporary.exists():
+            _remove_link(temporary)
+
+        try:
+            temporary.symlink_to(Path("builds") / build_id, target_is_directory=True)
+            if pointer.is_symlink():
+                os.replace(temporary, pointer)
+                return
+            if pointer.exists():
+                if pointer.is_dir() and not _is_link(pointer) and any(pointer.iterdir()):
+                    _remove_link(temporary)
+                    raise RuntimeError(
+                        "The serving path is a directory, so the build was not switched."
+                    )
+                _remove_link(pointer)
             os.replace(temporary, pointer)
-            return
-        if pointer.exists():
-            if pointer.is_dir() and any(pointer.iterdir()):
-                temporary.unlink()
-                raise RuntimeError(
-                    "The serving path is a directory, so the build was not switched."
-                )
-            if pointer.is_dir():
-                pointer.rmdir()
+        except OSError:
+            if sys.platform == "win32":
+                import _winapi
+                _remove_link(temporary)
+                target = str((indexes / "builds" / build_id).resolve())
+                if pointer.exists() or _is_link(pointer):
+                    if pointer.is_dir() and not _is_link(pointer) and any(pointer.iterdir()):
+                        raise RuntimeError(
+                            "The serving path is a directory, so the build was not switched."
+                        )
+                    _remove_link(pointer)
+                _winapi.CreateJunction(target, str(pointer))
             else:
-                pointer.unlink()
-        os.replace(temporary, pointer)
+                raise
 
     def _read_champion(self) -> RAGConfig:
         path = self._champion_path()
@@ -539,7 +567,8 @@ class IndexCoordinator:
 
     def _pointer_build_id(self) -> str | None:
         pointer = self.workspace / "indexes" / "current"
-        if not pointer.is_symlink():
+        is_link = pointer.is_symlink() or (hasattr(pointer, "is_junction") and pointer.is_junction())
+        if not is_link:
             return None
         return Path(os.readlink(pointer)).name
 
