@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "export:openapi": "cd .. && uv run python -m deepfix_rag.api.export_openapi",
-    "generate:api": "npm run export:openapi && openapi-ts"
+    "generate:api": "npm run export:openapi && openapi-ts",
+    "mlflow": "cd .. && uv run mlflow server --host 0.0.0.0 --port 5000 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/"
   },
   "overrides": {
     "rolldown": "1.2.1"

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="bg-grad" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E966A" />
+      <stop offset="55%" stop-color="#0E6647" />
+      <stop offset="100%" stop-color="#083E2B" />
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="48" y="48" width="928" height="928" rx="228" />
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <!-- Squircle background -->
+    <rect x="48" y="48" width="928" height="928" rx="228" fill="url(#bg-grad)" />
+    <rect x="54" y="54" width="916" height="916" rx="222" stroke="#6EECC0" stroke-opacity="0.22" stroke-width="12" />
+
+    <!-- Back stacked document card -->
+    <rect x="272" y="176" width="420" height="548" rx="56" fill="#6EECC0" fill-opacity="0.28" />
+
+    <!-- Front document card -->
+    <rect x="228" y="212" width="420" height="548" rx="60" fill="#FFFFFF" />
+
+    <!-- Document text lines -->
+    <rect x="296" y="304" width="224" height="48" rx="24" fill="#0E6647" />
+    <rect x="296" y="400" width="284" height="44" rx="22" fill="#20946A" />
+    <rect x="296" y="492" width="184" height="44" rx="22" fill="#20946A" />
+
+    <!-- Magnifier cutout shadow for separation -->
+    <circle cx="628" cy="616" r="212" fill="#0A4A34" />
+    <line x1="742" y1="730" x2="828" y2="816" stroke="#0A4A34" stroke-width="116" stroke-linecap="round" />
+
+    <!-- Magnifier handle & outer ring -->
+    <line x1="742" y1="730" x2="828" y2="816" stroke="#6EECC0" stroke-width="76" stroke-linecap="round" />
+    <circle cx="628" cy="616" r="184" fill="#6EECC0" />
+    <circle cx="628" cy="616" r="108" fill="#0C5239" />
+
+    <!-- 4-point optimization spark inside lens -->
+    <polygon points="696,616 643.6,631.6 628,684 612.4,631.6 560,616 612.4,600.4 628,548 643.6,600.4" fill="#FFFFFF" />
+  </g>
+</svg>
