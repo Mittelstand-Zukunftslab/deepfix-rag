@@ -1,0 +1,19 @@
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { createFileRoute } from "@tanstack/react-router";
+
+import { indexQueryOptions } from "@/features/index/index-queries";
+import { SearchPage } from "@/features/search/search-page";
+import { pageMeta } from "@/lib/seo";
+
+export const Route = createFileRoute("/search")({
+  head: () => ({
+    meta: pageMeta("Search", "Search the shared corpus and read the passages that matched."),
+  }),
+  loader: ({ context }) => context.queryClient.ensureQueryData(indexQueryOptions()),
+  component: SearchRoute,
+});
+
+function SearchRoute() {
+  const index = useSuspenseQuery(indexQueryOptions());
+  return <SearchPage indexReady={index.data.serving_build_id != null} />;
+}

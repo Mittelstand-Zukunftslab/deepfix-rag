@@ -2,7 +2,7 @@ import asyncio
 import concurrent.futures
 from pathlib import Path
 import time
-from typing import Any, Optional
+from typing import Any
 
 import lancedb
 from llama_index.core import (
@@ -89,10 +89,13 @@ class RetrievalResult(BaseModel):
     score: float = Field(..., description="Retrieval score")
     text: str = Field(..., description="The text of the document")
 
+
 class RAGResult(BaseModel):
     """RAG result."""
+
     retrieval_results: list[RetrievalResult] = Field(..., description="The retrieval results")
-    generated_answer: Optional[str] = Field(None, description="The generated answer of the document")
+    generated_answer: str | None = Field(None, description="The generated answer of the document")
+
 
 class ChunkStatistics(BaseModel):
     """Chunking statistics captured during index build."""
@@ -461,13 +464,13 @@ class RAGWorkflow(Workflow):
                     include_text=True,
                 ),
             ]
-        
+
         if isinstance(index, PropertyGraphIndex):
             graph_store = getattr(
                 index,
                 "property_graph_store",
                 getattr(index, "_property_graph_store", None),
-            )            
+            )
             return index.as_retriever(
                 sub_retrievers=get_subretrievers(graph_store),
                 similarity_top_k=top_k,
@@ -552,7 +555,7 @@ class RAGWorkflow(Workflow):
                 num_queries=self.config.retrieval.query_expansion_num,
                 use_async=use_async,
                 similarity_top_k=top_k,
-                query_gen_prompt=self.config.retrieval.query_gen_prompt
+                query_gen_prompt=self.config.retrieval.query_gen_prompt,
             )
 
         else:
@@ -741,13 +744,20 @@ class RAGWorkflow(Workflow):
 
         if self.config.retrieval_only:
             LOGGER.info("Retrieval only mode enabled. Returning retrieved nodes.")
-            return StopEvent(result=RAGResult(retrieval_results=self.convert_nodes_to_results(ev.nodes), generated_answer=None))
+            return StopEvent(
+                result=RAGResult(
+                    retrieval_results=self.convert_nodes_to_results(ev.nodes),
+                    generated_answer=None,
+                )
+            )
 
         summarizer = self._get_response_synthesizer()
         response = await summarizer.asynthesize(query, nodes=ev.nodes)
-        generated_answer=str(response.response) if response else None
+        generated_answer = str(response.response) if response else None
         retrieval_results = self.convert_nodes_to_results(ev.nodes)
-        response_model = RAGResult(retrieval_results=retrieval_results, generated_answer=generated_answer)
+        response_model = RAGResult(
+            retrieval_results=retrieval_results, generated_answer=generated_answer
+        )
         return StopEvent(result=response_model)
 
 

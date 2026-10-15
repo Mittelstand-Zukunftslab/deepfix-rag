@@ -1,0 +1,393 @@
+"""OpenHands child process: allowlisted environment, timeout, and one real turn."""
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+from types import ModuleType
+import uuid
+
+import pytest
+
+from deepfix_rag.agent_process import (
+    DEFAULT_TIMEOUT_SECONDS,
+    AgentRunError,
+    AgentUnavailable,
+    agent_trace_env,
+    build_child_env,
+    default_runner_script,
+    interpreter_imports_agent,
+    openrouter_settings,
+    run_agent_job,
+)
+from deepfix_rag.config.settings import Settings
+
+_DUMP = """
+import json, os, sys
+from pathlib import Path
+run_id = sys.argv[1]
+Path("env.json").write_text(json.dumps(dict(os.environ)), encoding="utf-8")
+out = Path("runs") / run_id / "agent_output.json"
+out.write_text(json.dumps({"final_response": "ok", "error": None}), encoding="utf-8")
+"""
+
+_SLEEP = """
+import os, subprocess, sys, time
+from pathlib import Path
+run_id = sys.argv[1]
+out = Path("runs") / run_id
+child = subprocess.Popen(["sleep", "60"])
+(out / "parent.pid").write_text(str(os.getpid()), encoding="utf-8")
+(out / "child.pid").write_text(str(child.pid), encoding="utf-8")
+time.sleep(60)
+"""
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@pytest.mark.unit
+def test_openrouter_key_comes_from_deepfix_llm_api_key() -> None:
+    model, base_url, api_key = openrouter_settings(
+        {
+            "DEEPFIX_LLM_API_KEY": "openrouter-key",
+            "DEEPFIX_LLM_BASE_URL": "https://openrouter.ai/api/v1",
+            "DEEPFIX_LLM_MODEL_NAME": "openai/gpt-6-luna-pro",
+            "LLM_API_KEY": "product-key",
+            "OPENROUTER_API_KEY": "stale-key",
+        }
+    )
+    assert model == "openai/gpt-6-luna-pro"
+    assert base_url == "https://openrouter.ai/api/v1"
+    assert api_key == "openrouter-key"
+    assert Settings.model_fields["OPTIMIZATION_RUN_TIMEOUT_HOURS"].default == 3
+    assert DEFAULT_TIMEOUT_SECONDS == 3 * 60 * 60
+
+
+@pytest.mark.unit
+def test_child_env_keeps_openrouter_and_retrieval_settings_and_drops_secrets(
+    tmp_path: Path,
+) -> None:
+    api_bin = tmp_path / "bin"
+    private = tmp_path / "private"
+    source = {
+        "PATH": "/usr/bin:/bin",
+        "DEEPFIX_LLM_API_KEY": "openrouter-key",
+        "DEEPFIX_LLM_BASE_URL": "https://openrouter.ai/api/v1",
+        "DEEPFIX_LLM_MODEL_NAME": "openai/gpt-6-luna-pro",
+        "LLM_API_KEY": "product-key",
+        "OPENROUTER_API_KEY": "stale-key",
+        "MLFLOW_TRACKING_URI": "http://127.0.0.1:5000",
+        "DEEPFIX_SERVER_URL": "http://127.0.0.1:8844",
+        "PRODUCT_DATA_DIR": str(private),
+        "SECRET_SESSION_TOKEN": "session-secret",
+        "EMBEDDING_BASE_URL": "https://embed.example/v1",
+        "EMBEDDING_API_KEY": "embedding-key",
+        "EMBEDDING_MODEL": "embed-model",
+        "COHERE_BASE_URL": "https://cohere.example/v2",
+        "COHERE_API_KEY": "cohere-key",
+        "COHERE_MODEL": "rerank-model",
+        "MLFLOW_DEV_RAG_EXPERIMENT": "dev-rag",
+        "LLM_BASE_URL": "https://llm.example/v1",
+        "LLM_MODEL": "product-model",
+        "LLM_JUDGE_MODEL": "judge-model",
+        "S3_ACCESS_KEY": "s3-secret",
+        "HF_TOKEN": "hf-secret",
+        "DEEPFIX_API_KEY": "api-secret",
+    }
+    env = build_child_env(source, api_bin)
+    assert env["PATH"].startswith(str(api_bin) + os.pathsep)
+    assert env["DEEPFIX_LLM_API_KEY"] == "openrouter-key"
+    assert "OPENROUTER_API_KEY" not in env
+    assert env["NO_COLOR"] == "1"
+    assert "LLM_API_KEY" not in env
+    assert "PRODUCT_DATA_DIR" not in env
+    assert "SECRET_SESSION_TOKEN" not in env
+    assert str(private) not in " ".join(env.values())
+    assert "session-secret" not in " ".join(env.values())
+    for key in (
+        "EMBEDDING_BASE_URL",
+        "EMBEDDING_API_KEY",
+        "EMBEDDING_MODEL",
+        "COHERE_BASE_URL",
+        "COHERE_API_KEY",
+        "COHERE_MODEL",
+        "MLFLOW_DEV_RAG_EXPERIMENT",
+    ):
+        assert env[key] == source[key]
+    for key in (
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_JUDGE_MODEL",
+        "S3_ACCESS_KEY",
+        "HF_TOKEN",
+        "DEEPFIX_API_KEY",
+    ):
+        assert key not in env
+    assert "product-key" not in " ".join(env.values())
+
+
+@pytest.mark.unit
+def test_child_env_omits_unset_retrieval_settings(tmp_path: Path) -> None:
+    env = build_child_env(
+        {"PATH": "/usr/bin", "EMBEDDING_API_KEY": "", "COHERE_MODEL": "rerank-model"},
+        tmp_path / "bin",
+    )
+    assert env["COHERE_MODEL"] == "rerank-model"
+    assert "EMBEDDING_API_KEY" not in env
+    assert "COHERE_API_KEY" not in env
+    assert "MLFLOW_DEV_RAG_EXPERIMENT" not in env
+
+
+@pytest.mark.unit
+def test_traces_go_to_the_mlflow_experiment_without_otel_variables(tmp_path: Path) -> None:
+    source = {
+        "PATH": "/usr/bin:/bin",
+        "MLFLOW_TRACKING_URI": "http://127.0.0.1:5000/",
+        "MLFLOW_EXPERIMENT_ID": "7",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318",
+    }
+    env = build_child_env(source, tmp_path / "bin")
+    assert env["DEEPFIX_AGENT_OTLP_ENDPOINT"] == "http://127.0.0.1:5000"
+    assert env["DEEPFIX_AGENT_OTLP_HEADERS"] == "x-mlflow-experiment-id=7"
+    assert not any(key.startswith("OTEL_") for key in env)
+    assert agent_trace_env({"MLFLOW_TRACKING_URI": "http://127.0.0.1:5000"}) == {}
+    assert agent_trace_env({"MLFLOW_TRACKING_URI": "./mlruns", "MLFLOW_EXPERIMENT_ID": "7"}) == {}
+
+
+def _runner_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("openhands_runner", default_runner_script())
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.unit
+def test_runner_routes_openrouter_models_and_names_conversations() -> None:
+    runner = _runner_module()
+    openrouter = "https://openrouter.ai/api/v1"
+    assert runner.litellm_model("openai/gpt-6-luna-pro", openrouter) == (
+        "openrouter/openai/gpt-6-luna-pro"
+    )
+    assert runner.litellm_model("openrouter/openai/gpt-6-luna-pro", openrouter) == (
+        "openrouter/openai/gpt-6-luna-pro"
+    )
+    assert runner.litellm_model("qwen3-8-27b", "https://api.aisc.hpi.de/v1") == "qwen3-8-27b"
+    first = runner.conversation_id_for("run1")
+    assert isinstance(first, uuid.UUID)
+    assert first == runner.conversation_id_for("run1")
+    assert first != runner.conversation_id_for("run2")
+
+
+@pytest.mark.unit
+def test_runner_system_message_states_the_step_budget() -> None:
+    message = _runner_module().system_message("run1", 15)
+    assert "runs/run1/" in message
+    assert "15 agent steps" in message
+    assert "without calling finish" in message
+    assert "10 to 12 steps" in message
+    assert "timeout" in message and "30 seconds" in message
+    assert "finish action" in message
+    assert "7 agent steps" in _runner_module().system_message("run1", 7)
+
+
+@pytest.mark.unit
+def test_runner_script_does_not_import_the_product_package() -> None:
+    source = default_runner_script().read_text(encoding="utf-8")
+    assert "deepfix_rag" not in source
+
+
+@pytest.mark.integration
+def test_job_uses_the_openrouter_key_and_hides_private_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    private = tmp_path / "private"
+    api_bin = tmp_path / "venv" / "bin"
+    api_bin.mkdir(parents=True)
+    script = tmp_path / "dump_runner.py"
+    script.write_text(_DUMP, encoding="utf-8")
+    source = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "DEEPFIX_LLM_API_KEY": "openrouter-key",
+        "DEEPFIX_LLM_BASE_URL": "https://openrouter.ai/api/v1",
+        "DEEPFIX_LLM_MODEL_NAME": "openai/gpt-6-luna-pro",
+        "LLM_API_KEY": "product-key",
+        "PRODUCT_DATA_DIR": str(private),
+        "SECRET_SESSION_TOKEN": "session-secret",
+    }
+    prompt = "Run deepfix --help"
+    result = run_agent_job(
+        workspace,
+        "run1",
+        prompt=prompt,
+        model="openai/gpt-6-luna-pro",
+        base_url="https://openrouter.ai/api/v1",
+        api_key="openrouter-key",
+        interpreter=Path(sys.executable),
+        timeout_seconds=30,
+        runner_script=script,
+        source_env=source,
+        api_bin=api_bin,
+        private_paths=(str(private), "session-secret"),
+    )
+    assert result.final_response == "ok"
+    assert result.error is None
+    job = json.loads((workspace / "runs" / "run1" / "job.json").read_text(encoding="utf-8"))
+    assert job["prompt"] == prompt
+    assert job["api_key"] == "openrouter-key"
+    assert job["max_iterations"] == 15
+    assert job["goal_rounds"] == 3
+    assert "product-key" not in json.dumps(job)
+    assert str(private) not in json.dumps(job)
+    child_env = json.loads((workspace / "env.json").read_text(encoding="utf-8"))
+    assert child_env["DEEPFIX_LLM_API_KEY"] == "openrouter-key"
+    assert "SECRET_SESSION_TOKEN" not in child_env
+    assert "PRODUCT_DATA_DIR" not in child_env
+
+    with pytest.raises(AgentRunError):
+        run_agent_job(
+            workspace,
+            "run2",
+            prompt=f"look in {private}",
+            model="openai/gpt-6-luna-pro",
+            base_url="https://openrouter.ai/api/v1",
+            api_key="openrouter-key",
+            interpreter=Path(sys.executable),
+            runner_script=script,
+            source_env=source,
+            private_paths=(str(private),),
+        )
+    assert not (workspace / "runs" / "run2").exists()
+
+    with pytest.raises(AgentRunError):
+        run_agent_job(
+            workspace,
+            "run3",
+            prompt="hi",
+            model="openai/gpt-6-luna-pro",
+            base_url="https://openrouter.ai/api/v1",
+            api_key="openrouter-key",
+            interpreter=Path(sys.executable),
+            goal_rounds=0,
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("key", ["max_iterations", "goal_rounds"])
+def test_runner_reports_an_invalid_job(tmp_path: Path, key: str) -> None:
+    workspace = tmp_path / "workspace"
+    run_dir = workspace / "runs" / "bad"
+    run_dir.mkdir(parents=True)
+    (run_dir / "job.json").write_text(
+        json.dumps({"prompt": "hi", "model": "m", key: 0}), encoding="utf-8"
+    )
+    completed = subprocess.run(
+        [sys.executable, str(default_runner_script()), "bad"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 1
+    payload = json.loads((run_dir / "agent_output.json").read_text(encoding="utf-8"))
+    assert payload == {"final_response": None, "error": f"{key} must be at least 1."}
+
+
+@pytest.mark.integration
+def test_timeout_kills_the_process_group(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    script = tmp_path / "sleep_runner.py"
+    script.write_text(_SLEEP, encoding="utf-8")
+    result = run_agent_job(
+        workspace,
+        "slow",
+        prompt="sleep",
+        model="m",
+        base_url="https://openrouter.ai/api/v1",
+        api_key=None,
+        interpreter=Path(sys.executable),
+        timeout_seconds=2,
+        runner_script=script,
+        source_env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+    )
+    assert result.timed_out is True
+    assert result.error == "Timed out"
+    run_dir = workspace / "runs" / "slow"
+    parent = int((run_dir / "parent.pid").read_text(encoding="utf-8"))
+    child = int((run_dir / "child.pid").read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and (_alive(parent) or _alive(child)):
+        time.sleep(0.05)
+    assert _alive(parent) is False
+    assert _alive(child) is False
+
+
+@pytest.mark.integration
+def test_missing_interpreter_is_unavailable(tmp_path: Path) -> None:
+    with pytest.raises(AgentUnavailable):
+        run_agent_job(
+            tmp_path / "workspace",
+            "missing",
+            prompt="hi",
+            model="m",
+            base_url=None,
+            api_key=None,
+            interpreter=tmp_path / "no-such-python",
+        )
+
+
+@pytest.mark.network
+def test_agent_turn_runs_deepfix_help(tmp_path: Path) -> None:
+    raw = os.environ.get("OPENHANDS_PYTHON")
+    interpreter = Path(raw) if raw else None
+    if interpreter is None or not interpreter_imports_agent(interpreter):
+        pytest.skip("OpenHands interpreter is not configured or cannot import the SDK")
+    spec = subprocess.run(
+        [
+            str(interpreter),
+            "-c",
+            "import importlib.util, sys; "
+            "sys.exit(0 if importlib.util.find_spec('deepfix_rag') is None else 1)",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    assert spec.returncode == 0
+    model, base_url, api_key = openrouter_settings(os.environ)
+    assert api_key, "DEEPFIX_LLM_API_KEY is not set"
+    prompt = (
+        "Use the terminal tool to run exactly this command and nothing else: deepfix --help\n"
+        "The task is complete only when your final response contains the line that "
+        "starts with 'Usage:' from that command's output, as plain text."
+    )
+    workspace = tmp_path / "workspace"
+    result = run_agent_job(
+        workspace,
+        "help1",
+        prompt=prompt,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        interpreter=interpreter,
+        max_iterations=6,
+        timeout_seconds=600,
+        private_paths=(),
+    )
+    assert result.timed_out is False
+    assert result.error is None
+    assert result.final_response is not None
+    assert "Usage: deepfix" in re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", result.final_response)
+    output = json.loads(
+        (workspace / "runs" / "help1" / "agent_output.json").read_text(encoding="utf-8")
+    )
+    assert output["goal"]["status"] == "complete"
+    assert 1 <= output["goal"]["rounds"] <= 3

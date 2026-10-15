@@ -69,6 +69,43 @@ class Settings(BaseSettings):
     DEEPFIX_HOME: str = os.path.join(Path(__file__).parents[3], ".deepfix")
     DEEPFIX_API_KEY: str | None = None
 
+    # Product API
+    WEB_ORIGIN: str = "http://localhost:8080"
+    PRODUCT_DATA_DIR: Path = Path.home() / ".deepfix" / "product"
+    WORKSPACE_DIR: Path = Path.home() / ".deepfix" / "workspace"
+    ALLOWED_EMAIL_DOMAINS: str = ""
+    MAX_DISPLAYED_HITS: int = 10
+    # OpenRouter credentials for the OpenHands child. The key is never the product LLM key.
+    DEEPFIX_LLM_API_KEY: str | None = None
+    DEEPFIX_LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
+    DEEPFIX_LLM_MODEL_NAME: str = "openai/gpt-6-luna-pro"
+    OPENHANDS_PYTHON: str | None = None
+    OPTIMIZATION_MIN_DEV_QUESTIONS: int = 50
+    OPTIMIZATION_MIN_NEW_DEV_QUESTIONS: int = 10
+    OPTIMIZATION_MIN_HOLDOUT_QUESTIONS: int = 15
+    OPTIMIZATION_MIN_PRIMARY_DELTA: float = 0.025
+    OPTIMIZATION_RUN_TIMEOUT_HOURS: float = 3
+    OPTIMIZATION_GOAL_ROUNDS: int = 3
+
+    @property
+    def product_db_path(self) -> Path:
+        """SQLite file for users, sessions, and documents, outside the agent workspace."""
+        return Path(self.PRODUCT_DATA_DIR) / "product.db"
+
+    @property
+    def workspace_dir(self) -> Path:
+        """Shared corpus, indexes, feedback, configs, and runs."""
+        return Path(self.WORKSPACE_DIR)
+
+    @property
+    def allowed_email_domains(self) -> list[str]:
+        """Domains that may register, or an empty list when registration is open."""
+        return [
+            domain.strip().lower()
+            for domain in self.ALLOWED_EMAIL_DOMAINS.split(",")
+            if domain.strip()
+        ]
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

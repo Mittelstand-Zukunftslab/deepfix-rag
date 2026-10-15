@@ -1,0 +1,2157 @@
+{
+  "components": {
+    "schemas": {
+      "AskResponse": {
+        "description": "One single-turn answer and the passages it used.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/HitResponse"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "vote": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vote"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "answer",
+          "error",
+          "vote",
+          "hits"
+        ],
+        "title": "AskResponse",
+        "type": "object"
+      },
+      "Body_create_document": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "reading": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reading"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_create_document",
+        "type": "object"
+      },
+      "ConfigApprovalResponse": {
+        "description": "Answer approval for the interactions that used one champion config.",
+        "properties": {
+          "config_path": {
+            "title": "Config Path",
+            "type": "string"
+          },
+          "down": {
+            "title": "Down",
+            "type": "integer"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "up": {
+            "title": "Up",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "config_path",
+          "up",
+          "down",
+          "rate"
+        ],
+        "title": "ConfigApprovalResponse",
+        "type": "object"
+      },
+      "ConfigChange": {
+        "description": "One field from a champion diff. ``before`` is the previous champion.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
+          }
+        },
+        "required": [
+          "before",
+          "after"
+        ],
+        "title": "ConfigChange",
+        "type": "object"
+      },
+      "CredentialsRequest": {
+        "description": "Email and password for register and login.",
+        "properties": {
+          "email": {
+            "minLength": 1,
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "CredentialsRequest",
+        "type": "object"
+      },
+      "DocumentResponse": {
+        "description": "A non-deleted workspace document. Extracted text stays on disk.",
+        "properties": {
+          "can_delete": {
+            "title": "Can Delete",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "index_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Error"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/TextIssueResponse"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "indexing",
+              "indexed",
+              "deleting",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "uploader_email": {
+            "title": "Uploader Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "filename",
+          "media_type",
+          "status",
+          "index_error",
+          "issues",
+          "uploader_email",
+          "created_at",
+          "can_delete"
+        ],
+        "title": "DocumentResponse",
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "description": "Body returned for every 4xx and 5xx response.",
+        "properties": {
+          "detail": {
+            "description": "Human-readable explanation of what went wrong.",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      },
+      "FeedbackRequest": {
+        "description": "A thumbs-up, thumbs-down, or clear on a passage or an answer.",
+        "properties": {
+          "action": {
+            "enum": [
+              "up",
+              "down",
+              "clear"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "interaction_id": {
+            "minLength": 1,
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "target": {
+            "enum": [
+              "passage",
+              "answer"
+            ],
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "target",
+          "action"
+        ],
+        "title": "FeedbackRequest",
+        "type": "object"
+      },
+      "FeedbackResponse": {
+        "description": "The user's current vote after the event was stored.",
+        "properties": {
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "target": {
+            "enum": [
+              "passage",
+              "answer"
+            ],
+            "title": "Target",
+            "type": "string"
+          },
+          "vote": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vote"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "target",
+          "rank",
+          "vote"
+        ],
+        "title": "FeedbackResponse",
+        "type": "object"
+      },
+      "FeedbackSummaryResponse": {
+        "description": "Vote, dataset, and outbox counts for an admin.",
+        "properties": {
+          "answer_approval_by_config": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigApprovalResponse"
+            },
+            "title": "Answer Approval By Config",
+            "type": "array"
+          },
+          "answer_approval_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Approval Rate"
+          },
+          "answer_down": {
+            "title": "Answer Down",
+            "type": "integer"
+          },
+          "answer_up": {
+            "title": "Answer Up",
+            "type": "integer"
+          },
+          "dev_question_count": {
+            "title": "Dev Question Count",
+            "type": "integer"
+          },
+          "feedback_experiment_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Experiment Url"
+          },
+          "holdout_question_count": {
+            "title": "Holdout Question Count",
+            "type": "integer"
+          },
+          "no_trace_event_count": {
+            "title": "No Trace Event Count",
+            "type": "integer"
+          },
+          "passage_down": {
+            "title": "Passage Down",
+            "type": "integer"
+          },
+          "passage_up": {
+            "title": "Passage Up",
+            "type": "integer"
+          },
+          "product_experiment_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Experiment Url"
+          },
+          "unsynced_event_count": {
+            "title": "Unsynced Event Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "passage_up",
+          "passage_down",
+          "answer_up",
+          "answer_down",
+          "dev_question_count",
+          "holdout_question_count",
+          "answer_approval_rate",
+          "answer_approval_by_config",
+          "unsynced_event_count",
+          "no_trace_event_count",
+          "product_experiment_url",
+          "feedback_experiment_url"
+        ],
+        "title": "FeedbackSummaryResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "description": "Liveness probe payload.",
+        "properties": {
+          "status": {
+            "const": "ok",
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "HitResponse": {
+        "description": "One passage shown for a search or an answer.",
+        "properties": {
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "document_filename": {
+            "title": "Document Filename",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "vote": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vote"
+          }
+        },
+        "required": [
+          "rank",
+          "doc_id",
+          "document_filename",
+          "text",
+          "score",
+          "vote"
+        ],
+        "title": "HitResponse",
+        "type": "object"
+      },
+      "IndexStatusResponse": {
+        "description": "Overall state of the shared serving index.",
+        "properties": {
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "config_path": {
+            "title": "Config Path",
+            "type": "string"
+          },
+          "document_count": {
+            "title": "Document Count",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "pending_document_count": {
+            "title": "Pending Document Count",
+            "type": "integer"
+          },
+          "serving_build_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serving Build Id"
+          },
+          "status": {
+            "enum": [
+              "empty",
+              "updating",
+              "rebuilding",
+              "ready",
+              "ready_with_errors",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "status",
+          "document_count",
+          "chunk_count",
+          "pending_document_count",
+          "updated_at",
+          "config_path",
+          "serving_build_id",
+          "error"
+        ],
+        "title": "IndexStatusResponse",
+        "type": "object"
+      },
+      "InteractionResponse": {
+        "description": "A stored search or ask, including the current user's votes.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/HitResponse"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "retrieval",
+              "ask"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "vote": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vote"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "kind",
+          "query",
+          "answer",
+          "error",
+          "vote",
+          "hits"
+        ],
+        "title": "InteractionResponse",
+        "type": "object"
+      },
+      "LogoutResponse": {
+        "description": "Confirmation that the session cookie was cleared.",
+        "properties": {
+          "status": {
+            "const": "ok",
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "LogoutResponse",
+        "type": "object"
+      },
+      "OptimizationRunResponse": {
+        "description": "The run recorded by a start request. Holdout questions are not included.",
+        "properties": {
+          "dev_count": {
+            "title": "Dev Count",
+            "type": "integer"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "holdout_count": {
+            "title": "Holdout Count",
+            "type": "integer"
+          },
+          "new_dev_count": {
+            "title": "New Dev Count",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "skipped",
+              "rejected",
+              "promoted",
+              "succeeded",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger": {
+            "enum": [
+              "cron",
+              "manual"
+            ],
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "trigger",
+          "reason",
+          "dev_count",
+          "new_dev_count",
+          "holdout_count",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "OptimizationRunResponse",
+        "type": "object"
+      },
+      "OptimizationRunSummary": {
+        "description": "One stored optimization run, without holdout question text.",
+        "properties": {
+          "dev_delta": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dev Delta"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "holdout_delta": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Delta"
+          },
+          "holdout_losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Losses"
+          },
+          "holdout_wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Wins"
+          },
+          "mlflow_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mlflow Run Id"
+          },
+          "mlflow_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mlflow Url"
+          },
+          "primary_metric": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Metric"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "skipped",
+              "rejected",
+              "promoted",
+              "succeeded",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trigger": {
+            "enum": [
+              "cron",
+              "manual"
+            ],
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "trigger",
+          "reason",
+          "primary_metric",
+          "dev_delta",
+          "holdout_delta",
+          "holdout_wins",
+          "holdout_losses",
+          "mlflow_run_id",
+          "mlflow_url",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "OptimizationRunSummary",
+        "type": "object"
+      },
+      "OptimizationStatusResponse": {
+        "description": "Schedule, champion diff, and the 20 most recent runs.",
+        "properties": {
+          "agent_available": {
+            "title": "Agent Available",
+            "type": "boolean"
+          },
+          "champion_config_path": {
+            "title": "Champion Config Path",
+            "type": "string"
+          },
+          "champion_diff": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ConfigChange"
+            },
+            "title": "Champion Diff",
+            "type": "object"
+          },
+          "cron": {
+            "title": "Cron",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/OptimizationRunSummary"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cron",
+          "timezone",
+          "enabled",
+          "next_run_at",
+          "agent_available",
+          "champion_config_path",
+          "champion_diff",
+          "runs"
+        ],
+        "title": "OptimizationStatusResponse",
+        "type": "object"
+      },
+      "QueryRequest": {
+        "description": "A search or ask question.",
+        "properties": {
+          "query": {
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "QueryRequest",
+        "type": "object"
+      },
+      "RetrievalResponse": {
+        "description": "Ranked passages for one search, with the interaction that recorded them.",
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/HitResponse"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "hits"
+        ],
+        "title": "RetrievalResponse",
+        "type": "object"
+      },
+      "RoleUpdateRequest": {
+        "description": "New role for an existing account.",
+        "properties": {
+          "role": {
+            "enum": [
+              "member",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "RoleUpdateRequest",
+        "type": "object"
+      },
+      "StartOptimizationRequest": {
+        "description": "Start the optimization job now. The nightly schedule calls the same function.",
+        "properties": {},
+        "title": "StartOptimizationRequest",
+        "type": "object"
+      },
+      "TextIssueResponse": {
+        "description": "A PDF page flagged as scanned or garbled. OCR is not run.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "scanned",
+              "garbled"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "page",
+          "kind"
+        ],
+        "title": "TextIssueResponse",
+        "type": "object"
+      },
+      "UpdateOptimizationRequest": {
+        "description": "A five-field cron expression and whether the nightly job is enabled.",
+        "properties": {
+          "cron": {
+            "minLength": 1,
+            "title": "Cron",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cron",
+          "enabled"
+        ],
+        "title": "UpdateOptimizationRequest",
+        "type": "object"
+      },
+      "UserResponse": {
+        "description": "A signed-in account. The password hash is never included.",
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "member",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role"
+        ],
+        "title": "UserResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "HTTP boundary around the DeepFix domain layer.",
+    "title": "DeepFix Product API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/admin/feedback/summary": {
+      "get": {
+        "description": "Return vote, dataset, and outbox counts. Members receive 403.",
+        "operationId": "get_feedback_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "Summarize feedback",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
+    "/admin/index/rebuild": {
+      "post": {
+        "description": "Start a full repair rebuild. The current index keeps serving until it succeeds.",
+        "operationId": "rebuild_index",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          }
+        },
+        "summary": "Rebuild the index",
+        "tags": [
+          "index"
+        ]
+      }
+    },
+    "/admin/optimization": {
+      "get": {
+        "description": "Return the nightly schedule, the champion diff, and recent runs.",
+        "operationId": "get_optimization_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "Show the optimization schedule and recent runs",
+        "tags": [
+          "optimization"
+        ]
+      },
+      "patch": {
+        "description": "Store a five-field cron expression. An invalid one leaves the schedule unchanged.",
+        "operationId": "update_optimization_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOptimizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "Change the nightly optimization schedule",
+        "tags": [
+          "optimization"
+        ]
+      }
+    },
+    "/admin/optimization/run": {
+      "post": {
+        "description": "Export feedback and start one run, or skip it when too little is labeled.",
+        "operationId": "start_optimization_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartOptimizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Start the optimization job now",
+        "tags": [
+          "optimization"
+        ]
+      }
+    },
+    "/admin/users/{user_id}": {
+      "patch": {
+        "description": "Promote or demote an account. Members receive 403. The last admin cannot be demoted.",
+        "operationId": "update_user_role",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          }
+        },
+        "summary": "Change a user's role",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/ask": {
+      "post": {
+        "description": "Answer one question from the current index. Earlier questions are not included.",
+        "operationId": "ask_question",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Ask a question",
+        "tags": [
+          "retrieval"
+        ]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "description": "Set the session cookie when the email and password match.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "Sign in",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "description": "Clear the session cookie. Signing out with no session still succeeds.",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Sign out",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "description": "Return the id, email, and role for the session cookie.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "Current user",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "description": "Create a member. This route never creates an admin.",
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          }
+        },
+        "summary": "Create a member account",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/documents": {
+      "get": {
+        "description": "Return non-deleted documents for any signed-in user, newest first.",
+        "operationId": "list_documents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentResponse"
+                  },
+                  "title": "Response List Documents",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "List documents",
+        "tags": [
+          "documents"
+        ]
+      },
+      "post": {
+        "description": "Store one text, Markdown, or PDF file. PDF text is read in the browser.",
+        "operationId": "create_document",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_document"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "Upload a document",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/documents/{doc_id}": {
+      "delete": {
+        "description": "Soft-delete a file. The uploader or an admin may delete it.",
+        "operationId": "delete_document",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "title": "Doc Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Delete a document",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/feedback": {
+      "post": {
+        "description": "Store one vote event and return. MLflow is updated later by the outbox.",
+        "operationId": "submit_feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Vote on a passage or an answer",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Report that the process is up. Touches no LLM, embedding, MLflow, or agent backend.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Liveness probe",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/index": {
+      "get": {
+        "description": "Return the shared index status for any signed-in user.",
+        "operationId": "get_index_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "Read index status",
+        "tags": [
+          "index"
+        ]
+      }
+    },
+    "/interactions/{interaction_id}": {
+      "get": {
+        "description": "Return one interaction with the current user's votes. Used after a refresh.",
+        "operationId": "get_interaction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interaction_id",
+            "required": true,
+            "schema": {
+              "title": "Interaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Read a stored search or ask",
+        "tags": [
+          "retrieval"
+        ]
+      }
+    },
+    "/retrieval": {
+      "post": {
+        "description": "Return ranked passages. This route never calls the generation model.",
+        "operationId": "retrieve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Search the corpus",
+        "tags": [
+          "retrieval"
+        ]
+      }
+    }
+  }
+}

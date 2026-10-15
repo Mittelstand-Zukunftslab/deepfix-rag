@@ -1,5 +1,7 @@
 """Run DeepEval and PyTerrier scoring over a dataset using the RAG pipeline."""
 
+from __future__ import annotations
+
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -29,6 +31,7 @@ import pyterrier as pt
 from pyterrier.measures import AP, RR, P, R, nDCG
 import tiktoken
 
+from deepfix_rag.config.mutator import apply_mutation
 from deepfix_rag.config.schema import (
     DataLoaderConfig,
     GenerationMetricType,
@@ -36,10 +39,16 @@ from deepfix_rag.config.schema import (
     RetrievalMetricType,
 )
 from deepfix_rag.config.settings import LOGGER, settings
-from deepfix_rag.data import DataLoader, QARecord
+from deepfix_rag.data import DataLoader, QARecord, QAValidationError
+from deepfix_rag.evaluation.labels import (
+    generation_metrics_for_record,
+    is_rank_metric_key,
+    judged_retrieval_metrics,
+    mean_present,
+    question_metrics,
+)
 from deepfix_rag.evaluation.llm import ProxyJudgeLLM
-from deepfix_rag.pipeline import RAGWorkflow, RetrievalResult, RAGResult
-from deepfix_rag.config.mutator import apply_mutation
+from deepfix_rag.pipeline import RAGResult, RAGWorkflow, RetrievalResult
 
 _enc = tiktoken.get_encoding("cl100k_base")
 
@@ -66,9 +75,50 @@ def is_deflection(answer: str) -> bool:
     return any(phrase in lowered for phrase in DEFLECTION_PHRASES)
 
 
+def _apply_judged_only_metrics(
+    cases: list[CaseResult],
+    records: list[QARecord],
+    cutoff: int,
+) -> None:
+    """Replace rank metrics for rows that carry explicit negatives."""
+    for case, record in zip(cases, records, strict=True):
+        if record.negative_doc_ids is None:
+            continue
+        for key in [key for key in case.metrics if is_rank_metric_key(key)]:
+            case.metrics.pop(key, None)
+        scored = judged_retrieval_metrics(
+            case.retrieved_doc_ids,
+            record.doc_ids,
+            record.negative_doc_ids,
+            cutoff,
+        )
+        for key, value in scored.items():
+            if value is not None:
+                case.metrics[key] = value
+
+
 def load_qa_dataset(dataset_path: Path | str, split: str = "test") -> list[QARecord]:
     config = DataLoaderConfig(path_or_repo=str(dataset_path), split=split)
     return DataLoader(config).load_qa()
+
+
+def resolve_eval_records(
+    dataset_path: Path | str | None,
+    records: list[QARecord] | None,
+    *,
+    split: str = "test",
+    limit: int | None = None,
+) -> list[QARecord]:
+    """Load rows from disk or use records already in memory. Limit applies to both."""
+    if records is not None:
+        chosen = list(records)
+    elif dataset_path is None:
+        raise QAValidationError("A dataset path or in-memory records are required.")
+    else:
+        chosen = load_qa_dataset(dataset_path, split=split)
+    if limit is not None:
+        return chosen[:limit]
+    return chosen
 
 
 # =========================================================================
@@ -106,6 +156,7 @@ class CaseResult:
     error: str | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
     failure_mode: str = RAGFailureMode.SUCCESS.value
+    unanswerable: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to flat dictionary matching standard schema for DataFrame & MLflow logging."""
@@ -120,6 +171,7 @@ class CaseResult:
             "deflection": self.deflection,
             "error": self.error,
             "failure_mode": self.failure_mode,
+            "unanswerable": self.unanswerable,
         }
         base.update(self.metrics)
         return base
@@ -147,6 +199,7 @@ class EvaluationSummary:
     metrics: dict[str, float] = field(default_factory=dict)
     rows: list[dict[str, Any]] = field(default_factory=list)
     error_details: list[dict[str, Any]] = field(default_factory=list)
+    mlflow_run_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         res: dict[str, Any] = {
@@ -157,9 +210,11 @@ class EvaluationSummary:
             "retrieval_induced_error_count": self.retrieval_induced_error_count,
             "retrieval_induced_error_rate": self.retrieval_induced_error_rate,
             "failure_distribution": self.failure_distribution,
+            "mlflow_run_id": self.mlflow_run_id,
         }
         res.update(self.metrics)
         res["rows"] = self.rows
+        res["questions"] = question_metrics(self.rows)
         res["error_details"] = self.error_details
         return res
 
@@ -205,8 +260,9 @@ def classify_case_failure(
     - DEFLECTION_FAILURE: Model inappropriately deflected on an answerable query with retrieved context,
       or failed to deflect on an unanswerable query.
     """
-    # Check for unanswerable query
-    is_unanswerable = not bool(case.ground_truth_doc_ids) or bool(case.metrics.get("unanswerable"))
+    # A missing answer is not an unanswerable question. Empty ground truth is,
+    # unless the row carries explicit negatives (those rows are judged, not unanswerable).
+    is_unanswerable = case.unanswerable or bool(case.metrics.get("unanswerable"))
     if is_unanswerable:
         if case.deflection:
             return RAGFailureMode.SUCCESS
@@ -219,6 +275,8 @@ def classify_case_failure(
             retrieved_set = set(case.retrieved_doc_ids)
             gt_set = set(case.ground_truth_doc_ids)
             recall = len(retrieved_set & gt_set) / len(gt_set)
+        elif not is_unanswerable:
+            return RAGFailureMode.SUCCESS
         else:
             recall = 1.0
 
@@ -410,9 +468,18 @@ class GenerationEvaluator:
         answer: str,
         expected_output: str,
         context: list[str],
+        metrics: list[GenerationMetricType | str] | None = None,
     ) -> dict[str, Any]:
-        """Evaluate a single test case across all configured generation metrics concurrently."""
-        if not self._metric_classes:
+        """Evaluate a single test case across the requested generation metrics."""
+        selected = self._metric_classes
+        if metrics is not None:
+            allowed = {str(metric) for metric in metrics}
+            selected = {
+                metric_type: metric_cls
+                for metric_type, metric_cls in self._metric_classes.items()
+                if str(metric_type) in allowed
+            }
+        if not selected:
             return {}
 
         tc = LLMTestCase(
@@ -428,7 +495,7 @@ class GenerationEvaluator:
             threshold=self.threshold,
             model=self.judge,
         )
-        fresh_metrics = {mt: cls(**metric_kwargs) for mt, cls in self._metric_classes.items()}
+        fresh_metrics = {mt: cls(**metric_kwargs) for mt, cls in selected.items()}
 
         results = await asyncio.gather(
             *(self._measure_one(mt, m, tc) for mt, m in fresh_metrics.items())
@@ -469,8 +536,12 @@ class EvaluationTracker:
         params: dict[str, Any],
         summary: EvaluationSummary,
     ) -> None:
-        """Log parameters, sanitized metrics, and table artifacts inside an MLflow run."""
-        with mlflow.start_run(run_name=run_name):
+        """Log parameters, sanitized metrics, and table artifacts inside an MLflow run.
+
+        The id of the MLflow run is stored on ``summary.mlflow_run_id``.
+        """
+        with mlflow.start_run(run_name=run_name) as run:
+            summary.mlflow_run_id = run.info.run_id
             mlflow.log_params(params, synchronous=False)
 
             flat_summary = summary.to_dict()
@@ -505,9 +576,15 @@ class EvaluationRunner:
         retrieval_evaluator: RetrievalEvaluator | None = None,
         generation_evaluator: GenerationEvaluator | None = None,
         tracker: EvaluationTracker | None = None,
+        embed_model: Any = None,
+        llm: Any = None,
+        persist: bool = True,
     ) -> None:
         self.config = config
         self.cutoff_k = config.eval.cutoff_k
+        self.embed_model = embed_model
+        self.llm = llm
+        self.persist = persist
 
         self.retrieval_evaluator = retrieval_evaluator or RetrievalEvaluator(
             measures=config.eval.retrieval_metrics,
@@ -532,8 +609,8 @@ class EvaluationRunner:
     ) -> CaseResult:
         query_id = qa.query_id
         query = qa.query
-        expected_output = qa.answer or "N/A"
-        gt_doc_ids: list[str] = [qa.doc_id] if qa.doc_id else []
+        expected_output = qa.answer or ""
+        gt_doc_ids = list(qa.doc_ids)
 
         deflection = False
         retrieved_results: list[RetrievalResult] = []
@@ -547,7 +624,7 @@ class EvaluationRunner:
 
             if not self.config.retrieval_only:
                 answer = result.generated_answer
-                
+
         except Exception as e:
             error = str(e)
             LOGGER.warning(f"Case {i} execution error: {e}")
@@ -557,6 +634,7 @@ class EvaluationRunner:
                 question=query,
                 ground_truth_doc_ids=gt_doc_ids,
                 error=error,
+                unanswerable=qa.unanswerable,
             )
 
         case = CaseResult(
@@ -567,6 +645,7 @@ class EvaluationRunner:
             retrieved_doc_ids=[r.doc_id for r in retrieved_results],
             retrieved_scores=[r.score for r in retrieved_results],
             error=error,
+            unanswerable=qa.unanswerable,
         )
 
         if not self.config.retrieval_only:
@@ -581,11 +660,16 @@ class EvaluationRunner:
 
             if self.generation_evaluator:
                 context = [r.text for r in retrieved_results]
+                selected_metrics = generation_metrics_for_record(
+                    list(self.generation_evaluator.generation_metrics),
+                    qa.answer,
+                )
                 gen_metrics = await self.generation_evaluator.evaluate_case(
                     query=query,
                     answer=answer,
                     expected_output=expected_output,
                     context=context,
+                    metrics=selected_metrics,
                 )
                 case.metrics.update(gen_metrics)
 
@@ -593,13 +677,14 @@ class EvaluationRunner:
 
     async def run(
         self,
-        dataset_path: Path | str,
+        dataset_path: Path | str | None = None,
         run_name: str = "eval_run",
         split: str | None = None,
         limit: int | None = None,
         index_dir: Path | str | None = None,
         max_concurrency: int | None = None,
         retrieval_only: bool | None = None,
+        records: list[QARecord] | None = None,
     ) -> EvaluationSummary:
         overrides: dict[str, Any] = {}
         if split is not None:
@@ -614,15 +699,17 @@ class EvaluationRunner:
             overrides["retrieval_only"] = retrieval_only
 
         if overrides:
-            
-
             self.config = apply_mutation(self.config, overrides)
 
-        self.tracker.setup()
+        qa_pairs = resolve_eval_records(
+            dataset_path,
+            records,
+            split=self.config.data.split,
+            limit=self.config.data.limit,
+        )
 
-        qa_pairs = load_qa_dataset(dataset_path, split=self.config.data.split)
-        if self.config.data.limit:
-            qa_pairs = qa_pairs[: self.config.data.limit]
+        if self.persist:
+            self.tracker.setup()
 
         qrels_df = DataLoader.to_qrels_df(qa_pairs)
 
@@ -632,7 +719,11 @@ class EvaluationRunner:
             f"Running evaluation with concurrency={concurrency_limit}, retrieval_only={self.config.retrieval_only}"
         )
 
-        workflow = RAGWorkflow(config=self.config)
+        workflow = RAGWorkflow(
+            config=self.config,
+            embed_model=self.embed_model,
+            llm=self.llm,
+        )
         await workflow.run(ingest=True)
 
         async def _run(qa: QARecord, i: int) -> CaseResult:
@@ -668,6 +759,7 @@ class EvaluationRunner:
 
         retrieval_eval_result = self.retrieval_evaluator.evaluate(res_df, qrels_df)
         self.retrieval_evaluator.populate_case_metrics(cases, retrieval_eval_result)
+        _apply_judged_only_metrics(cases, qa_pairs, self.cutoff_k)
 
         eval_threshold = (
             self.config.eval.threshold
@@ -689,16 +781,13 @@ class EvaluationRunner:
         retrieval_induced_error_rate = retrieval_induced_error_count / len(cases) if cases else 0.0
         failure_distribution = dict(failure_counts)
 
-        def avg(key: str) -> float:
-            vals = [r[key] for r in rows if r.get(key) is not None]
-            return sum(vals) / len(vals) if vals else 0.0
-
         summary_metrics: dict[str, float] = {}
 
         if not self.config.retrieval_only and self.generation_evaluator:
             for metric_type in self.generation_evaluator._metric_classes:
-                val = avg(str(metric_type))
-                summary_metrics[str(metric_type)] = val
+                val = mean_present(rows, str(metric_type))
+                if val is not None:
+                    summary_metrics[str(metric_type)] = val
 
         for m in self.retrieval_evaluator.resolved_measures:
             m_str = str(m)
@@ -710,6 +799,15 @@ class EvaluationRunner:
                 summary_metrics["recall"] = m_val
             elif "p@" in m_str.lower() or "precision" in m_str.lower():
                 summary_metrics["precision"] = m_val
+
+        if any(record.negative_doc_ids is not None for record in qa_pairs):
+            for measure in self.retrieval_evaluator.resolved_measures:
+                summary_metrics.pop(str(measure), None)
+            for key in ("ndcg", "recall", "precision"):
+                summary_metrics.pop(key, None)
+                judged_mean = mean_present(rows, key)
+                if judged_mean is not None:
+                    summary_metrics[key] = judged_mean
 
         summary_metrics["retrieval_induced_error_count"] = float(retrieval_induced_error_count)
         summary_metrics["retrieval_induced_error_rate"] = float(retrieval_induced_error_rate)
@@ -742,23 +840,35 @@ class EvaluationRunner:
             "retrieval_only": self.config.retrieval_only,
             "cutoff_k": self.cutoff_k,
         }
-        self.tracker.log_run(run_name=run_name, params=run_params, summary=summary)
+        if self.persist:
+            self.tracker.log_run(run_name=run_name, params=run_params, summary=summary)
 
         return summary
 
 
 async def run_evaluation(
-    dataset_path: Path | str,
-    config: RAGConfig,
+    dataset_path: Path | str | None = None,
+    config: RAGConfig | None = None,
     run_name: str = "eval_run",
     split: str | None = None,
     limit: int | None = None,
     index_dir: Path | str | None = None,
     max_concurrency: int | None = None,
     retrieval_only: bool | None = None,
+    records: list[QARecord] | None = None,
+    embed_model: Any = None,
+    llm: Any = None,
+    persist: bool = True,
 ) -> EvaluationSummary:
     """Module-level façade orchestrating EvaluationRunner."""
-    runner = EvaluationRunner(config=config)
+    if config is None:
+        raise QAValidationError("A config is required.")
+    runner = EvaluationRunner(
+        config=config,
+        embed_model=embed_model,
+        llm=llm,
+        persist=persist,
+    )
     return await runner.run(
         dataset_path=dataset_path,
         run_name=run_name,
@@ -767,4 +877,5 @@ async def run_evaluation(
         index_dir=index_dir,
         max_concurrency=max_concurrency,
         retrieval_only=retrieval_only,
+        records=records,
     )

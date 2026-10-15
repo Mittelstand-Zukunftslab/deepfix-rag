@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
@@ -173,16 +175,138 @@ def build_node_parser(
     raise ValueError(f"Unknown chunking strategy: {chunking.strategy}")
 
 
+class QAValidationError(ValueError):
+    """A QA row cannot be scored because its labels are inconsistent."""
+
+
+def _unique_doc_ids(values: list[Any]) -> list[str]:
+    """Drop blanks and duplicates while keeping the first occurrence of each id."""
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        doc_id = str(value).strip()
+        if not doc_id or doc_id in seen:
+            continue
+        seen.add(doc_id)
+        unique.append(doc_id)
+    return unique
+
+
+def qa_record_from_row(row: dict[str, Any]) -> QARecord:
+    """Build one eval record from a JSON object.
+
+    A row carries either ``doc_id`` or ``doc_ids``, never both. ``negative_doc_ids``
+    is optional. A missing ``answer`` stays missing so it is not invented as a label.
+    """
+    if "doc_id" in row and "doc_ids" in row:
+        raise QAValidationError("A row cannot include both doc_id and doc_ids.")
+    if "query_id" not in row or "query" not in row:
+        raise QAValidationError("A row must include query_id and query.")
+
+    if "doc_ids" in row:
+        raw_ids = row["doc_ids"]
+        if not isinstance(raw_ids, list):
+            raise QAValidationError("doc_ids must be a list of document ids.")
+        doc_ids = _unique_doc_ids(raw_ids)
+        doc_id = doc_ids[0] if doc_ids else ""
+    elif "doc_id" in row and row["doc_id"] is not None:
+        doc_id = str(row["doc_id"]).strip()
+        doc_ids = [doc_id] if doc_id else []
+    else:
+        doc_id = ""
+        doc_ids = []
+
+    negative_doc_ids: list[str] | None
+    if "negative_doc_ids" in row and row["negative_doc_ids"] is not None:
+        raw_negatives = row["negative_doc_ids"]
+        if not isinstance(raw_negatives, list):
+            raise QAValidationError("negative_doc_ids must be a list of document ids.")
+        negative_doc_ids = _unique_doc_ids(raw_negatives)
+    else:
+        negative_doc_ids = None
+
+    overlap = set(doc_ids) & set(negative_doc_ids or [])
+    if overlap:
+        listed = ", ".join(sorted(overlap))
+        raise QAValidationError(f"The same document id cannot be relevant and negative: {listed}.")
+
+    raw_answer = row.get("answer", None)
+    answer = None if raw_answer is None or str(raw_answer).strip() == "" else str(raw_answer)
+    unanswerable = bool(row.get("unanswerable", False))
+    return QARecord(
+        query_id=str(row["query_id"]),
+        query=str(row["query"]),
+        answer=answer,
+        doc_id=doc_id,
+        doc_ids=doc_ids,
+        negative_doc_ids=negative_doc_ids,
+        unanswerable=unanswerable,
+    )
+
+
 @dataclass
 class QARecord:
     """Normalized QA evaluation record loaded across benchmark datasets."""
 
     query_id: str
     query: str
-    answer: str
-    doc_id: str
+    answer: str | None = None
+    doc_id: str = ""
+    doc_ids: list[str] = field(default_factory=list)
+    negative_doc_ids: list[str] | None = None
+    unanswerable: bool = False
+
+    def __post_init__(self) -> None:
+        if self.doc_ids:
+            self.doc_ids = _unique_doc_ids(self.doc_ids)
+        elif self.doc_id.strip():
+            self.doc_ids = [self.doc_id.strip()]
+        else:
+            self.doc_ids = []
+        self.doc_id = self.doc_ids[0] if self.doc_ids else ""
+        if self.negative_doc_ids is not None:
+            self.negative_doc_ids = _unique_doc_ids(self.negative_doc_ids)
+            overlap = set(self.doc_ids) & set(self.negative_doc_ids)
+            if overlap:
+                listed = ", ".join(sorted(overlap))
+                raise QAValidationError(
+                    f"The same document id cannot be relevant and negative: {listed}."
+                )
+        if self.answer is not None and not self.answer.strip():
+            self.answer = None
+        # Empty ground truth, with no judged negatives, is the existing unanswerable mark.
+        if self.negative_doc_ids is None and not self.doc_ids:
+            self.unanswerable = True
+
+    def qrel_rows(self) -> list[dict[str, Any]]:
+        """One qrel per judged document. Relevant is 1 and explicit negatives are 0."""
+        rows = [
+            {
+                "qid": self.query_id,
+                "docno": doc_id,
+                "label": 1,
+                "rank": 1,
+                "query": self.query,
+            }
+            for doc_id in self.doc_ids
+        ]
+        if self.negative_doc_ids is not None:
+            rows.extend(
+                {
+                    "qid": self.query_id,
+                    "docno": doc_id,
+                    "label": 0,
+                    "rank": 1,
+                    "query": self.query,
+                }
+                for doc_id in self.negative_doc_ids
+            )
+        return rows
 
     def to_pyterrier(self) -> dict[str, Any]:
+        rows = self.qrel_rows()
+        if rows:
+            return rows[0]
         return {
             "qid": self.query_id,
             "docno": self.doc_id,
@@ -190,6 +314,33 @@ class QARecord:
             "rank": 1,
             "query": self.query,
         }
+
+    def to_export_row(self) -> dict[str, Any]:
+        """Serialize in the shape this loader accepts again."""
+        if (
+            len(self.doc_ids) == 1
+            and self.negative_doc_ids is None
+            and self.answer is not None
+            and not self.unanswerable
+        ):
+            return {
+                "query_id": self.query_id,
+                "query": self.query,
+                "answer": self.answer,
+                "doc_id": self.doc_ids[0],
+            }
+        row: dict[str, Any] = {
+            "query_id": self.query_id,
+            "query": self.query,
+            "doc_ids": list(self.doc_ids),
+        }
+        if self.answer is not None:
+            row["answer"] = self.answer
+        if self.negative_doc_ids is not None:
+            row["negative_doc_ids"] = list(self.negative_doc_ids)
+        if self.unanswerable:
+            row["unanswerable"] = True
+        return row
 
 
 class BaseLoaderStrategy(ABC):
@@ -374,6 +525,17 @@ class LocalFileLoader(BaseLoaderStrategy):
     def load_corpus(
         self, config: DataLoaderConfig, doc_ids: list[str] | None = None
     ) -> list[Document]:
+        path = Path(config.path_or_repo)
+        if path.is_dir():
+            LOGGER.info(f"Loading corpus JSON files from '{path}'...")
+            documents = _corpus_json_documents(path) or []
+            return _select_by_ids_and_limit(
+                documents,
+                get_id=lambda doc: str(doc.id_),
+                doc_ids=doc_ids,
+                limit=config.limit,
+                include_required=doc_ids is not None,
+            )
         LOGGER.info(f"Loading local file '{config.path_or_repo}'...")
 
         def _docs() -> Iterable[Document]:
@@ -401,13 +563,8 @@ class LocalFileLoader(BaseLoaderStrategy):
 
     @staticmethod
     def make_qa_record(row: dict) -> QARecord:
-        """Normalize and construct a benchmark QA record from arbitrary source mappings."""
-        return QARecord(
-            query_id=str(row["query_id"]),
-            query=str(row["query"]),
-            answer=str(row["answer"]),
-            doc_id=str(row["doc_id"]),
-        )
+        """Normalize a local JSONL QA row, including multi-label feedback rows."""
+        return qa_record_from_row(row)
 
     def load_qa(
         self, config: DataLoaderConfig, doc_ids: list[str] | None = None
@@ -443,6 +600,36 @@ class LocalFileLoader(BaseLoaderStrategy):
         )
 
 
+def _corpus_json_documents(dir_path: Path) -> list[Document] | None:
+    """Load workspace ``*.json`` corpus files, one document per file.
+
+    Returns ``None`` when the directory has no corpus JSON, so callers can fall
+    back to a general directory scan. ``qa.json`` stays reserved for QA rows.
+    """
+    if not dir_path.is_dir():
+        return None
+    files = sorted(
+        path for path in dir_path.glob("*.json") if path.is_file() and path.name != "qa.json"
+    )
+    if not files:
+        return None
+    documents: list[Document] = []
+    for path in files:
+        item = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(item, dict):
+            raise ValueError(f"Corpus file '{path.name}' must be a JSON object.")
+        doc_id = str(item.get("doc_id") or item.get("id") or path.stem)
+        text = item.get("text", item.get("content", ""))
+        if not isinstance(text, str):
+            raise ValueError(f"Corpus file '{path.name}' has no text.")
+        metadata: dict[str, Any] = {"source": str(path), "doc_id": doc_id}
+        filename = item.get("filename")
+        if isinstance(filename, str):
+            metadata["filename"] = filename
+        documents.append(Document(text=text, id_=doc_id, metadata=metadata))
+    return documents
+
+
 class DirectoryLoader(BaseLoaderStrategy):
     """Loader scanning local directories for documents or QA files."""
 
@@ -450,7 +637,9 @@ class DirectoryLoader(BaseLoaderStrategy):
         self, config: DataLoaderConfig, doc_ids: list[str] | None = None
     ) -> list[Document]:
         LOGGER.info(f"Scanning local directory '{config.path_or_repo}'...")
-        docs = SimpleDirectoryReader(config.path_or_repo).load_data()
+        docs = _corpus_json_documents(Path(config.path_or_repo))
+        if docs is None:
+            docs = SimpleDirectoryReader(config.path_or_repo).load_data()
         return _select_by_ids_and_limit(
             docs,
             get_id=lambda doc: str((doc.metadata or {}).get("doc_id") or doc.id_),
@@ -560,7 +749,7 @@ class DataLoader:
 
         Returns DataFrame with columns: ['qid', 'docno', 'label', 'rank', 'query'] where label=1.
         """
-        rows: list[dict[str, Any]] = [r.to_pyterrier() for r in qa_pairs]
+        rows: list[dict[str, Any]] = [qrel for record in qa_pairs for qrel in record.qrel_rows()]
 
         if not rows:
             return pd.DataFrame(columns=["qid", "docno", "label", "rank"]).astype(
@@ -655,7 +844,8 @@ class DataLoader:
                 qa_file = target_dir / f"qa{suffix}.jsonl"
                 with open(qa_file, "w", encoding="utf-8") as f:
                     f.writelines(
-                        json.dumps(asdict(qa), ensure_ascii=False) + "\n" for qa in qa_pairs
+                        json.dumps(qa.to_export_row(), ensure_ascii=False) + "\n"
+                        for qa in qa_pairs
                     )
 
         return corpus_file, qa_file

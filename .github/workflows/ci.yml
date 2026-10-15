@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev, feature/ui]
+  pull_request:
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - run: uv run ruff check src/deepfix_rag/api tests/test_api_skeleton.py
+      - run: uv run ruff format --check src/deepfix_rag/api tests/test_api_skeleton.py
+      - run: uv run pytest -m api -v
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - run: uv sync --frozen
+      - run: bun install --frozen-lockfile
+        working-directory: web
+      - name: Regenerate the API client from FastAPI's schema
+        working-directory: web
+        run: npm run generate:api
+      - name: Fail if the committed schema or client is stale
+        run: git diff --exit-code -- web/openapi.json web/src/client
+      - run: bun run typecheck
+        working-directory: web
+      - run: bun run lint
+        working-directory: web
+      - run: bun run test
+        working-directory: web
