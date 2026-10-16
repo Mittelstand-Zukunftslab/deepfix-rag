@@ -4,6 +4,28 @@ TanStack Start app for the DeepFix product UI (see `../tasks/prd-product-ui.md`)
 FastAPI service in `../src/deepfix_rag/api/` only through a TypeScript client generated from
 FastAPI's OpenAPI schema.
 
+## Accounts and access
+
+The web server owns sign-in. [Better Auth](https://www.better-auth.com) stores users and sessions
+in SQLite (`AUTH_DATABASE_PATH`, default `~/.deepfix/web/auth.db`) and creates its tables on first
+use. Roles are `member` (every registration) and `admin`.
+
+- `/api/auth/*` is handled by Better Auth in `src/server.ts` and never reaches FastAPI.
+- Every other `/api/*` call is proxied to FastAPI with the browser's cookies removed and a
+  15-minute Ed25519 token (`Authorization: Bearer …`) naming the user, email, and role. FastAPI
+  checks it against `/api/auth/jwks` and keeps its own admin check as a backstop.
+- The optimization loop is reached only through server functions in
+  `src/services/optimization.functions.ts`, guarded by `requireRole("admin")` from
+  `src/lib/auth-middleware.ts`.
+- Documents are shared by the whole team; searches and chats are private to the user who ran them.
+
+Create the first admin (or promote an existing account) from `web/`. The password is read from
+stdin:
+
+```sh
+bun run auth:create-admin --email admin@example.com
+```
+
 ## Development
 
 ```sh
@@ -11,7 +33,7 @@ FastAPI's OpenAPI schema.
 uv run --env-file .env uvicorn deepfix_rag.api.app:app --reload
 
 # 2. Web app (from web/)
-cp .env.example .env.local
+cp .env.example .env.local   # set BETTER_AUTH_SECRET
 bun install
 bun run dev        # http://localhost:8080
 ```
@@ -25,9 +47,8 @@ bun run generate:api   # exports ../web/openapi.json from FastAPI, then runs ope
 ```
 
 Run it after every change to an API route or Pydantic model. CI regenerates both and fails if they
-differ from what is committed. The API origin and `credentials: 'include'` are set once in
-`src/api.ts`; application code imports SDK functions from `@/client` and never calls `fetch`
-itself.
+differ from what is committed. The API origin is set once in `src/api.ts`; application code
+imports SDK functions from `@/client` and never calls `fetch` itself.
 
 ## Checks
 
