@@ -7,12 +7,13 @@ from fastapi.testclient import TestClient
 from llama_index.core.embeddings import MockEmbedding
 import pytest
 
-from deepfix_rag.accounts import connect, create_admin
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.schema import DataLoaderConfig, DataSourceType
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.data import DataLoader
 from deepfix_rag.documents import EMPTY_PDF, GARBLED_EMPTY, SCANNED_EMPTY
+from deepfix_rag.storage import connect
+from tests.identity import IdentityIssuer
 
 pytestmark = [pytest.mark.api, pytest.mark.unit]
 
@@ -22,32 +23,18 @@ def document_settings(tmp_path):
     return Settings(
         PRODUCT_DATA_DIR=tmp_path / "private",
         WORKSPACE_DIR=tmp_path / "workspace",
-        ALLOWED_EMAIL_DOMAINS="example.com",
         WEB_ORIGIN="http://localhost:8080",
     )
 
 
 @pytest.fixture
-def client(document_settings: Settings) -> Iterator[TestClient]:
+def client(document_settings: Settings, identity: IdentityIssuer) -> Iterator[TestClient]:
     embed_model = MockEmbedding(embed_dim=16)
-    with TestClient(create_app(document_settings, embed_model=embed_model)) as test_client:
+    app = create_app(
+        document_settings, embed_model=embed_model, token_verifier=identity.verifier()
+    )
+    with TestClient(app) as test_client:
         yield test_client
-
-
-def _register(client: TestClient, email: str) -> None:
-    created = client.post(
-        "/auth/register",
-        json={"email": email, "password": "correct-horse"},
-    )
-    assert created.status_code == 201
-
-
-def _login(client: TestClient, email: str) -> None:
-    signed_in = client.post(
-        "/auth/login",
-        json={"email": email, "password": "correct-horse"},
-    )
-    assert signed_in.status_code == 200
 
 
 def _reading(text: str, pages: list[dict[str, object]] | None = None) -> dict[str, str]:
@@ -83,11 +70,10 @@ def test_workspace_layout_and_champion_seed(
 
 
 def test_text_upload_list_order_and_corpus(
-    client: TestClient, document_settings: Settings
+    client: TestClient, document_settings: Settings, identity: IdentityIssuer
 ) -> None:
     assert client.get("/documents").status_code == 401
-    _register(client, "ada@example.com")
-    _login(client, "ada@example.com")
+    identity.sign_in(client, "ada@example.com")
 
     first = client.post("/documents", files={"file": ("notes.txt", b"Harbor notes", "text/plain")})
     assert first.status_code == 201
@@ -130,9 +116,8 @@ def test_text_upload_list_order_and_corpus(
     assert by_id[body["doc_id"]].metadata["filename"] == "notes.txt"
 
 
-def test_upload_rejections(client: TestClient) -> None:
-    _register(client, "ada@example.com")
-    _login(client, "ada@example.com")
+def test_upload_rejections(client: TestClient, identity: IdentityIssuer) -> None:
+    identity.sign_in(client, "ada@example.com")
 
     kind = client.post("/documents", files={"file": ("scan.tiff", b"not", "image/tiff")})
     assert kind.status_code == 400
@@ -171,9 +156,10 @@ def test_upload_rejections(client: TestClient) -> None:
     assert invalid.json()["detail"] == "The PDF reading is not valid."
 
 
-def test_pdf_highlights_and_empty_text(client: TestClient, document_settings: Settings) -> None:
-    _register(client, "ada@example.com")
-    _login(client, "ada@example.com")
+def test_pdf_highlights_and_empty_text(
+    client: TestClient, document_settings: Settings, identity: IdentityIssuer
+) -> None:
+    identity.sign_in(client, "ada@example.com")
     pdf = b"%PDF-1.4\n"
 
     mixed = client.post(
@@ -223,22 +209,20 @@ def test_pdf_highlights_and_empty_text(client: TestClient, document_settings: Se
     assert blank.json()["issues"] == []
 
 
-def test_delete_permissions(client: TestClient, document_settings: Settings) -> None:
-    _register(client, "ada@example.com")
-    _login(client, "ada@example.com")
+def test_delete_permissions(
+    client: TestClient, document_settings: Settings, identity: IdentityIssuer
+) -> None:
+    identity.sign_in(client, "ada@example.com")
     created = client.post("/documents", files={"file": ("notes.txt", b"Keep", "text/plain")})
     doc_id = created.json()["doc_id"]
 
-    client.post("/auth/logout")
-    _register(client, "bea@example.com")
-    _login(client, "bea@example.com")
+    identity.sign_in(client, "bea@example.com")
     forbidden = client.delete(f"/documents/{doc_id}")
     assert forbidden.status_code == 403
     assert forbidden.json()["detail"] == "You can only delete files you uploaded."
     assert client.get("/documents").json()[0]["can_delete"] is False
 
-    client.post("/auth/logout")
-    _login(client, "ada@example.com")
+    identity.sign_in(client, "ada@example.com")
     assert client.delete(f"/documents/{doc_id}").status_code == 204
     client.app.state.index.wait()
     assert client.get("/documents").json() == []
@@ -256,9 +240,7 @@ def test_delete_permissions(client: TestClient, document_settings: Settings) -> 
 
     other = client.post("/documents", files={"file": ("other.txt", b"Other", "text/plain")})
     other_id = other.json()["doc_id"]
-    create_admin(document_settings.product_db_path, "admin@example.com", "correct-horse")
-    client.post("/auth/logout")
-    _login(client, "admin@example.com")
+    identity.sign_in(client, "admin@example.com", "admin")
     assert client.delete(f"/documents/{other_id}").status_code == 204
     client.app.state.index.wait()
     assert client.get("/documents").json() == []

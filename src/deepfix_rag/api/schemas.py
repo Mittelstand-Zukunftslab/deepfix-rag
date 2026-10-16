@@ -27,33 +27,6 @@ class HealthResponse(ApiModel):
     status: Literal["ok"] = "ok"
 
 
-class UserResponse(ApiModel):
-    """A signed-in account. The password hash is never included."""
-
-    id: str
-    email: str
-    role: Literal["member", "admin"]
-
-
-class CredentialsRequest(ApiModel):
-    """Email and password for register and login."""
-
-    email: str = Field(min_length=1)
-    password: str = Field(min_length=1)
-
-
-class RoleUpdateRequest(ApiModel):
-    """New role for an existing account."""
-
-    role: Literal["member", "admin"]
-
-
-class LogoutResponse(ApiModel):
-    """Confirmation that the session cookie was cleared."""
-
-    status: Literal["ok"] = "ok"
-
-
 class IndexStatusResponse(ApiModel):
     """Overall state of the shared serving index."""
 

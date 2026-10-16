@@ -21,7 +21,6 @@ from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.schema import Document
 from pydantic import ValidationError
 
-from deepfix_rag.accounts import connect
 from deepfix_rag.config.schema import DataSourceType, RAGConfig, RetrievalBackend
 from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.data import DataLoader, _corpus_json_documents
@@ -33,6 +32,7 @@ from deepfix_rag.documents import (
 )
 from deepfix_rag.pipeline import RAGWorkflow
 from deepfix_rag.service import QueryService
+from deepfix_rag.storage import connect
 
 _ALLOWED_BACKENDS = frozenset(
     {RetrievalBackend.DENSE, RetrievalBackend.HYBRID, RetrievalBackend.BM25}
@@ -504,6 +504,7 @@ class IndexCoordinator:
 
     def _switch_pointer(self, build_id: str) -> None:
         import sys
+
         indexes = self.workspace / "indexes"
         pointer = indexes / "current"
         temporary = indexes / f".next-{build_id}"
@@ -540,6 +541,7 @@ class IndexCoordinator:
         except OSError:
             if sys.platform == "win32":
                 import _winapi
+
                 _remove_link(temporary)
                 target = str((indexes / "builds" / build_id).resolve())
                 if pointer.exists() or _is_link(pointer):
@@ -567,7 +569,9 @@ class IndexCoordinator:
 
     def _pointer_build_id(self) -> str | None:
         pointer = self.workspace / "indexes" / "current"
-        is_link = pointer.is_symlink() or (hasattr(pointer, "is_junction") and pointer.is_junction())
+        is_link = pointer.is_symlink() or (
+            hasattr(pointer, "is_junction") and pointer.is_junction()
+        )
         if not is_link:
             return None
         return Path(os.readlink(pointer)).name

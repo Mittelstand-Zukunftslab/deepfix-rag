@@ -8,7 +8,6 @@ from llama_index.core.embeddings import MockEmbedding
 import mlflow
 import pytest
 
-from deepfix_rag.accounts import create_admin
 from deepfix_rag.config.schema import DataSourceType, RAGConfig, RetrievalBackend
 from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.feedback import is_holdout, normalize_query, query_id_for, record_vote
@@ -333,11 +332,11 @@ def _ranked_docs(coordinator: IndexCoordinator, query: str) -> list[str]:
 
 
 def _vote(db_path: Path, query: str, *, relevant: str, negative: str) -> None:
-    user = create_admin(db_path, f"{query_id_for(query)}@example.com", "correct-horse")
+    user_id = f"user-{query_id_for(query)}"
     stored = record_interaction(
         db_path,
         kind="retrieval",
-        user_id=user.id,
+        user_id=user_id,
         query=query,
         build_id="build",
         config_path="configs/champion.yaml",
@@ -348,7 +347,7 @@ def _vote(db_path: Path, query: str, *, relevant: str, negative: str) -> None:
     )
     record_vote(
         db_path,
-        user_id=user.id,
+        user_id=user_id,
         interaction_id=stored.interaction_id,
         target="passage",
         action="down",
@@ -356,7 +355,7 @@ def _vote(db_path: Path, query: str, *, relevant: str, negative: str) -> None:
     )
     record_vote(
         db_path,
-        user_id=user.id,
+        user_id=user_id,
         interaction_id=stored.interaction_id,
         target="passage",
         action="up",
@@ -381,7 +380,7 @@ def _dev_snapshot(workspace: Path, db_path: Path, query: str) -> None:
 
 
 def _running(db_path: Path, run_id: str) -> None:
-    from deepfix_rag.accounts import connect
+    from deepfix_rag.storage import connect
 
     init_optimization(db_path)
     with connect(db_path) as conn:

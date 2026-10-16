@@ -229,11 +229,14 @@ def _answer_vote(db_path: Path, user_id: str, interaction_id: str) -> str | None
     summary="Read a stored search or ask",
 )
 def read_interaction(interaction_id: str, request: Request) -> InteractionResponse:
-    """Return one interaction with the current user's votes. Used after a refresh."""
+    """Return one of the caller's interactions with their votes. Used after a refresh.
+
+    Chats are private: another user's interaction answers 404, as if it did not exist.
+    """
     user = current_user(request)
     settings = get_settings(request)
     stored = get_interaction(settings.product_db_path, interaction_id)
-    if stored is None:
+    if stored is None or stored.user_id != user.id:
         raise HTTPException(status_code=NOT_FOUND, detail="No interaction with that id.")
     return InteractionResponse(
         interaction_id=stored.interaction_id,

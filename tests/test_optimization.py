@@ -11,7 +11,6 @@ import time
 import mlflow
 import pytest
 
-from deepfix_rag.accounts import connect, create_admin
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.feedback import is_holdout, normalize_query, query_id_for, record_vote
 from deepfix_rag.interactions import record_interaction
@@ -28,6 +27,7 @@ from deepfix_rag.optimization import (
     wait_for_run,
 )
 from deepfix_rag.pipeline import RetrievalResult
+from deepfix_rag.storage import connect
 
 pytestmark = pytest.mark.integration
 
@@ -106,11 +106,11 @@ def _dev_query() -> str:
 
 
 def _label(db_path: Path, query: str) -> str:
-    user = create_admin(db_path, "admin@example.com", "correct-horse")
+    user_id = "admin"
     stored = record_interaction(
         db_path,
         kind="retrieval",
-        user_id=user.id,
+        user_id=user_id,
         query=query,
         build_id="build",
         config_path="configs/champion.yaml",
@@ -120,7 +120,7 @@ def _label(db_path: Path, query: str) -> str:
     )
     record_vote(
         db_path,
-        user_id=user.id,
+        user_id=user_id,
         interaction_id=stored.interaction_id,
         target="passage",
         action="up",

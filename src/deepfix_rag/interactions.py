@@ -6,8 +6,8 @@ import hashlib
 from pathlib import Path
 import uuid
 
-from deepfix_rag.accounts import connect
 from deepfix_rag.pipeline import RetrievalResult
+from deepfix_rag.storage import connect
 
 InteractionKind = str
 
@@ -48,7 +48,7 @@ def init_interactions(db_path: Path) -> None:
             CREATE TABLE IF NOT EXISTS interactions (
                 interaction_id TEXT PRIMARY KEY,
                 kind TEXT NOT NULL CHECK(kind IN ('retrieval', 'ask')),
-                user_id TEXT NOT NULL REFERENCES users(id),
+                user_id TEXT NOT NULL,
                 query TEXT NOT NULL,
                 build_id TEXT NOT NULL,
                 config_path TEXT NOT NULL,

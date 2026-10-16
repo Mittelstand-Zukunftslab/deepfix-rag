@@ -8,12 +8,13 @@ from llama_index.core.llms import MockLLM
 import mlflow
 import pytest
 
-from deepfix_rag.accounts import connect, create_admin
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.feedback import sync_pending
 from deepfix_rag.interactions import get_interaction, record_interaction
 from deepfix_rag.pipeline import RetrievalResult
+from deepfix_rag.storage import connect
+from tests.identity import IdentityIssuer
 
 pytestmark = [pytest.mark.api, pytest.mark.integration]
 
@@ -23,29 +24,20 @@ def settings(tmp_path) -> Settings:
     return Settings(
         PRODUCT_DATA_DIR=tmp_path / "private",
         WORKSPACE_DIR=tmp_path / "workspace",
-        ALLOWED_EMAIL_DOMAINS="example.com",
         WEB_ORIGIN="http://localhost:8080",
         MLFLOW_TRACKING_URI=f"sqlite:///{tmp_path / 'mlflow.db'}",
     )
 
 
-def _client(settings: Settings) -> TestClient:
+def _client(settings: Settings, identity: IdentityIssuer) -> TestClient:
     mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
-    return TestClient(create_app(settings, embed_model=MockEmbedding(embed_dim=16), llm=MockLLM()))
-
-
-def _login(client: TestClient, email: str) -> None:
-    assert (
-        client.post(
-            "/auth/register",
-            json={"email": email, "password": "correct-horse"},
-        ).status_code
-        == 201
+    app = create_app(
+        settings,
+        embed_model=MockEmbedding(embed_dim=16),
+        llm=MockLLM(),
+        token_verifier=identity.verifier(),
     )
-    assert (
-        client.post("/auth/login", json={"email": email, "password": "correct-horse"}).status_code
-        == 200
-    )
+    return TestClient(app)
 
 
 def _trace_id() -> str:
@@ -56,9 +48,9 @@ def _trace_id() -> str:
     return trace_id
 
 
-def test_votes_stick_after_clear_and_switch(settings: Settings) -> None:
-    with _client(settings) as client:
-        _login(client, "ada@example.com")
+def test_votes_stick_after_clear_and_switch(settings: Settings, identity: IdentityIssuer) -> None:
+    with _client(settings, identity) as client:
+        identity.sign_in(client, "ada@example.com")
         client.app.state.feedback.stop()
         uploaded = client.post(
             "/documents",
@@ -112,16 +104,20 @@ def test_votes_stick_after_clear_and_switch(settings: Settings) -> None:
         with connect(settings.product_db_path) as conn:
             count = conn.execute("SELECT COUNT(*) AS n FROM feedback_events").fetchone()["n"]
         assert count == 3
+        identity.sign_in(client, "bea@example.com")
+        foreign = client.post(
+            "/feedback",
+            json={
+                "interaction_id": interaction_id,
+                "target": "passage",
+                "rank": 1,
+                "action": "up",
+            },
+        )
+        assert foreign.status_code == 404
         denied = client.get("/admin/feedback/summary")
         assert denied.status_code == 403
-        create_admin(settings.product_db_path, "admin@example.com", "correct-horse")
-        assert (
-            client.post(
-                "/auth/login",
-                json={"email": "admin@example.com", "password": "correct-horse"},
-            ).status_code
-            == 200
-        )
+        identity.sign_in(client, "admin@example.com", "admin")
         summary = client.get("/admin/feedback/summary")
         assert summary.status_code == 200, summary.text
         body = summary.json()
@@ -134,11 +130,11 @@ def test_votes_stick_after_clear_and_switch(settings: Settings) -> None:
 
 def test_outbox_updates_and_stops_when_the_trace_is_missing(settings: Settings) -> None:
     mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
-    user = create_admin(settings.product_db_path, "ada@example.com", "correct-horse")
+    user_id = "ada"
     traced = record_interaction(
         settings.product_db_path,
         kind="ask",
-        user_id=user.id,
+        user_id=user_id,
         query="harbor budget",
         build_id="build",
         config_path="champion.yaml",
@@ -151,7 +147,7 @@ def test_outbox_updates_and_stops_when_the_trace_is_missing(settings: Settings) 
     assert (
         record_vote(
             settings.product_db_path,
-            user_id=user.id,
+            user_id=user_id,
             interaction_id=traced.interaction_id,
             target="passage",
             rank=1,
@@ -168,7 +164,7 @@ def test_outbox_updates_and_stops_when_the_trace_is_missing(settings: Settings) 
     assert trace is not None
     record_vote(
         settings.product_db_path,
-        user_id=user.id,
+        user_id=user_id,
         interaction_id=traced.interaction_id,
         target="passage",
         rank=1,
@@ -180,14 +176,14 @@ def test_outbox_updates_and_stops_when_the_trace_is_missing(settings: Settings) 
     assert updated["assessment_id"] == assessment_id
     record_vote(
         settings.product_db_path,
-        user_id=user.id,
+        user_id=user_id,
         interaction_id=traced.interaction_id,
         target="answer",
         action="up",
     )
     record_vote(
         settings.product_db_path,
-        user_id=user.id,
+        user_id=user_id,
         interaction_id=traced.interaction_id,
         target="passage",
         rank=1,
@@ -206,7 +202,7 @@ def test_outbox_updates_and_stops_when_the_trace_is_missing(settings: Settings) 
     missing = record_interaction(
         settings.product_db_path,
         kind="retrieval",
-        user_id=user.id,
+        user_id=user_id,
         query="missing trace",
         build_id="build",
         config_path="champion.yaml",
@@ -215,7 +211,7 @@ def test_outbox_updates_and_stops_when_the_trace_is_missing(settings: Settings) 
     )
     record_vote(
         settings.product_db_path,
-        user_id=user.id,
+        user_id=user_id,
         interaction_id=missing.interaction_id,
         target="passage",
         rank=1,

@@ -10,10 +10,8 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.formparsers import MultiPartParser
 
-from deepfix_rag.accounts import init_db
+from deepfix_rag.api.identity import TokenVerifier
 from deepfix_rag.api.routes import (
-    admin,
-    auth,
     documents,
     feedback,
     health,
@@ -28,6 +26,7 @@ from deepfix_rag.feedback import FeedbackWorker
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.optimization import fail_interrupted, init_optimization, settings_from
 from deepfix_rag.optimization_schedule import OptimizationScheduler
+from deepfix_rag.storage import drop_account_tables
 
 # Starlette defaults max_part_size to 1MB (1024 * 1024), which causes any multipart field
 # (such as client-side extracted PDF readings or large documents up to MAX_UPLOAD_BYTES) to be
@@ -78,13 +77,18 @@ def create_app(
     *,
     embed_model: Any = None,
     llm: Any = None,
+    token_verifier: TokenVerifier | None = None,
 ) -> FastAPI:
-    """Build the API with its routers and CORS limited to the configured web origin."""
+    """Build the API with its routers and CORS limited to the configured web origin.
+
+    ``token_verifier`` checks the identity tokens the web app attaches. By default it fetches
+    keys from ``settings.auth_jwks_url``.
+    """
     app_settings = app_settings or default_settings
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        init_db(app.state.settings.product_db_path)
+        drop_account_tables(app.state.settings.product_db_path)
         init_documents(app.state.settings.product_db_path)
         init_optimization(app.state.settings.product_db_path)
         fail_interrupted(app.state.settings.product_db_path)
@@ -122,6 +126,11 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.settings = app_settings
+    app.state.token_verifier = token_verifier or TokenVerifier(
+        issuer=app_settings.auth_issuer,
+        audience=app_settings.auth_audience,
+        jwks_url=app_settings.auth_jwks_url,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[app_settings.WEB_ORIGIN],
@@ -136,8 +145,6 @@ def create_app(
         return JSONResponse(status_code=400, content={"detail": validation_detail(exc)})
 
     app.include_router(health.router)
-    app.include_router(auth.router)
-    app.include_router(admin.router)
     app.include_router(documents.router)
     app.include_router(index.router)
     app.include_router(retrieval.router)
