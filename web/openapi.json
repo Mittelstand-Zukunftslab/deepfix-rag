@@ -175,27 +175,6 @@
         "title": "ConfigChange",
         "type": "object"
       },
-      "CredentialsRequest": {
-        "description": "Email and password for register and login.",
-        "properties": {
-          "email": {
-            "minLength": 1,
-            "title": "Email",
-            "type": "string"
-          },
-          "password": {
-            "minLength": 1,
-            "title": "Password",
-            "type": "string"
-          }
-        },
-        "required": [
-          "email",
-          "password"
-        ],
-        "title": "CredentialsRequest",
-        "type": "object"
-      },
       "DocumentResponse": {
         "description": "A non-deleted workspace document. Extracted text stays on disk.",
         "properties": {
@@ -705,22 +684,6 @@
         "title": "InteractionResponse",
         "type": "object"
       },
-      "LogoutResponse": {
-        "description": "Confirmation that the session cookie was cleared.",
-        "properties": {
-          "status": {
-            "const": "ok",
-            "default": "ok",
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "status"
-        ],
-        "title": "LogoutResponse",
-        "type": "object"
-      },
       "OptimizationRunResponse": {
         "description": "The run recorded by a start request. Holdout questions are not included.",
         "properties": {
@@ -1055,24 +1018,6 @@
         "title": "RetrievalResponse",
         "type": "object"
       },
-      "RoleUpdateRequest": {
-        "description": "New role for an existing account.",
-        "properties": {
-          "role": {
-            "enum": [
-              "member",
-              "admin"
-            ],
-            "title": "Role",
-            "type": "string"
-          }
-        },
-        "required": [
-          "role"
-        ],
-        "title": "RoleUpdateRequest",
-        "type": "object"
-      },
       "StartOptimizationRequest": {
         "description": "Start the optimization job now. The nightly schedule calls the same function.",
         "properties": {},
@@ -1120,34 +1065,6 @@
           "enabled"
         ],
         "title": "UpdateOptimizationRequest",
-        "type": "object"
-      },
-      "UserResponse": {
-        "description": "A signed-in account. The password hash is never included.",
-        "properties": {
-          "email": {
-            "title": "Email",
-            "type": "string"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "role": {
-            "enum": [
-              "member",
-              "admin"
-            ],
-            "title": "Role",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "email",
-          "role"
-        ],
-        "title": "UserResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -1477,89 +1394,6 @@
         ]
       }
     },
-    "/admin/users/{user_id}": {
-      "patch": {
-        "description": "Promote or demote an account. Members receive 403. The last admin cannot be demoted.",
-        "operationId": "update_user_role",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "user_id",
-            "required": true,
-            "schema": {
-              "title": "User Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RoleUpdateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "No valid session."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "The signed-in user's role does not allow this action."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Unknown id."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "The request conflicts with the current state."
-          }
-        },
-        "summary": "Change a user's role",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
     "/ask": {
       "post": {
         "description": "Answer one question from the current index. Earlier questions are not included.",
@@ -1619,164 +1453,6 @@
         "summary": "Ask a question",
         "tags": [
           "retrieval"
-        ]
-      }
-    },
-    "/auth/login": {
-      "post": {
-        "description": "Set the session cookie when the email and password match.",
-        "operationId": "login",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CredentialsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid input."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "No valid session."
-          }
-        },
-        "summary": "Sign in",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/auth/logout": {
-      "post": {
-        "description": "Clear the session cookie. Signing out with no session still succeeds.",
-        "operationId": "logout",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LogoutResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Sign out",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/auth/me": {
-      "get": {
-        "description": "Return the id, email, and role for the session cookie.",
-        "operationId": "me",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "No valid session."
-          }
-        },
-        "summary": "Current user",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/auth/register": {
-      "post": {
-        "description": "Create a member. This route never creates an admin.",
-        "operationId": "register",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CredentialsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid input."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "The request conflicts with the current state."
-          }
-        },
-        "summary": "Create a member account",
-        "tags": [
-          "auth"
         ]
       }
     },
@@ -2040,7 +1716,7 @@
     },
     "/interactions/{interaction_id}": {
       "get": {
-        "description": "Return one interaction with the current user's votes. Used after a refresh.",
+        "description": "Return one of the caller's interactions with their votes. Used after a refresh.\n\nChats are private: another user's interaction answers 404, as if it did not exist.",
         "operationId": "get_interaction",
         "parameters": [
           {

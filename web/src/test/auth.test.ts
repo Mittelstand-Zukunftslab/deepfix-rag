@@ -4,7 +4,7 @@ import { navigationItems } from "@/components/layout/navigation";
 import { authRedirect } from "@/features/auth/guard";
 import { apiUpstreamUrl, isApiPath } from "@/api-proxy";
 import { credentialsSchema } from "@/schemas/auth";
-import { fieldForAuthError } from "@/services/auth-service";
+import { authErrorMessage, fieldForAuthError } from "@/services/auth-service";
 
 const member = { id: "1", email: "a@example.com", role: "member" as const };
 const admin = { id: "2", email: "b@example.com", role: "admin" as const };
@@ -60,12 +60,27 @@ describe("auth error fields", () => {
   });
 });
 
+describe("auth error copy", () => {
+  it("maps Better Auth codes to the form copy and keeps custom messages", () => {
+    expect(authErrorMessage({ code: "INVALID_EMAIL_OR_PASSWORD", message: "Invalid" })).toBe(
+      "Email or password is incorrect.",
+    );
+    expect(authErrorMessage({ code: "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" })).toBe(
+      "An account with this email already exists.",
+    );
+    expect(authErrorMessage({ message: "Registration is limited to example.com addresses." })).toBe(
+      "Registration is limited to example.com addresses.",
+    );
+    expect(authErrorMessage(null)).toBe("Unable to reach the server. Try again.");
+  });
+});
+
 describe("API proxy", () => {
   it("strips the /api prefix when forwarding to FastAPI", () => {
-    expect(isApiPath("/api/auth/login")).toBe(true);
+    expect(isApiPath("/api/documents")).toBe(true);
     expect(isApiPath("/search")).toBe(false);
-    expect(apiUpstreamUrl("http://app.test/api/auth/me?x=1", "http://127.0.0.1:8000").href).toBe(
-      "http://127.0.0.1:8000/auth/me?x=1",
+    expect(apiUpstreamUrl("http://app.test/api/documents?x=1", "http://127.0.0.1:8000").href).toBe(
+      "http://127.0.0.1:8000/documents?x=1",
     );
   });
 });

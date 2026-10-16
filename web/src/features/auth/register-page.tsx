@@ -13,7 +13,7 @@ export function RegisterPage() {
         alternate={{ href: "/sign-in", label: "Sign in", prompt: "Already have an account?" }}
         onSubmit={async (values) => {
           await authService.register(values);
-          window.location.assign("/sign-in?created=1");
+          window.location.assign("/search");
         }}
       />
     </AuthLayout>
