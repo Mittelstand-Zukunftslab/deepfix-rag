@@ -1,4 +1,4 @@
-import { ThumbsDown, ThumbsUp } from "lucide-react";
+import { MessageSquareText, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -26,13 +26,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
+import { COMMENT_REASON_LABEL } from "@/schemas/feedback";
 import {
   HISTORY_PAGE_SIZE,
   type HistoryFeedback,
   type HistoryFilters,
   type HistoryKind,
 } from "@/schemas/history";
-import type { HistoryEntry, HistoryPage, InteractionReview } from "@/services/history-service";
+import type {
+  HistoryEntry,
+  HistoryPage,
+  InteractionReview,
+  ReviewedComment,
+} from "@/services/history-service";
 
 const KIND_LABEL: Record<HistoryKind, string> = { retrieval: "Search", ask: "Ask" };
 
@@ -40,6 +46,7 @@ const FEEDBACK_OPTIONS: { value: HistoryFeedback; label: string }[] = [
   { value: "all", label: "All" },
   { value: "any", label: "With feedback" },
   { value: "negative", label: "Negative feedback" },
+  { value: "commented", label: "With comments" },
   { value: "none", label: "No feedback" },
 ];
 
@@ -276,7 +283,10 @@ function FeedbackSummary({ entry }: { entry: HistoryEntry }) {
     entry.kind === "ask" && answer.up + answer.down > 0 ? { label: "Answer", votes: answer } : null,
     passages.up + passages.down > 0 ? { label: "Passages", votes: passages } : null,
   ].filter((part) => part !== null);
-  if (parts.length === 0) return <span className="text-muted-foreground">None</span>;
+  const comments = entry.comment_count;
+  if (parts.length === 0 && comments === 0) {
+    return <span className="text-muted-foreground">None</span>;
+  }
   return (
     <ul className="flex flex-col gap-1 text-sm">
       {parts.map((part) => (
@@ -284,6 +294,12 @@ function FeedbackSummary({ entry }: { entry: HistoryEntry }) {
           {part.label} <VoteCounts up={part.votes.up} down={part.votes.down} />
         </li>
       ))}
+      {comments > 0 ? (
+        <li className="inline-flex items-center gap-1 text-muted-foreground">
+          <MessageSquareText className="size-3.5" aria-hidden />
+          {comments === 1 ? "1 comment" : `${comments} comments`}
+        </li>
+      ) : null}
     </ul>
   );
 }
@@ -352,6 +368,7 @@ function ReviewPanel({ review }: { review: ReviewState }) {
           ) : (
             <p className="text-sm text-muted-foreground">No answer was returned.</p>
           )}
+          <CommentList comments={review.data.answer_comments} />
         </section>
       ) : entry.error ? (
         <p className="text-sm font-medium text-destructive">{entry.error}</p>
@@ -377,6 +394,7 @@ function ReviewPanel({ review }: { review: ReviewState }) {
                   </span>
                 </div>
                 <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{hit.text}</p>
+                <CommentList comments={hit.comments} />
               </li>
             ))}
           </ol>
@@ -387,5 +405,36 @@ function ReviewPanel({ review }: { review: ReviewState }) {
         {entry.config_path} · build {buildId}
       </p>
     </div>
+  );
+}
+
+function CommentList({ comments }: { comments: ReviewedComment[] }) {
+  if (comments.length === 0) return null;
+  return (
+    <ul aria-label="Comments" className="mt-3 flex flex-col gap-2">
+      {comments.map((comment) => (
+        <li
+          key={`${comment.created_at}-${comment.text}`}
+          className="rounded-lg border-l-2 border-border bg-muted/40 px-3 py-2 text-sm"
+        >
+          <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+            {comment.vote === "up" ? (
+              <ThumbsUp className="size-3.5" aria-label="Helpful" />
+            ) : (
+              <ThumbsDown className="size-3.5 text-destructive" aria-label="Not helpful" />
+            )}
+            {comment.reason ? (
+              <span className="font-medium text-foreground">
+                {COMMENT_REASON_LABEL[comment.reason]}
+              </span>
+            ) : null}
+            <span>{formatDateTime(comment.created_at)}</span>
+          </p>
+          {comment.text ? (
+            <p className="mt-1 whitespace-pre-wrap text-foreground">{comment.text}</p>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   );
 }
