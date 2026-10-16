@@ -37,7 +37,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { commentKey, useFeedbackComments } from "@/features/feedback/use-feedback-comments";
 import { VoteButtons, type Vote } from "@/features/feedback/vote-buttons";
+import { VoteComment } from "@/features/feedback/vote-comment";
 import { IndexPreparing } from "@/features/index/index-preparing";
 import { askService, type AskHit } from "@/services/ask-service";
 import { feedbackService } from "@/services/feedback-service";
@@ -328,6 +330,8 @@ export function AskPage({
     await runAsk(draft);
   };
 
+  const comments = useFeedbackComments();
+
   const chooseAnswer = async (turnId: string, action: "up" | "down" | "clear") => {
     const vote: Vote = action === "clear" ? null : action;
     const turn = turns.find((t) => t.id === turnId);
@@ -363,6 +367,7 @@ export function AskPage({
           : s,
       ),
     );
+    comments.voted(commentKey(turn.interactionId, "answer"), "answer", saved.vote ?? null);
   };
 
   const choosePassage = async (turnId: string, hit: AskHit, action: "up" | "down" | "clear") => {
@@ -414,6 +419,11 @@ export function AskPage({
             }
           : s,
       ),
+    );
+    comments.voted(
+      commentKey(turn.interactionId, "passage", hit.rank),
+      "passage",
+      saved.vote ?? null,
     );
   };
 
@@ -801,6 +811,14 @@ export function AskPage({
                                   Evaluated with DeepFix RAG Engine
                                 </span>
                               </div>
+                              {turn.interactionId ? (
+                                <VoteComment
+                                  comments={comments}
+                                  interactionId={turn.interactionId}
+                                  target="answer"
+                                  vote={turn.answerVote}
+                                />
+                              ) : null}
                             </Card>
                           </div>
                         )}
@@ -947,6 +965,17 @@ export function AskPage({
                               currentTurn && void choosePassage(currentTurn.id, hit, action)
                             }
                           />
+                          {currentTurn?.interactionId ? (
+                            <div className="mt-2">
+                              <VoteComment
+                                comments={comments}
+                                interactionId={currentTurn.interactionId}
+                                target="passage"
+                                rank={hit.rank}
+                                vote={hit.vote ?? null}
+                              />
+                            </div>
+                          ) : null}
                         </div>
                       </Card>
                     </li>
