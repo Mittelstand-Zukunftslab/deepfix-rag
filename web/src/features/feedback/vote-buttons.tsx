@@ -31,7 +31,7 @@ export function VoteButtons({
       </Button>
       <Button
         type="button"
-        variant={vote === "down" ? "default" : "outline"}
+        variant={vote === "down" ? "destructive" : "outline"}
         className="h-11 px-3"
         aria-pressed={vote === "down"}
         aria-label={downLabel}
