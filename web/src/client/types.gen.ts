@@ -47,6 +47,13 @@ export type BodyCreateDocument = {
 };
 
 /**
+ * CommentReason
+ *
+ * One-tap reasons offered after a thumbs-down.
+ */
+export type CommentReason = 'wrong' | 'incomplete' | 'ignored_documents' | 'not_relevant' | 'outdated' | 'other';
+
+/**
  * ConfigApprovalResponse
  *
  * Answer approval for the interactions that used one champion config.
@@ -145,11 +152,55 @@ export type ErrorResponse = {
 };
 
 /**
+ * FeedbackCommentRequest
+ *
+ * An optional comment on the user's current vote. Only admins can read it.
+ */
+export type FeedbackCommentRequest = {
+    /**
+     * Interaction Id
+     */
+    interaction_id: string;
+    /**
+     * Rank
+     */
+    rank?: number | null;
+    /**
+     * Only after a thumbs-down, from the target's reason list.
+     */
+    reason?: CommentReason | null;
+    /**
+     * Target
+     */
+    target: 'passage' | 'answer';
+    /**
+     * Text
+     */
+    text?: string;
+};
+
+/**
+ * FeedbackCommentResponse
+ *
+ * The stored comment. The text is not echoed back.
+ */
+export type FeedbackCommentResponse = {
+    /**
+     * Comment Id
+     */
+    comment_id: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+};
+
+/**
  * FeedbackFilter
  *
  * Narrow the history by the feedback an interaction received.
  */
-export type FeedbackFilter = 'all' | 'any' | 'negative' | 'none';
+export type FeedbackFilter = 'all' | 'any' | 'negative' | 'commented' | 'none';
 
 /**
  * FeedbackRequest
@@ -288,6 +339,10 @@ export type HistoryEntryResponse = {
      */
     answer: string | null;
     answer_votes: VoteCountsResponse;
+    /**
+     * Comment Count
+     */
+    comment_count: number;
     /**
      * Config Path
      */
@@ -463,6 +518,10 @@ export type InteractionResponse = {
  * One interaction in full, for admin review.
  */
 export type InteractionReviewResponse = {
+    /**
+     * Answer Comments
+     */
+    answer_comments: Array<ReviewedCommentResponse>;
     /**
      * Build Id
      */
@@ -657,11 +716,36 @@ export type RetrievalResponse = {
 };
 
 /**
+ * ReviewedCommentResponse
+ *
+ * A comment and the vote it was written for.
+ */
+export type ReviewedCommentResponse = {
+    /**
+     * Created At
+     */
+    created_at: string;
+    reason: CommentReason | null;
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Vote
+     */
+    vote: 'up' | 'down';
+};
+
+/**
  * ReviewedHitResponse
  *
  * A passage as it was shown, with the votes it received.
  */
 export type ReviewedHitResponse = {
+    /**
+     * Comments
+     */
+    comments: Array<ReviewedCommentResponse>;
     /**
      * Doc Id
      */
@@ -1181,6 +1265,39 @@ export type SubmitFeedbackResponses = {
 };
 
 export type SubmitFeedbackResponse = SubmitFeedbackResponses[keyof SubmitFeedbackResponses];
+
+export type SubmitFeedbackCommentData = {
+    body: FeedbackCommentRequest;
+    path?: never;
+    query?: never;
+    url: '/feedback/comments';
+};
+
+export type SubmitFeedbackCommentErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type SubmitFeedbackCommentError = SubmitFeedbackCommentErrors[keyof SubmitFeedbackCommentErrors];
+
+export type SubmitFeedbackCommentResponses = {
+    /**
+     * Successful Response
+     */
+    201: FeedbackCommentResponse;
+};
+
+export type SubmitFeedbackCommentResponse = SubmitFeedbackCommentResponses[keyof SubmitFeedbackCommentResponses];
 
 export type HealthData = {
     body?: never;

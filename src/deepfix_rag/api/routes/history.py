@@ -10,12 +10,14 @@ from deepfix_rag.api.schemas import (
     HistoryEntryResponse,
     HistoryPageResponse,
     InteractionReviewResponse,
+    ReviewedCommentResponse,
     ReviewedHitResponse,
     VoteCountsResponse,
 )
 from deepfix_rag.history import (
     FeedbackFilter,
     HistoryEntry,
+    ReviewedComment,
     VoteCounts,
     list_history,
     review_interaction,
@@ -26,6 +28,18 @@ router = APIRouter(tags=["history"])
 
 def _votes(counts: VoteCounts) -> VoteCountsResponse:
     return VoteCountsResponse(up=counts.up, down=counts.down)
+
+
+def _comments(comments: list[ReviewedComment]) -> list[ReviewedCommentResponse]:
+    return [
+        ReviewedCommentResponse(
+            vote=cast(Literal["up", "down"], comment.vote),
+            reason=comment.reason,
+            text=comment.text,
+            created_at=comment.created_at,
+        )
+        for comment in comments
+    ]
 
 
 def _entry(entry: HistoryEntry) -> HistoryEntryResponse:
@@ -41,6 +55,7 @@ def _entry(entry: HistoryEntry) -> HistoryEntryResponse:
         hit_count=entry.hit_count,
         answer_votes=_votes(entry.answer_votes),
         passage_votes=_votes(entry.passage_votes),
+        comment_count=entry.comment_count,
     )
 
 
@@ -94,6 +109,7 @@ def review_interaction_route(interaction_id: str, request: Request) -> Interacti
         entry=_entry(review.entry),
         build_id=review.build_id,
         trace_id=review.trace_id,
+        answer_comments=_comments(review.answer_comments),
         hits=[
             ReviewedHitResponse(
                 rank=hit.rank,
@@ -102,6 +118,7 @@ def review_interaction_route(interaction_id: str, request: Request) -> Interacti
                 text=hit.text,
                 score=hit.score,
                 votes=_votes(hit.votes),
+                comments=_comments(hit.comments),
             )
             for hit in review.hits
         ],

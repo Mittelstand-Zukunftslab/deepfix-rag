@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
+import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -131,6 +131,20 @@ export const deleteDocument = <ThrowOnError extends boolean = false>(options: Op
  */
 export const submitFeedback = <ThrowOnError extends boolean = false>(options: Options<SubmitFeedbackData, ThrowOnError>): RequestResult<SubmitFeedbackResponses, SubmitFeedbackErrors, ThrowOnError> => (options.client ?? client).post<SubmitFeedbackResponses, SubmitFeedbackErrors, ThrowOnError>({
     url: '/feedback',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Comment on a vote
+ *
+ * Append a comment to the user's current vote. MLflow gets it as the rationale later.
+ */
+export const submitFeedbackComment = <ThrowOnError extends boolean = false>(options: Options<SubmitFeedbackCommentData, ThrowOnError>): RequestResult<SubmitFeedbackCommentResponses, SubmitFeedbackCommentErrors, ThrowOnError> => (options.client ?? client).post<SubmitFeedbackCommentResponses, SubmitFeedbackCommentErrors, ThrowOnError>({
+    url: '/feedback/comments',
     ...options,
     headers: {
         'Content-Type': 'application/json',

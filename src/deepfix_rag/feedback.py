@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 import hashlib
 import json
 from pathlib import Path
@@ -17,7 +18,34 @@ from deepfix_rag.storage import connect
 from deepfix_rag.tracing import FEEDBACK_EXPERIMENT, PRODUCT_EXPERIMENT
 
 UNSYNCED_AFTER = timedelta(minutes=5)
+COMMENT_MAX_LENGTH = 1000
 _SPACE = re.compile(r"\s+")
+
+
+class CommentReason(StrEnum):
+    """One-tap reasons offered after a thumbs-down."""
+
+    WRONG = "wrong"
+    INCOMPLETE = "incomplete"
+    IGNORED_DOCUMENTS = "ignored_documents"
+    NOT_RELEVANT = "not_relevant"
+    OUTDATED = "outdated"
+    OTHER = "other"
+
+
+COMMENT_REASONS: dict[str, frozenset[CommentReason]] = {
+    "answer": frozenset(
+        {
+            CommentReason.WRONG,
+            CommentReason.INCOMPLETE,
+            CommentReason.IGNORED_DOCUMENTS,
+            CommentReason.OTHER,
+        }
+    ),
+    "passage": frozenset(
+        {CommentReason.NOT_RELEVANT, CommentReason.OUTDATED, CommentReason.OTHER}
+    ),
+}
 
 
 class UnknownInteractionError(Exception):
@@ -39,6 +67,31 @@ class AnswerMissingError(Exception):
 
     def __init__(self) -> None:
         super().__init__("There is no answer to vote on.")
+
+
+class NoVoteError(Exception):
+    """A comment needs a current vote on the same answer or passage."""
+
+    def __init__(self) -> None:
+        super().__init__("Vote before adding a comment.")
+
+
+class InvalidCommentError(Exception):
+    """The reason does not fit the vote, or the comment is empty."""
+
+
+@dataclass(frozen=True)
+class FeedbackComment:
+    """One comment, stored with the vote it was written for."""
+
+    comment_id: str
+    interaction_id: str
+    target: str
+    rank: int | None
+    vote: Literal["up", "down"]
+    reason: CommentReason | None
+    text: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -135,6 +188,27 @@ def init_feedback(db_path: Path) -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feedback_comments (
+                comment_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                interaction_id TEXT NOT NULL,
+                target TEXT NOT NULL CHECK(target IN ('passage', 'answer')),
+                rank INTEGER,
+                vote TEXT NOT NULL CHECK(vote IN ('up', 'down')),
+                reason TEXT,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS feedback_comments_by_interaction
+            ON feedback_comments (interaction_id)
+            """
+        )
 
 
 def record_vote(
@@ -221,6 +295,117 @@ def current_votes(
         elif row["rank"] is not None:
             passages[int(row["rank"])] = row["action"]
     return answer_vote, passages
+
+
+def save_comment(
+    db_path: Path,
+    *,
+    user_id: str,
+    interaction_id: str,
+    target: str,
+    rank: int | None = None,
+    reason: CommentReason | None = None,
+    text: str = "",
+) -> FeedbackComment:
+    """Append a comment to the user's current vote and queue it for MLflow.
+
+    Comments are append-only and are never used as eval labels.
+    """
+    init_feedback(db_path)
+    interaction = get_interaction(db_path, interaction_id)
+    if interaction is None or interaction.user_id != user_id:
+        raise UnknownInteractionError
+    if target == "passage":
+        if rank is None or all(hit.rank != rank for hit in interaction.hits):
+            raise UnknownPassageError
+    elif target == "answer":
+        rank = None
+    else:
+        raise UnknownPassageError
+    answer_vote, passage_votes = current_votes(db_path, user_id, interaction_id)
+    vote = answer_vote if target == "answer" else passage_votes.get(rank or 0)
+    if vote is None:
+        raise NoVoteError
+    if reason is not None and (vote != "down" or reason not in COMMENT_REASONS[target]):
+        raise InvalidCommentError("That reason does not fit this vote.")
+    body = text.strip()
+    if len(body) > COMMENT_MAX_LENGTH:
+        raise InvalidCommentError(f"Keep the comment under {COMMENT_MAX_LENGTH} characters.")
+    if reason is None and not body:
+        raise InvalidCommentError("Choose a reason or write a comment.")
+    comment = FeedbackComment(
+        comment_id=uuid.uuid4().hex,
+        interaction_id=interaction_id,
+        target=target,
+        rank=rank,
+        vote=vote,
+        reason=reason,
+        text=body,
+        created_at=_now(),
+    )
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO feedback_comments (
+                comment_id, user_id, interaction_id, target, rank, vote, reason, text, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                comment.comment_id,
+                user_id,
+                interaction_id,
+                target,
+                rank,
+                vote,
+                reason,
+                body,
+                comment.created_at,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE feedback_events
+            SET sync_status = 'pending', next_attempt_at = ?
+            WHERE event_id = (
+                SELECT event_id FROM feedback_events
+                WHERE user_id = ? AND interaction_id = ? AND target = ?
+                  AND COALESCE(rank, -1) = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+            )
+              AND sync_status = 'synced'
+            """,
+            (comment.created_at, user_id, interaction_id, target, -1 if rank is None else rank),
+        )
+    return comment
+
+
+def comments_for(db_path: Path, interaction_id: str) -> list[FeedbackComment]:
+    """Every comment on one interaction, oldest first."""
+    init_feedback(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM feedback_comments
+            WHERE interaction_id = ?
+            ORDER BY created_at, rowid
+            """,
+            (interaction_id,),
+        ).fetchall()
+    return [
+        FeedbackComment(
+            comment_id=row["comment_id"],
+            interaction_id=row["interaction_id"],
+            target=row["target"],
+            rank=row["rank"],
+            vote=row["vote"],
+            reason=CommentReason(row["reason"]) if row["reason"] else None,
+            text=row["text"],
+            created_at=row["created_at"],
+        )
+        for row in rows
+    ]
 
 
 def feedback_summary(db_path: Path) -> FeedbackSummary:
@@ -502,29 +687,61 @@ def _mirror_event(db_path: Path, row) -> None:
             _save_assessment(db_path, row, rank_key, None)
         _set_status(db_path, row["event_id"], "synced")
         return
-    metadata = (
-        None if row["target"] == "answer" else {"doc_id": row["doc_id"], "rank": int(row["rank"])}
+    metadata: dict[str, object] = (
+        {} if row["target"] == "answer" else {"doc_id": row["doc_id"], "rank": int(row["rank"])}
     )
+    comment = _latest_comment(db_path, row, rank_key)
+    rationale = None
+    if comment is not None:
+        rationale = comment["text"] or None
+        if comment["reason"]:
+            metadata["reason"] = comment["reason"]
     value = row["action"] == "up"
     name = "answer_quality" if row["target"] == "answer" else "passage_relevance"
+    # override_feedback returns a new assessment and invalidates the old one, so the
+    # next override must target the new id.
     if assessment_id:
-        mlflow.override_feedback(
+        assessment = mlflow.override_feedback(
             trace_id=trace_id,
             assessment_id=assessment_id,
             value=value,
+            rationale=rationale,
             source=source,
-            metadata=metadata,
+            metadata=metadata or None,
         )
     else:
         assessment = mlflow.log_feedback(
             trace_id=trace_id,
             name=name,
             value=value,
+            rationale=rationale,
             source=source,
-            metadata=metadata,
+            metadata=metadata or None,
         )
-        _save_assessment(db_path, row, rank_key, assessment.assessment_id)
+    _save_assessment(db_path, row, rank_key, assessment.assessment_id)
     _set_status(db_path, row["event_id"], "synced")
+
+
+def _latest_comment(db_path: Path, row, rank: int):
+    """The newest comment written for this exact vote, if any."""
+    with connect(db_path) as conn:
+        return conn.execute(
+            """
+            SELECT reason, text FROM feedback_comments
+            WHERE user_id = ? AND interaction_id = ? AND target = ?
+              AND COALESCE(rank, -1) = ? AND vote = ? AND created_at >= ?
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            (
+                row["user_id"],
+                row["interaction_id"],
+                row["target"],
+                rank,
+                row["action"],
+                row["created_at"],
+            ),
+        ).fetchone()
 
 
 def _trace_exists(trace_id: str) -> bool:
