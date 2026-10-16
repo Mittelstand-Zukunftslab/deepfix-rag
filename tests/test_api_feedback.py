@@ -173,7 +173,24 @@ def test_outbox_updates_and_stops_when_the_trace_is_missing(settings: Settings) 
     assert sync_pending(settings.product_db_path) == 1
     with connect(settings.product_db_path) as conn:
         updated = conn.execute("SELECT assessment_id FROM feedback_mirrors").fetchone()
-    assert updated["assessment_id"] == assessment_id
+    assert updated["assessment_id"] != assessment_id
+    record_vote(
+        settings.product_db_path,
+        user_id=user_id,
+        interaction_id=traced.interaction_id,
+        target="passage",
+        rank=1,
+        action="up",
+    )
+    assert sync_pending(settings.product_db_path) == 1
+    valid = [
+        assessment
+        for assessment in mlflow.get_trace(traced.trace_id, flush=True).info.assessments
+        if assessment.valid
+    ]
+    assert [(assessment.name, assessment.value) for assessment in valid] == [
+        ("passage_relevance", True)
+    ]
     record_vote(
         settings.product_db_path,
         user_id=user_id,

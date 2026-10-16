@@ -3,7 +3,7 @@ import { z } from "zod";
 export const HISTORY_PAGE_SIZE = 25;
 
 export const historyKindSchema = z.enum(["retrieval", "ask"]);
-export const historyFeedbackSchema = z.enum(["all", "any", "negative", "none"]);
+export const historyFeedbackSchema = z.enum(["all", "any", "negative", "commented", "none"]);
 
 /** Filters for the admin history. They live in the URL so a filtered view can be shared. */
 export const historyFiltersSchema = z.object({

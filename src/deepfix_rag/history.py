@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from deepfix_rag.documents import document_filenames
-from deepfix_rag.feedback import init_feedback
+from deepfix_rag.feedback import CommentReason, comments_for, init_feedback
 from deepfix_rag.interactions import get_interaction, init_interactions
 from deepfix_rag.storage import connect
 
@@ -17,6 +17,7 @@ class FeedbackFilter(StrEnum):
     ALL = "all"
     ANY = "any"
     NEGATIVE = "negative"
+    COMMENTED = "commented"
     NONE = "none"
 
 
@@ -44,6 +45,7 @@ class HistoryEntry:
     hit_count: int
     answer_votes: VoteCounts
     passage_votes: VoteCounts
+    comment_count: int
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,16 @@ class HistoryPage:
 
     entries: list[HistoryEntry]
     total: int
+
+
+@dataclass(frozen=True)
+class ReviewedComment:
+    """A comment and the vote it was written for."""
+
+    vote: str
+    reason: CommentReason | None
+    text: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -64,6 +76,7 @@ class ReviewedHit:
     text: str
     score: float
     votes: VoteCounts
+    comments: list[ReviewedComment]
 
 
 @dataclass(frozen=True)
@@ -73,6 +86,7 @@ class InteractionReview:
     entry: HistoryEntry
     build_id: str
     trace_id: str | None
+    answer_comments: list[ReviewedComment]
     hits: list[ReviewedHit]
 
 
@@ -103,10 +117,20 @@ _CURRENT_VOTES = """
     )
 """
 
+_COUNTS = """
+    (SELECT COUNT(*) FROM interaction_hits AS h
+     WHERE h.interaction_id = i.interaction_id) AS hit_count,
+    (SELECT COUNT(*) FROM feedback_comments AS c
+     WHERE c.interaction_id = i.interaction_id) AS comment_count
+"""
+
 _FEEDBACK_WHERE = {
     FeedbackFilter.ALL: "1 = 1",
     FeedbackFilter.ANY: "v.interaction_id IS NOT NULL",
     FeedbackFilter.NEGATIVE: "(v.answer_down > 0 OR v.passage_down > 0)",
+    FeedbackFilter.COMMENTED: (
+        "EXISTS (SELECT 1 FROM feedback_comments AS c WHERE c.interaction_id = i.interaction_id)"
+    ),
     FeedbackFilter.NONE: "v.interaction_id IS NULL",
 }
 
@@ -142,8 +166,7 @@ def list_history(
             f"""
             {_CURRENT_VOTES}
             SELECT i.*, v.answer_up, v.answer_down, v.passage_up, v.passage_down,
-                   (SELECT COUNT(*) FROM interaction_hits AS h
-                    WHERE h.interaction_id = i.interaction_id) AS hit_count
+                   {_COUNTS}
             {source}
             ORDER BY i.created_at DESC, i.rowid DESC
             LIMIT ? OFFSET ?
@@ -164,8 +187,7 @@ def review_interaction(db_path: Path, interaction_id: str) -> InteractionReview 
             f"""
             {_CURRENT_VOTES}
             SELECT i.*, v.answer_up, v.answer_down, v.passage_up, v.passage_down,
-                   (SELECT COUNT(*) FROM interaction_hits AS h
-                    WHERE h.interaction_id = i.interaction_id) AS hit_count
+                   {_COUNTS}
             FROM interactions AS i LEFT JOIN votes AS v USING (interaction_id)
             WHERE i.interaction_id = ?
             """,
@@ -185,10 +207,21 @@ def review_interaction(db_path: Path, interaction_id: str) -> InteractionReview 
             )
         }
     names = document_filenames(db_path, [hit.doc_id for hit in stored.hits])
+    comments: dict[int | None, list[ReviewedComment]] = {}
+    for comment in comments_for(db_path, interaction_id):
+        comments.setdefault(comment.rank, []).append(
+            ReviewedComment(
+                vote=comment.vote,
+                reason=comment.reason,
+                text=comment.text,
+                created_at=comment.created_at,
+            )
+        )
     return InteractionReview(
         entry=_entry(summary),
         build_id=stored.build_id,
         trace_id=stored.trace_id,
+        answer_comments=comments.get(None, []),
         hits=[
             ReviewedHit(
                 rank=hit.rank,
@@ -197,6 +230,7 @@ def review_interaction(db_path: Path, interaction_id: str) -> InteractionReview 
                 text=hit.text,
                 score=hit.score,
                 votes=by_rank.get(hit.rank, VoteCounts()),
+                comments=comments.get(hit.rank, []),
             )
             for hit in stored.hits
         ],
@@ -223,4 +257,5 @@ def _entry(row: Any) -> HistoryEntry:
         passage_votes=VoteCounts(
             up=int(row["passage_up"] or 0), down=int(row["passage_down"] or 0)
         ),
+        comment_count=int(row["comment_count"]),
     )

@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from deepfix_rag.feedback import COMMENT_MAX_LENGTH, CommentReason
+
 
 class ApiModel(BaseModel):
     """Base for response models.
@@ -116,6 +118,25 @@ class FeedbackResponse(ApiModel):
     target: Literal["passage", "answer"]
     rank: int | None = None
     vote: Literal["up", "down"] | None = None
+
+
+class FeedbackCommentRequest(ApiModel):
+    """An optional comment on the user's current vote. Only admins can read it."""
+
+    interaction_id: str = Field(min_length=1)
+    target: Literal["passage", "answer"]
+    rank: int | None = Field(default=None, ge=1)
+    reason: CommentReason | None = Field(
+        default=None, description="Only after a thumbs-down, from the target's reason list."
+    )
+    text: str = Field(default="", max_length=COMMENT_MAX_LENGTH)
+
+
+class FeedbackCommentResponse(ApiModel):
+    """The stored comment. The text is not echoed back."""
+
+    comment_id: str
+    created_at: str
 
 
 class ConfigApprovalResponse(ApiModel):
@@ -242,6 +263,7 @@ class HistoryEntryResponse(ApiModel):
     hit_count: int
     answer_votes: VoteCountsResponse
     passage_votes: VoteCountsResponse
+    comment_count: int
 
 
 class HistoryPageResponse(ApiModel):
@@ -253,6 +275,15 @@ class HistoryPageResponse(ApiModel):
     offset: int
 
 
+class ReviewedCommentResponse(ApiModel):
+    """A comment and the vote it was written for."""
+
+    vote: Literal["up", "down"]
+    reason: CommentReason | None
+    text: str
+    created_at: str
+
+
 class ReviewedHitResponse(ApiModel):
     """A passage as it was shown, with the votes it received."""
 
@@ -262,6 +293,7 @@ class ReviewedHitResponse(ApiModel):
     text: str
     score: float
     votes: VoteCountsResponse
+    comments: list[ReviewedCommentResponse]
 
 
 class InteractionReviewResponse(ApiModel):
@@ -270,4 +302,5 @@ class InteractionReviewResponse(ApiModel):
     entry: HistoryEntryResponse
     build_id: str
     trace_id: str | None
+    answer_comments: list[ReviewedCommentResponse]
     hits: list[ReviewedHitResponse]

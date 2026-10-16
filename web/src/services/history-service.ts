@@ -2,6 +2,7 @@ import type {
   HistoryEntryResponse,
   HistoryPageResponse,
   InteractionReviewResponse,
+  ReviewedCommentResponse,
 } from "@/client";
 import type { HistoryFilters } from "@/schemas/history";
 import { messageOf } from "@/services/api-result";
@@ -10,6 +11,7 @@ import { fetchHistory, fetchInteractionReview } from "@/services/history.functio
 export type HistoryPage = HistoryPageResponse;
 export type HistoryEntry = HistoryEntryResponse;
 export type InteractionReview = InteractionReviewResponse;
+export type ReviewedComment = ReviewedCommentResponse;
 
 export class HistoryRequestError extends Error {
   constructor(message: string) {

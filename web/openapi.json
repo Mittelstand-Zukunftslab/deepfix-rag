@@ -88,6 +88,19 @@
         "title": "Body_create_document",
         "type": "object"
       },
+      "CommentReason": {
+        "description": "One-tap reasons offered after a thumbs-down.",
+        "enum": [
+          "wrong",
+          "incomplete",
+          "ignored_documents",
+          "not_relevant",
+          "outdated",
+          "other"
+        ],
+        "title": "CommentReason",
+        "type": "string"
+      },
       "ConfigApprovalResponse": {
         "description": "Answer approval for the interactions that used one champion config.",
         "properties": {
@@ -261,12 +274,85 @@
         "title": "ErrorResponse",
         "type": "object"
       },
+      "FeedbackCommentRequest": {
+        "description": "An optional comment on the user's current vote. Only admins can read it.",
+        "properties": {
+          "interaction_id": {
+            "minLength": 1,
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommentReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only after a thumbs-down, from the target's reason list."
+          },
+          "target": {
+            "enum": [
+              "passage",
+              "answer"
+            ],
+            "title": "Target",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "target"
+        ],
+        "title": "FeedbackCommentRequest",
+        "type": "object"
+      },
+      "FeedbackCommentResponse": {
+        "description": "The stored comment. The text is not echoed back.",
+        "properties": {
+          "comment_id": {
+            "title": "Comment Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "comment_id",
+          "created_at"
+        ],
+        "title": "FeedbackCommentResponse",
+        "type": "object"
+      },
       "FeedbackFilter": {
         "description": "Narrow the history by the feedback an interaction received.",
         "enum": [
           "all",
           "any",
           "negative",
+          "commented",
           "none"
         ],
         "title": "FeedbackFilter",
@@ -508,6 +594,10 @@
           "answer_votes": {
             "$ref": "#/components/schemas/VoteCountsResponse"
           },
+          "comment_count": {
+            "title": "Comment Count",
+            "type": "integer"
+          },
           "config_path": {
             "title": "Config Path",
             "type": "string"
@@ -567,7 +657,8 @@
           "created_at",
           "hit_count",
           "answer_votes",
-          "passage_votes"
+          "passage_votes",
+          "comment_count"
         ],
         "title": "HistoryEntryResponse",
         "type": "object"
@@ -811,6 +902,13 @@
       "InteractionReviewResponse": {
         "description": "One interaction in full, for admin review.",
         "properties": {
+          "answer_comments": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewedCommentResponse"
+            },
+            "title": "Answer Comments",
+            "type": "array"
+          },
           "build_id": {
             "title": "Build Id",
             "type": "string"
@@ -841,6 +939,7 @@
           "entry",
           "build_id",
           "trace_id",
+          "answer_comments",
           "hits"
         ],
         "title": "InteractionReviewResponse",
@@ -1180,9 +1279,55 @@
         "title": "RetrievalResponse",
         "type": "object"
       },
+      "ReviewedCommentResponse": {
+        "description": "A comment and the vote it was written for.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommentReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "vote": {
+            "enum": [
+              "up",
+              "down"
+            ],
+            "title": "Vote",
+            "type": "string"
+          }
+        },
+        "required": [
+          "vote",
+          "reason",
+          "text",
+          "created_at"
+        ],
+        "title": "ReviewedCommentResponse",
+        "type": "object"
+      },
       "ReviewedHitResponse": {
         "description": "A passage as it was shown, with the votes it received.",
         "properties": {
+          "comments": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewedCommentResponse"
+            },
+            "title": "Comments",
+            "type": "array"
+          },
           "doc_id": {
             "title": "Doc Id",
             "type": "string"
@@ -1213,7 +1358,8 @@
           "document_filename",
           "text",
           "score",
-          "votes"
+          "votes",
+          "comments"
         ],
         "title": "ReviewedHitResponse",
         "type": "object"
@@ -2054,6 +2200,68 @@
           }
         },
         "summary": "Vote on a passage or an answer",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
+    "/feedback/comments": {
+      "post": {
+        "description": "Append a comment to the user's current vote. MLflow gets it as the rationale later.",
+        "operationId": "submit_feedback_comment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackCommentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackCommentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Comment on a vote",
         "tags": [
           "feedback"
         ]

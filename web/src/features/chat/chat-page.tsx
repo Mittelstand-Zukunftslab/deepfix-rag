@@ -37,7 +37,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { commentKey, useFeedbackComments } from "@/features/feedback/use-feedback-comments";
 import { VoteButtons, type Vote } from "@/features/feedback/vote-buttons";
+import { VoteComment } from "@/features/feedback/vote-comment";
 import { IndexPreparing } from "@/features/index/index-preparing";
 import { askService, type AskHit } from "@/services/ask-service";
 import { feedbackService } from "@/services/feedback-service";
@@ -108,7 +110,8 @@ export function AskPage({
   askedQuery?: string | null;
   ownerId?: string | null;
 }) {
-  const isControlledMode = askedQuery !== null || answer !== undefined || hits !== undefined || initialError !== null;
+  const isControlledMode =
+    askedQuery !== null || answer !== undefined || hits !== undefined || initialError !== null;
   const storageKeys = ownerId && !isControlledMode ? chatStorageKeys(ownerId) : null;
 
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
@@ -327,6 +330,8 @@ export function AskPage({
     await runAsk(draft);
   };
 
+  const comments = useFeedbackComments();
+
   const chooseAnswer = async (turnId: string, action: "up" | "down" | "clear") => {
     const vote: Vote = action === "clear" ? null : action;
     const turn = turns.find((t) => t.id === turnId);
@@ -334,7 +339,10 @@ export function AskPage({
       setSessions((prev) =>
         prev.map((s) =>
           s.id === activeSession.id
-            ? { ...s, turns: s.turns.map((t) => (t.id === turnId ? { ...t, answerVote: vote } : t)) }
+            ? {
+                ...s,
+                turns: s.turns.map((t) => (t.id === turnId ? { ...t, answerVote: vote } : t)),
+              }
             : s,
         ),
       );
@@ -359,6 +367,7 @@ export function AskPage({
           : s,
       ),
     );
+    comments.voted(commentKey(turn.interactionId, "answer"), "answer", saved.vote ?? null);
   };
 
   const choosePassage = async (turnId: string, hit: AskHit, action: "up" | "down" | "clear") => {
@@ -410,6 +419,11 @@ export function AskPage({
             }
           : s,
       ),
+    );
+    comments.voted(
+      commentKey(turn.interactionId, "passage", hit.rank),
+      "passage",
+      saved.vote ?? null,
     );
   };
 
@@ -549,10 +563,7 @@ export function AskPage({
                                 onBlur={() => handleSaveRename(s.id)}
                                 className="h-6 text-xs px-1.5 py-0.5"
                               />
-                              <button
-                                type="submit"
-                                className="text-primary hover:text-primary/80"
-                              >
+                              <button type="submit" className="text-primary hover:text-primary/80">
                                 <Check className="h-3.5 w-3.5" />
                               </button>
                             </form>
@@ -800,6 +811,14 @@ export function AskPage({
                                   Evaluated with DeepFix RAG Engine
                                 </span>
                               </div>
+                              {turn.interactionId ? (
+                                <VoteComment
+                                  comments={comments}
+                                  interactionId={turn.interactionId}
+                                  target="answer"
+                                  vote={turn.answerVote}
+                                />
+                              ) : null}
                             </Card>
                           </div>
                         )}
@@ -852,51 +871,51 @@ export function AskPage({
                 </div>
               </div>
 
-            {/* 3. Bottom Prompt Composer (Gemini / ChatGPT Style Floating Input) */}
-            <div className="border-t border-border/60 bg-background/95 p-3 backdrop-blur-md sm:p-4">
-              <div className="mx-auto max-w-3xl">
-                <ComposerPrimitive.Root
-                  asChild
-                  className="relative flex items-center gap-2 rounded-2xl border border-input bg-card/90 px-3 py-1.5 shadow-sm transition-all focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/20 hover:border-border"
-                  aria-label="Ask composer"
-                >
-                  <form onSubmit={onSubmit} className="flex w-full items-center gap-2">
-                    <label className="sr-only" htmlFor="ask-input">
-                      Ask
-                    </label>
-                    <Input
-                      id="ask-input"
-                      aria-label="Ask"
-                      value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
-                      placeholder="Ask a question about the corpus..."
-                      disabled={pending}
-                      aria-busy={pending}
-                      className="h-10 min-h-[40px] flex-1 border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0 md:text-sm"
-                    />
-                    <Button
-                      type="submit"
-                      size="icon"
-                      className="h-9 w-9 shrink-0 rounded-xl transition-all"
-                      disabled={pending || !draft.trim()}
-                      aria-busy={pending}
-                      aria-label="Ask"
-                    >
-                      {pending ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <ArrowUp className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </form>
-                </ComposerPrimitive.Root>
-                <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
-                  DeepFix searches indexed documents and grounds answers with citations.
-                </p>
+              {/* 3. Bottom Prompt Composer (Gemini / ChatGPT Style Floating Input) */}
+              <div className="border-t border-border/60 bg-background/95 p-3 backdrop-blur-md sm:p-4">
+                <div className="mx-auto max-w-3xl">
+                  <ComposerPrimitive.Root
+                    asChild
+                    className="relative flex items-center gap-2 rounded-2xl border border-input bg-card/90 px-3 py-1.5 shadow-sm transition-all focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/20 hover:border-border"
+                    aria-label="Ask composer"
+                  >
+                    <form onSubmit={onSubmit} className="flex w-full items-center gap-2">
+                      <label className="sr-only" htmlFor="ask-input">
+                        Ask
+                      </label>
+                      <Input
+                        id="ask-input"
+                        aria-label="Ask"
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        placeholder="Ask a question about the corpus..."
+                        disabled={pending}
+                        aria-busy={pending}
+                        className="h-10 min-h-[40px] flex-1 border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0 md:text-sm"
+                      />
+                      <Button
+                        type="submit"
+                        size="icon"
+                        className="h-9 w-9 shrink-0 rounded-xl transition-all"
+                        disabled={pending || !draft.trim()}
+                        aria-busy={pending}
+                        aria-label="Ask"
+                      >
+                        {pending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <ArrowUp className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </form>
+                  </ComposerPrimitive.Root>
+                  <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
+                    DeepFix searches indexed documents and grounds answers with citations.
+                  </p>
+                </div>
               </div>
-            </div>
-          </AssistantRuntimeProvider>
-        </div>
+            </AssistantRuntimeProvider>
+          </div>
 
           {/* 4. Right Side-by-Side Vertical Scrollable Grounding Passages Drawer */}
           {shownHits.length > 0 && showSources ? (
@@ -946,6 +965,17 @@ export function AskPage({
                               currentTurn && void choosePassage(currentTurn.id, hit, action)
                             }
                           />
+                          {currentTurn?.interactionId ? (
+                            <div className="mt-2">
+                              <VoteComment
+                                comments={comments}
+                                interactionId={currentTurn.interactionId}
+                                target="passage"
+                                rank={hit.rank}
+                                vote={hit.vote ?? null}
+                              />
+                            </div>
+                          ) : null}
                         </div>
                       </Card>
                     </li>

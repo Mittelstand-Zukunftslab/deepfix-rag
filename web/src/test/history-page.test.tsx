@@ -20,6 +20,7 @@ function entry(overrides: Partial<HistoryEntry> = {}): HistoryEntry {
     hit_count: 2,
     answer_votes: { up: 0, down: 1 },
     passage_votes: { up: 1, down: 0 },
+    comment_count: 0,
     ...overrides,
   };
 }
@@ -32,6 +33,14 @@ const review: InteractionReview = {
   entry: entry(),
   build_id: "build-7",
   trace_id: null,
+  answer_comments: [
+    {
+      vote: "down",
+      reason: "incomplete",
+      text: "It skips the winter hours.",
+      created_at: "2026-10-16T09:31:00.000Z",
+    },
+  ],
   hits: [
     {
       rank: 1,
@@ -40,6 +49,9 @@ const review: InteractionReview = {
       text: "The harbor opens at six in the morning.",
       score: 0.8123,
       votes: { up: 1, down: 0 },
+      comments: [
+        { vote: "down", reason: "outdated", text: "", created_at: "2026-10-16T09:32:00.000Z" },
+      ],
     },
   ],
 };
@@ -102,7 +114,14 @@ describe("History screen", () => {
           answer_votes: { up: 0, down: 0 },
           passage_votes: { up: 0, down: 0 },
         }),
-        entry({ interaction_id: "int-3", answer: null, error: "The model timed out." }),
+        entry({
+          interaction_id: "int-3",
+          answer: null,
+          error: "The model timed out.",
+          answer_votes: { up: 0, down: 0 },
+          passage_votes: { up: 0, down: 0 },
+          comment_count: 2,
+        }),
       ]),
     });
     const rows = screen.getAllByRole("row").slice(1);
@@ -123,7 +142,11 @@ describe("History screen", () => {
     expect(search.getByText("1 passage shown")).toBeTruthy();
     expect(search.getByText("None")).toBeTruthy();
 
-    expect(within(rows[2]!).getByText("Failed: The model timed out.")).toBeTruthy();
+    expect(ask.queryByText(/comment/)).toBeNull();
+    const failed = within(rows[2]!);
+    expect(failed.getByText("Failed: The model timed out.")).toBeTruthy();
+    expect(failed.getByText("2 comments")).toBeTruthy();
+    expect(failed.queryByText("None")).toBeNull();
     expect(screen.getByText("Showing 1–3 of 3")).toBeTruthy();
   });
 
@@ -153,6 +176,8 @@ describe("History screen", () => {
 
     fireEvent.change(screen.getByLabelText("Feedback"), { target: { value: "negative" } });
     expect(onFiltersChange).toHaveBeenLastCalledWith({ page: 1, feedback: "negative" });
+    fireEvent.change(screen.getByLabelText("Feedback"), { target: { value: "commented" } });
+    expect(onFiltersChange).toHaveBeenLastCalledWith({ page: 1, feedback: "commented" });
 
     fireEvent.change(screen.getByLabelText("Question or person"), {
       target: { value: "  bea@example.com " },
@@ -215,6 +240,13 @@ describe("History screen", () => {
     expect(within(panel).getByText("Score 0.812")).toBeTruthy();
     expect(within(panel).getByText("The harbor opens at six in the morning.")).toBeTruthy();
     expect(within(panel).getByText(/build build-7/)).toBeTruthy();
+    const [answerComments, passageComments] = within(panel).getAllByRole("list", {
+      name: "Comments",
+    });
+    expect(within(answerComments!).getByText("Incomplete")).toBeTruthy();
+    expect(within(answerComments!).getByText("It skips the winter hours.")).toBeTruthy();
+    expect(within(answerComments!).getByLabelText("Not helpful")).toBeTruthy();
+    expect(within(passageComments!).getByText("Outdated")).toBeTruthy();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Close" }));
     expect(onSelect).toHaveBeenLastCalledWith(undefined);
