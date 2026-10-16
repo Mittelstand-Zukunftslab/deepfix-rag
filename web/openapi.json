@@ -175,27 +175,6 @@
         "title": "ConfigChange",
         "type": "object"
       },
-      "CredentialsRequest": {
-        "description": "Email and password for register and login.",
-        "properties": {
-          "email": {
-            "minLength": 1,
-            "title": "Email",
-            "type": "string"
-          },
-          "password": {
-            "minLength": 1,
-            "title": "Password",
-            "type": "string"
-          }
-        },
-        "required": [
-          "email",
-          "password"
-        ],
-        "title": "CredentialsRequest",
-        "type": "object"
-      },
       "DocumentResponse": {
         "description": "A non-deleted workspace document. Extracted text stays on disk.",
         "properties": {
@@ -281,6 +260,17 @@
         ],
         "title": "ErrorResponse",
         "type": "object"
+      },
+      "FeedbackFilter": {
+        "description": "Narrow the history by the feedback an interaction received.",
+        "enum": [
+          "all",
+          "any",
+          "negative",
+          "none"
+        ],
+        "title": "FeedbackFilter",
+        "type": "string"
       },
       "FeedbackRequest": {
         "description": "A thumbs-up, thumbs-down, or clear on a passage or an answer.",
@@ -501,6 +491,119 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "HistoryEntryResponse": {
+        "description": "One search or ask in the admin history.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "answer_votes": {
+            "$ref": "#/components/schemas/VoteCountsResponse"
+          },
+          "config_path": {
+            "title": "Config Path",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "hit_count": {
+            "title": "Hit Count",
+            "type": "integer"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "retrieval",
+              "ask"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "passage_votes": {
+            "$ref": "#/components/schemas/VoteCountsResponse"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "user_email": {
+            "description": "Empty for interactions recorded before emails were kept.",
+            "title": "User Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "kind",
+          "user_email",
+          "query",
+          "answer",
+          "error",
+          "config_path",
+          "created_at",
+          "hit_count",
+          "answer_votes",
+          "passage_votes"
+        ],
+        "title": "HistoryEntryResponse",
+        "type": "object"
+      },
+      "HistoryPageResponse": {
+        "description": "A page of history from every user, newest first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryEntryResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "HistoryPageResponse",
+        "type": "object"
+      },
       "HitResponse": {
         "description": "One passage shown for a search or an answer.",
         "properties": {
@@ -705,20 +808,42 @@
         "title": "InteractionResponse",
         "type": "object"
       },
-      "LogoutResponse": {
-        "description": "Confirmation that the session cookie was cleared.",
+      "InteractionReviewResponse": {
+        "description": "One interaction in full, for admin review.",
         "properties": {
-          "status": {
-            "const": "ok",
-            "default": "ok",
-            "title": "Status",
+          "build_id": {
+            "title": "Build Id",
             "type": "string"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/HistoryEntryResponse"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewedHitResponse"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
           }
         },
         "required": [
-          "status"
+          "entry",
+          "build_id",
+          "trace_id",
+          "hits"
         ],
-        "title": "LogoutResponse",
+        "title": "InteractionReviewResponse",
         "type": "object"
       },
       "OptimizationRunResponse": {
@@ -1055,22 +1180,42 @@
         "title": "RetrievalResponse",
         "type": "object"
       },
-      "RoleUpdateRequest": {
-        "description": "New role for an existing account.",
+      "ReviewedHitResponse": {
+        "description": "A passage as it was shown, with the votes it received.",
         "properties": {
-          "role": {
-            "enum": [
-              "member",
-              "admin"
-            ],
-            "title": "Role",
+          "doc_id": {
+            "title": "Doc Id",
             "type": "string"
+          },
+          "document_filename": {
+            "title": "Document Filename",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "votes": {
+            "$ref": "#/components/schemas/VoteCountsResponse"
           }
         },
         "required": [
-          "role"
+          "rank",
+          "doc_id",
+          "document_filename",
+          "text",
+          "score",
+          "votes"
         ],
-        "title": "RoleUpdateRequest",
+        "title": "ReviewedHitResponse",
         "type": "object"
       },
       "StartOptimizationRequest": {
@@ -1122,34 +1267,6 @@
         "title": "UpdateOptimizationRequest",
         "type": "object"
       },
-      "UserResponse": {
-        "description": "A signed-in account. The password hash is never included.",
-        "properties": {
-          "email": {
-            "title": "Email",
-            "type": "string"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "role": {
-            "enum": [
-              "member",
-              "admin"
-            ],
-            "title": "Role",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "email",
-          "role"
-        ],
-        "title": "UserResponse",
-        "type": "object"
-      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -1188,6 +1305,27 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VoteCountsResponse": {
+        "description": "Current thumbs up and down. A cleared vote no longer counts.",
+        "properties": {
+          "down": {
+            "default": 0,
+            "title": "Down",
+            "type": "integer"
+          },
+          "up": {
+            "default": 0,
+            "title": "Up",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "up",
+          "down"
+        ],
+        "title": "VoteCountsResponse",
         "type": "object"
       }
     }
@@ -1300,6 +1438,184 @@
         "summary": "Rebuild the index",
         "tags": [
           "index"
+        ]
+      }
+    },
+    "/admin/interactions": {
+      "get": {
+        "description": "Return every user's searches and asks, newest first. Members receive 403.",
+        "operationId": "list_interaction_history",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "retrieval",
+                    "ask"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "feedback",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/FeedbackFilter",
+              "default": "all"
+            }
+          },
+          {
+            "description": "Text in the query or email.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Text in the query or email.",
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "List search and ask history",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/admin/interactions/{interaction_id}": {
+      "get": {
+        "description": "Return the passages shown, the answer, and the votes each received.",
+        "operationId": "review_interaction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interaction_id",
+            "required": true,
+            "schema": {
+              "title": "Interaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionReviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Review one search or ask",
+        "tags": [
+          "history"
         ]
       }
     },
@@ -1477,89 +1793,6 @@
         ]
       }
     },
-    "/admin/users/{user_id}": {
-      "patch": {
-        "description": "Promote or demote an account. Members receive 403. The last admin cannot be demoted.",
-        "operationId": "update_user_role",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "user_id",
-            "required": true,
-            "schema": {
-              "title": "User Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RoleUpdateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "No valid session."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "The signed-in user's role does not allow this action."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Unknown id."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "The request conflicts with the current state."
-          }
-        },
-        "summary": "Change a user's role",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
     "/ask": {
       "post": {
         "description": "Answer one question from the current index. Earlier questions are not included.",
@@ -1619,164 +1852,6 @@
         "summary": "Ask a question",
         "tags": [
           "retrieval"
-        ]
-      }
-    },
-    "/auth/login": {
-      "post": {
-        "description": "Set the session cookie when the email and password match.",
-        "operationId": "login",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CredentialsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid input."
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "No valid session."
-          }
-        },
-        "summary": "Sign in",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/auth/logout": {
-      "post": {
-        "description": "Clear the session cookie. Signing out with no session still succeeds.",
-        "operationId": "logout",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LogoutResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Sign out",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/auth/me": {
-      "get": {
-        "description": "Return the id, email, and role for the session cookie.",
-        "operationId": "me",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "No valid session."
-          }
-        },
-        "summary": "Current user",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/auth/register": {
-      "post": {
-        "description": "Create a member. This route never creates an admin.",
-        "operationId": "register",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CredentialsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid input."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "The request conflicts with the current state."
-          }
-        },
-        "summary": "Create a member account",
-        "tags": [
-          "auth"
         ]
       }
     },
@@ -2040,7 +2115,7 @@
     },
     "/interactions/{interaction_id}": {
       "get": {
-        "description": "Return one interaction with the current user's votes. Used after a refresh.",
+        "description": "Return one of the caller's interactions with their votes. Used after a refresh.\n\nChats are private: another user's interaction answers 404, as if it did not exist.",
         "operationId": "get_interaction",
         "parameters": [
           {

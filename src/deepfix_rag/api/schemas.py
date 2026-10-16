@@ -27,33 +27,6 @@ class HealthResponse(ApiModel):
     status: Literal["ok"] = "ok"
 
 
-class UserResponse(ApiModel):
-    """A signed-in account. The password hash is never included."""
-
-    id: str
-    email: str
-    role: Literal["member", "admin"]
-
-
-class CredentialsRequest(ApiModel):
-    """Email and password for register and login."""
-
-    email: str = Field(min_length=1)
-    password: str = Field(min_length=1)
-
-
-class RoleUpdateRequest(ApiModel):
-    """New role for an existing account."""
-
-    role: Literal["member", "admin"]
-
-
-class LogoutResponse(ApiModel):
-    """Confirmation that the session cookie was cleared."""
-
-    status: Literal["ok"] = "ok"
-
-
 class IndexStatusResponse(ApiModel):
     """Overall state of the shared serving index."""
 
@@ -246,3 +219,55 @@ class DocumentResponse(ApiModel):
     uploader_email: str
     created_at: str
     can_delete: bool
+
+
+class VoteCountsResponse(ApiModel):
+    """Current thumbs up and down. A cleared vote no longer counts."""
+
+    up: int = 0
+    down: int = 0
+
+
+class HistoryEntryResponse(ApiModel):
+    """One search or ask in the admin history."""
+
+    interaction_id: str
+    kind: Literal["retrieval", "ask"]
+    user_email: str = Field(description="Empty for interactions recorded before emails were kept.")
+    query: str
+    answer: str | None
+    error: str | None
+    config_path: str
+    created_at: str
+    hit_count: int
+    answer_votes: VoteCountsResponse
+    passage_votes: VoteCountsResponse
+
+
+class HistoryPageResponse(ApiModel):
+    """A page of history from every user, newest first."""
+
+    items: list[HistoryEntryResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class ReviewedHitResponse(ApiModel):
+    """A passage as it was shown, with the votes it received."""
+
+    rank: int
+    doc_id: str
+    document_filename: str
+    text: str
+    score: float
+    votes: VoteCountsResponse
+
+
+class InteractionReviewResponse(ApiModel):
+    """One interaction in full, for admin review."""
+
+    entry: HistoryEntryResponse
+    build_id: str
+    trace_id: str | None
+    hits: list[ReviewedHitResponse]

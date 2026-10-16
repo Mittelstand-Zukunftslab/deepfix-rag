@@ -19,7 +19,6 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from deepfix_rag.accounts import connect
 from deepfix_rag.agent_process import (
     AGENT_UNAVAILABLE_MESSAGE,
     AgentUnavailable,
@@ -31,6 +30,7 @@ from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.feedback import export_feedback
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.promotion import PromotionDecision, apply_candidate
+from deepfix_rag.storage import connect
 
 RunStatus = Literal["running", "skipped", "rejected", "promoted", "succeeded", "failed"]
 RunTrigger = Literal["cron", "manual"]

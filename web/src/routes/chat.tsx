@@ -15,5 +15,6 @@ export const Route = createFileRoute("/chat")({
 
 function ChatRoute() {
   const index = useSuspenseQuery(indexQueryOptions());
-  return <AskPage indexReady={index.data.serving_build_id != null} />;
+  const { currentUser } = Route.useRouteContext();
+  return <AskPage indexReady={index.data.serving_build_id != null} ownerId={currentUser?.id} />;
 }

@@ -11,9 +11,9 @@ from typing import Literal
 import unicodedata
 import uuid
 
-from deepfix_rag.accounts import connect
 from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.interactions import get_interaction, init_interactions
+from deepfix_rag.storage import connect
 from deepfix_rag.tracing import FEEDBACK_EXPERIMENT, PRODUCT_EXPERIMENT
 
 UNSYNCED_AFTER = timedelta(minutes=5)
@@ -146,10 +146,13 @@ def record_vote(
     action: str,
     rank: int | None = None,
 ) -> Literal["up", "down"] | None:
-    """Append one vote event and return the user's current vote. Does not call MLflow."""
+    """Append one vote event and return the user's current vote. Does not call MLflow.
+
+    Users vote only on their own interactions; anyone else's is reported as unknown.
+    """
     init_feedback(db_path)
     interaction = get_interaction(db_path, interaction_id)
-    if interaction is None:
+    if interaction is None or interaction.user_id != user_id:
         raise UnknownInteractionError
     doc_id = None
     passage_key = None

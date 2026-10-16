@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "export:openapi": "cd .. && uv run python -m deepfix_rag.api.export_openapi",
     "generate:api": "npm run export:openapi && openapi-ts",
-    "mlflow": "cd .. && uv run mlflow server --host 0.0.0.0 --port 5000 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/"
+    "mlflow": "cd .. && uv run mlflow server --host 0.0.0.0 --port 5000 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/",
+    "auth:create-admin": "tsx scripts/create-admin.ts"
   },
   "overrides": {
     "rolldown": "1.2.1"
@@ -58,6 +59,8 @@
     "@tanstack/react-router-ssr-query": "^1.167.3",
     "@tanstack/react-start": "1.168.60",
     "@tanstack/router-plugin": "1.168.42",
+    "better-auth": "^1.7.0",
+    "better-sqlite3": "^12.0.0 || ^13.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -89,6 +92,7 @@
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.0.0",
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.16.5",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
@@ -99,9 +103,11 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^15.15.0",
+    "jose": "^6.2.3",
     "jsdom": "^20.0.3",
     "nitro": "3.0.260603-beta",
     "prettier": "^3.7.3",
+    "tsx": "^4.20.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
     "vite": "8.1.5",

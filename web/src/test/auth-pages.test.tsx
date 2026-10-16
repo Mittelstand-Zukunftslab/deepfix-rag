@@ -6,14 +6,17 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
+import { toNodeHandler } from "better-auth/node";
+import Database from "better-sqlite3";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { client } from "@/client/client.gen";
 import { RegisterPage } from "@/features/auth/register-page";
 import { SignInPage } from "@/features/auth/sign-in-page";
+import { setAuthOrigin } from "@/lib/auth-client";
+import { createMigratedAuth } from "@/lib/auth.server";
 
 const renderPage = (ui: ReactNode) => {
   const root = createRootRoute({ component: () => ui });
@@ -34,32 +37,38 @@ const renderPage = (ui: ReactNode) => {
   return render(<RouterProvider router={router} />);
 };
 
-describe("Auth pages", () => {
-  let server: Server | undefined;
+const fill = async (email: string, password: string) => {
+  fireEvent.change(await screen.findByLabelText("Email"), { target: { value: email } });
+  fireEvent.change(screen.getByLabelText("Password"), { target: { value: password } });
+};
 
-  const listen = (status: number, body: unknown) =>
-    new Promise<void>((resolve) => {
-      server = createServer((_req, res) => {
-        res.writeHead(status, { "content-type": "application/json" });
-        res.end(JSON.stringify(body));
-      }).listen(0, "127.0.0.1", () => {
-        client.setConfig({
-          baseUrl: `http://127.0.0.1:${(server?.address() as AddressInfo).port}`,
-        });
-        resolve();
-      });
+describe("Auth pages against a real Better Auth server", () => {
+  let server: Server;
+
+  beforeAll(async () => {
+    server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const auth = await createMigratedAuth({
+      database: new Database(":memory:"),
+      baseURL: origin,
+      secret: "test-secret-that-is-at-least-32-characters-long",
+      allowedEmailDomains: ["example.com"],
     });
+    server.on("request", toNodeHandler(auth.handler));
+    await auth.api.signUpEmail({
+      body: { email: "taken@example.com", password: "correct-horse", name: "taken" },
+    });
+    setAuthOrigin(origin);
+  });
 
-  afterEach(() => {
-    server?.close();
-    server = undefined;
+  afterAll(() => {
+    server.close();
   });
 
   it("shows a sign-in failure under the password field", async () => {
-    await listen(401, { detail: "Email or password is incorrect." });
     renderPage(<SignInPage />);
-    fireEvent.change(await screen.findByLabelText("Email"), { target: { value: "a@example.com" } });
-    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "longenough" } });
+    await fill("taken@example.com", "wrong-password");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const message = await screen.findByText("Email or password is incorrect.");
     expect(message.getAttribute("role")).toBe("alert");
@@ -68,16 +77,22 @@ describe("Auth pages", () => {
   });
 
   it("shows a closed-domain registration error under the email field", async () => {
-    await listen(400, { detail: "Registration is limited to example.com addresses." });
     renderPage(<RegisterPage />);
-    fireEvent.change(await screen.findByLabelText("Email"), { target: { value: "a@other.test" } });
-    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "longenough" } });
+    await fill("a@other.test", "longenough");
     fireEvent.click(screen.getByRole("button", { name: "Create account" }));
     expect(
       await screen.findByText("Registration is limited to example.com addresses."),
     ).toBeTruthy();
     expect(screen.getByLabelText("Email").getAttribute("aria-invalid")).toBe("true");
     expect(screen.getByLabelText("Password").getAttribute("aria-invalid")).not.toBe("true");
+  });
+
+  it("shows a duplicate email under the email field", async () => {
+    renderPage(<RegisterPage />);
+    await fill("taken@example.com", "longenough");
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+    expect(await screen.findByText("An account with this email already exists.")).toBeTruthy();
+    expect(screen.getByLabelText("Email").getAttribute("aria-invalid")).toBe("true");
   });
 
   it("keeps client validation on the empty fields", async () => {

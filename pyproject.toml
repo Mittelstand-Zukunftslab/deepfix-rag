@@ -57,8 +57,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "httpx>=0.27",
-    "argon2-cffi>=23.1.0",
     "python-multipart>=0.0.32",
+    "pyjwt[crypto]>=2.10",
 ]
 requires-python = "~=3.12.0"
 
@@ -78,7 +78,7 @@ select = ["E", "F", "I"]
 ignore = ["B008", "E501"]  # Allow Typer defaults and long docstrings/lines
 
 [tool.ruff.lint.isort]
-known-first-party = ["deepfix_rag"]
+known-first-party = ["deepfix_rag", "tests"]
 force-sort-within-sections = true
 
 [tool.pytest.ini_options]

@@ -1,13 +1,28 @@
 """Global pytest fixtures and configuration for deepfix_rag tests."""
 
 import asyncio
+import json
 from pathlib import Path
+import uuid
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from jwt.algorithms import OKPAlgorithm
 import pytest
 from typer.testing import CliRunner
 
 from deepfix_rag.config.schema import DataLoaderConfig, RAGConfig
 from deepfix_rag.pipeline import RAGWorkflow
+from tests.identity import IdentityIssuer
+
+
+@pytest.fixture(scope="session")
+def identity() -> IdentityIssuer:
+    """Fixture providing a signing key and the matching verifier for API tests."""
+    private_key = Ed25519PrivateKey.generate()
+    kid = uuid.uuid4().hex
+    public_jwk = json.loads(OKPAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk.update({"kid": kid, "alg": "EdDSA", "use": "sig"})
+    return IdentityIssuer(private_key=private_key, kid=kid, jwks={"keys": [public_jwk]})
 
 
 @pytest.fixture

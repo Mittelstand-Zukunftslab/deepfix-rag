@@ -20,6 +20,7 @@ from deepfix_rag.optimization_schedule import (
     cron_matches,
     next_run,
 )
+from tests.identity import IdentityIssuer
 
 pytestmark = pytest.mark.integration
 
@@ -77,31 +78,22 @@ def test_a_due_schedule_starts_the_same_job_and_a_pause_stops_it(tmp_path: Path)
         scheduler.stop()
 
 
-def test_schedule_edits_survive_a_restart_and_reject_a_bad_cron(tmp_path: Path) -> None:
+def test_schedule_edits_survive_a_restart_and_reject_a_bad_cron(
+    tmp_path: Path, identity: IdentityIssuer
+) -> None:
     mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlflow.db'}")
     settings = Settings(
         PRODUCT_DATA_DIR=tmp_path / "private",
         WORKSPACE_DIR=tmp_path / "workspace",
-        ALLOWED_EMAIL_DOMAINS="example.com",
         WEB_ORIGIN="http://localhost:8080",
         MLFLOW_TRACKING_URI=f"sqlite:///{tmp_path / 'mlflow.db'}",
         OPENHANDS_PYTHON=None,
     )
-    with TestClient(create_app(settings)) as client:
-        registered = client.post(
-            "/auth/register",
-            json={"email": "ada@example.com", "password": "correct-horse"},
-        )
-        assert registered.status_code == 201
-        logged_in = client.post(
-            "/auth/login",
-            json={"email": "ada@example.com", "password": "correct-horse"},
-        )
-        assert logged_in.status_code == 200
+    with TestClient(create_app(settings, token_verifier=identity.verifier())) as client:
+        identity.sign_in(client, "ada@example.com")
         forbidden = client.get("/admin/optimization")
         assert forbidden.status_code == 403
-        client.post("/auth/logout")
-        _admin(client, settings, create=True)
+        identity.sign_in(client, "admin@example.com", "admin")
         status = client.get("/admin/optimization")
         assert status.status_code == 200, status.text
         body = status.json()
@@ -136,25 +128,11 @@ def test_schedule_edits_survive_a_restart_and_reject_a_bad_cron(tmp_path: Path) 
         assert paused.json()["status"] == "skipped"
         assert paused.json()["trigger"] == "manual"
 
-    with TestClient(create_app(settings)) as restarted:
-        _admin(restarted, settings, create=False)
+    with TestClient(create_app(settings, token_verifier=identity.verifier())) as restarted:
+        identity.sign_in(restarted, "admin@example.com", "admin")
         again = restarted.get("/admin/optimization")
         assert again.status_code == 200
         assert again.json()["cron"] == "15 3 * * *"
         assert again.json()["enabled"] is False
         assert again.json()["runs"][0]["trigger"] == "manual"
         assert again.json()["runs"][0]["status"] == "skipped"
-
-
-def _admin(client: TestClient, settings: Settings, *, create: bool) -> None:
-    from deepfix_rag.accounts import create_admin
-
-    if create:
-        create_admin(settings.product_db_path, "admin@example.com", "correct-horse")
-    assert (
-        client.post(
-            "/auth/login",
-            json={"email": "admin@example.com", "password": "correct-horse"},
-        ).status_code
-        == 200
-    )

@@ -11,7 +11,6 @@ from pathlib import Path
 import threading
 from zoneinfo import ZoneInfo
 
-from deepfix_rag.accounts import connect
 from deepfix_rag.agent_process import AgentUnavailable
 from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.indexing import IndexCoordinator
@@ -21,6 +20,7 @@ from deepfix_rag.optimization import (
     agent_available,
     start_optimization_run,
 )
+from deepfix_rag.storage import connect
 
 JOB_NAME = "deepfix-optimize-workspace"
 DEFAULT_CRON = "0 2 * * *"

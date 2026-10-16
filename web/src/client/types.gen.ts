@@ -87,22 +87,6 @@ export type ConfigChange = {
 };
 
 /**
- * CredentialsRequest
- *
- * Email and password for register and login.
- */
-export type CredentialsRequest = {
-    /**
-     * Email
-     */
-    email: string;
-    /**
-     * Password
-     */
-    password: string;
-};
-
-/**
  * DocumentResponse
  *
  * A non-deleted workspace document. Extracted text stays on disk.
@@ -159,6 +143,13 @@ export type ErrorResponse = {
      */
     detail: string;
 };
+
+/**
+ * FeedbackFilter
+ *
+ * Narrow the history by the feedback an interaction received.
+ */
+export type FeedbackFilter = 'all' | 'any' | 'negative' | 'none';
 
 /**
  * FeedbackRequest
@@ -287,6 +278,78 @@ export type HealthResponse = {
 };
 
 /**
+ * HistoryEntryResponse
+ *
+ * One search or ask in the admin history.
+ */
+export type HistoryEntryResponse = {
+    /**
+     * Answer
+     */
+    answer: string | null;
+    answer_votes: VoteCountsResponse;
+    /**
+     * Config Path
+     */
+    config_path: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * Hit Count
+     */
+    hit_count: number;
+    /**
+     * Interaction Id
+     */
+    interaction_id: string;
+    /**
+     * Kind
+     */
+    kind: 'retrieval' | 'ask';
+    passage_votes: VoteCountsResponse;
+    /**
+     * Query
+     */
+    query: string;
+    /**
+     * User Email
+     *
+     * Empty for interactions recorded before emails were kept.
+     */
+    user_email: string;
+};
+
+/**
+ * HistoryPageResponse
+ *
+ * A page of history from every user, newest first.
+ */
+export type HistoryPageResponse = {
+    /**
+     * Items
+     */
+    items: Array<HistoryEntryResponse>;
+    /**
+     * Limit
+     */
+    limit: number;
+    /**
+     * Offset
+     */
+    offset: number;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
  * HitResponse
  *
  * One passage shown for a search or an answer.
@@ -395,15 +458,24 @@ export type InteractionResponse = {
 };
 
 /**
- * LogoutResponse
+ * InteractionReviewResponse
  *
- * Confirmation that the session cookie was cleared.
+ * One interaction in full, for admin review.
  */
-export type LogoutResponse = {
+export type InteractionReviewResponse = {
     /**
-     * Status
+     * Build Id
      */
-    status: 'ok';
+    build_id: string;
+    entry: HistoryEntryResponse;
+    /**
+     * Hits
+     */
+    hits: Array<ReviewedHitResponse>;
+    /**
+     * Trace Id
+     */
+    trace_id: string | null;
 };
 
 /**
@@ -585,15 +657,32 @@ export type RetrievalResponse = {
 };
 
 /**
- * RoleUpdateRequest
+ * ReviewedHitResponse
  *
- * New role for an existing account.
+ * A passage as it was shown, with the votes it received.
  */
-export type RoleUpdateRequest = {
+export type ReviewedHitResponse = {
     /**
-     * Role
+     * Doc Id
      */
-    role: 'member' | 'admin';
+    doc_id: string;
+    /**
+     * Document Filename
+     */
+    document_filename: string;
+    /**
+     * Rank
+     */
+    rank: number;
+    /**
+     * Score
+     */
+    score: number;
+    /**
+     * Text
+     */
+    text: string;
+    votes: VoteCountsResponse;
 };
 
 /**
@@ -638,26 +727,6 @@ export type UpdateOptimizationRequest = {
 };
 
 /**
- * UserResponse
- *
- * A signed-in account. The password hash is never included.
- */
-export type UserResponse = {
-    /**
-     * Email
-     */
-    email: string;
-    /**
-     * Id
-     */
-    id: string;
-    /**
-     * Role
-     */
-    role: 'member' | 'admin';
-};
-
-/**
  * ValidationError
  */
 export type ValidationError = {
@@ -683,6 +752,22 @@ export type ValidationError = {
      * Error Type
      */
     type: string;
+};
+
+/**
+ * VoteCountsResponse
+ *
+ * Current thumbs up and down. A cleared vote no longer counts.
+ */
+export type VoteCountsResponse = {
+    /**
+     * Down
+     */
+    down: number;
+    /**
+     * Up
+     */
+    up: number;
 };
 
 export type GetFeedbackSummaryData = {
@@ -750,6 +835,93 @@ export type RebuildIndexResponses = {
 };
 
 export type RebuildIndexResponse = RebuildIndexResponses[keyof RebuildIndexResponses];
+
+export type ListInteractionHistoryData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Kind
+         */
+        kind?: 'retrieval' | 'ask' | null;
+        feedback?: FeedbackFilter;
+        /**
+         * Q
+         *
+         * Text in the query or email.
+         */
+        q?: string | null;
+    };
+    url: '/admin/interactions';
+};
+
+export type ListInteractionHistoryErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+};
+
+export type ListInteractionHistoryError = ListInteractionHistoryErrors[keyof ListInteractionHistoryErrors];
+
+export type ListInteractionHistoryResponses = {
+    /**
+     * Successful Response
+     */
+    200: HistoryPageResponse;
+};
+
+export type ListInteractionHistoryResponse = ListInteractionHistoryResponses[keyof ListInteractionHistoryResponses];
+
+export type ReviewInteractionData = {
+    body?: never;
+    path: {
+        /**
+         * Interaction Id
+         */
+        interaction_id: string;
+    };
+    query?: never;
+    url: '/admin/interactions/{interaction_id}';
+};
+
+export type ReviewInteractionErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type ReviewInteractionError = ReviewInteractionErrors[keyof ReviewInteractionErrors];
+
+export type ReviewInteractionResponses = {
+    /**
+     * Successful Response
+     */
+    200: InteractionReviewResponse;
+};
+
+export type ReviewInteractionResponse = ReviewInteractionResponses[keyof ReviewInteractionResponses];
 
 export type GetOptimizationStatusData = {
     body?: never;
@@ -850,48 +1022,6 @@ export type StartOptimizationRunResponses = {
 
 export type StartOptimizationRunResponse = StartOptimizationRunResponses[keyof StartOptimizationRunResponses];
 
-export type UpdateUserRoleData = {
-    body: RoleUpdateRequest;
-    path: {
-        /**
-         * User Id
-         */
-        user_id: string;
-    };
-    query?: never;
-    url: '/admin/users/{user_id}';
-};
-
-export type UpdateUserRoleErrors = {
-    /**
-     * No valid session.
-     */
-    401: ErrorResponse;
-    /**
-     * The signed-in user's role does not allow this action.
-     */
-    403: ErrorResponse;
-    /**
-     * Unknown id.
-     */
-    404: ErrorResponse;
-    /**
-     * The request conflicts with the current state.
-     */
-    409: ErrorResponse;
-};
-
-export type UpdateUserRoleError = UpdateUserRoleErrors[keyof UpdateUserRoleErrors];
-
-export type UpdateUserRoleResponses = {
-    /**
-     * Successful Response
-     */
-    200: UserResponse;
-};
-
-export type UpdateUserRoleResponse = UpdateUserRoleResponses[keyof UpdateUserRoleResponses];
-
 export type AskQuestionData = {
     body: QueryRequest;
     path?: never;
@@ -924,105 +1054,6 @@ export type AskQuestionResponses = {
 };
 
 export type AskQuestionResponse = AskQuestionResponses[keyof AskQuestionResponses];
-
-export type LoginData = {
-    body: CredentialsRequest;
-    path?: never;
-    query?: never;
-    url: '/auth/login';
-};
-
-export type LoginErrors = {
-    /**
-     * Invalid input.
-     */
-    400: ErrorResponse;
-    /**
-     * No valid session.
-     */
-    401: ErrorResponse;
-};
-
-export type LoginError = LoginErrors[keyof LoginErrors];
-
-export type LoginResponses = {
-    /**
-     * Successful Response
-     */
-    200: UserResponse;
-};
-
-export type LoginResponse = LoginResponses[keyof LoginResponses];
-
-export type LogoutData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/auth/logout';
-};
-
-export type LogoutResponses = {
-    /**
-     * Successful Response
-     */
-    200: LogoutResponse;
-};
-
-export type LogoutResponse2 = LogoutResponses[keyof LogoutResponses];
-
-export type MeData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/auth/me';
-};
-
-export type MeErrors = {
-    /**
-     * No valid session.
-     */
-    401: ErrorResponse;
-};
-
-export type MeError = MeErrors[keyof MeErrors];
-
-export type MeResponses = {
-    /**
-     * Successful Response
-     */
-    200: UserResponse;
-};
-
-export type MeResponse = MeResponses[keyof MeResponses];
-
-export type RegisterData = {
-    body: CredentialsRequest;
-    path?: never;
-    query?: never;
-    url: '/auth/register';
-};
-
-export type RegisterErrors = {
-    /**
-     * Invalid input.
-     */
-    400: ErrorResponse;
-    /**
-     * The request conflicts with the current state.
-     */
-    409: ErrorResponse;
-};
-
-export type RegisterError = RegisterErrors[keyof RegisterErrors];
-
-export type RegisterResponses = {
-    /**
-     * Successful Response
-     */
-    201: UserResponse;
-};
-
-export type RegisterResponse = RegisterResponses[keyof RegisterResponses];
 
 export type ListDocumentsData = {
     body?: never;
