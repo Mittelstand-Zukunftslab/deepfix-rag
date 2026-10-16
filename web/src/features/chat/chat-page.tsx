@@ -44,6 +44,23 @@ import { feedbackService } from "@/services/feedback-service";
 
 const SESSIONS_STORAGE_KEY = "deepfix.chat_sessions.v2";
 const ACTIVE_SESSION_STORAGE_KEY = "deepfix.active_session_id.v2";
+
+/** Chats are private: each signed-in user keeps their history under their own keys. */
+export function chatStorageKeys(ownerId: string): { sessions: string; active: string } {
+  return {
+    sessions: `${SESSIONS_STORAGE_KEY}:${ownerId}`,
+    active: `${ACTIVE_SESSION_STORAGE_KEY}:${ownerId}`,
+  };
+}
+
+function dropUnscopedHistory(): void {
+  try {
+    window.localStorage.removeItem(SESSIONS_STORAGE_KEY);
+    window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+  } catch {
+    // Ignore localStorage errors
+  }
+}
 const COMPLETE_STATUS = { type: "complete" as const, reason: "stop" as const };
 
 export interface ChatTurn {
@@ -82,14 +99,17 @@ export function AskPage({
   error: initialError = null,
   hits,
   askedQuery = null,
+  ownerId = null,
 }: {
   indexReady?: boolean;
   answer?: string | null;
   error?: string | null;
   hits?: AskHit[];
   askedQuery?: string | null;
+  ownerId?: string | null;
 }) {
   const isControlledMode = askedQuery !== null || answer !== undefined || hits !== undefined || initialError !== null;
+  const storageKeys = ownerId && !isControlledMode ? chatStorageKeys(ownerId) : null;
 
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     if (isControlledMode) {
@@ -114,8 +134,10 @@ export function AskPage({
       ];
     }
 
+    dropUnscopedHistory();
+    if (!storageKeys) return [createNewSession()];
     try {
-      const raw = window.localStorage.getItem(SESSIONS_STORAGE_KEY);
+      const raw = window.localStorage.getItem(storageKeys.sessions);
       if (raw) {
         const parsed = JSON.parse(raw) as ChatSession[];
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -131,7 +153,7 @@ export function AskPage({
   const [activeSessionId, setActiveSessionId] = useState<string>(() => {
     if (isControlledMode) return "controlled-session";
     try {
-      const savedActive = window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+      const savedActive = storageKeys ? window.localStorage.getItem(storageKeys.active) : null;
       if (savedActive) return savedActive;
     } catch {
       // Ignore
@@ -155,16 +177,16 @@ export function AskPage({
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (isControlledMode) return;
+    if (!storageKeys) return;
     try {
-      window.localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+      window.localStorage.setItem(storageKeys.sessions, JSON.stringify(sessions));
       if (activeSessionId) {
-        window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, activeSessionId);
+        window.localStorage.setItem(storageKeys.active, activeSessionId);
       }
     } catch {
       // Ignore
     }
-  }, [sessions, activeSessionId, isControlledMode]);
+  }, [sessions, activeSessionId, storageKeys?.sessions, storageKeys?.active]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? sessions[0];
   const turns = activeSession?.turns ?? [];

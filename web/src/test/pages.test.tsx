@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { Suspense, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
-import { AskPage } from "@/features/chat/chat-page";
+import { AskPage, chatStorageKeys } from "@/features/chat/chat-page";
 import { nextVoteAction } from "@/features/feedback/vote-actions";
 import { indexQueryOptions } from "@/features/index/index-queries";
 import { libraryQueryOptions } from "@/features/library/library-queries";
@@ -211,5 +211,26 @@ describe("Dashboard pages", () => {
     expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
     renderWithQuery(<AskPage indexReady={false} />);
     expect(screen.getAllByText(message).length).toBeGreaterThan(0);
+  });
+});
+
+describe("Ask history", () => {
+  it("keeps each user's chats under their own keys and drops shared history", () => {
+    const session = (title: string) => [
+      { id: `s-${title}`, title, createdAt: 1, updatedAt: 1, turns: [] },
+    ];
+    window.localStorage.clear();
+    window.localStorage.setItem("deepfix.chat_sessions.v2", JSON.stringify(session("Shared")));
+    window.localStorage.setItem(chatStorageKeys("bea").sessions, JSON.stringify(session("Bea")));
+
+    renderWithQuery(<AskPage ownerId="ada" />);
+
+    expect(window.localStorage.getItem("deepfix.chat_sessions.v2")).toBeNull();
+    const ada = JSON.parse(window.localStorage.getItem(chatStorageKeys("ada").sessions) ?? "[]");
+    expect(ada.map((item: { title: string }) => item.title)).toEqual(["New Chat"]);
+    const bea = JSON.parse(window.localStorage.getItem(chatStorageKeys("bea").sessions) ?? "[]");
+    expect(bea.map((item: { title: string }) => item.title)).toEqual(["Bea"]);
+    expect(screen.queryByText("Bea")).toBeNull();
+    expect(screen.queryByText("Shared")).toBeNull();
   });
 });
