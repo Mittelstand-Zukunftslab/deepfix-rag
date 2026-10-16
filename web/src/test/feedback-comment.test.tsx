@@ -144,7 +144,10 @@ describe("comment after a vote", () => {
     await waitFor(() => expect(document.activeElement).toBe(add));
 
     fireEvent.click(add);
-    fireEvent.keyDown(answer.getByRole("form"), { key: "Escape" });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(answer.getByRole("button", { name: "Wrong" })),
+    );
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     expect(answer.queryByRole("form")).toBeNull();
   });
 
@@ -160,6 +163,7 @@ describe("comment after a vote", () => {
     expect(passage.getByRole("form")).toBeTruthy();
     fireEvent.click(answer.getByRole("button", { name: "Comment not sent · Continue" }));
     expect(answer.getByLabelText("Anything else? (optional)")).toHaveValue("Cites the wrong year");
+    expect(answer.getByRole("form")).toContainElement(document.activeElement as HTMLElement);
     expect(passage.queryByRole("form")).toBeNull();
   });
 

@@ -19,8 +19,9 @@ import type { Vote } from "./vote-actions";
 const SHOW_COUNTER_BELOW = 100;
 
 /**
- * The optional comment that follows a vote. It opens as soon as the vote is saved, never
- * takes focus by itself, and can be ignored: the vote is already stored.
+ * The optional comment that follows a vote. It opens as soon as the vote is saved without
+ * taking focus, and can be ignored: the vote is already stored. Reopening it from its
+ * link moves focus into the form.
  */
 export function FeedbackComment({
   target,
@@ -43,7 +44,9 @@ export function FeedbackComment({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refocus, setRefocus] = useState(false);
+  const [focusForm, setFocusForm] = useState(false);
   const followUp = useRef<HTMLElement | null>(null);
+  const form = useRef<HTMLFormElement | null>(null);
 
   useEffect(() => {
     if (slot.open) setError(null);
@@ -55,6 +58,13 @@ export function FeedbackComment({
       setRefocus(false);
     }
   }, [refocus, slot.open]);
+
+  useEffect(() => {
+    if (focusForm && slot.open) {
+      form.current?.querySelector<HTMLElement>("button, input, textarea")?.focus();
+      setFocusForm(false);
+    }
+  }, [focusForm, slot.open]);
 
   if (vote === null) return null;
 
@@ -81,7 +91,10 @@ export function FeedbackComment({
           followUp.current = node;
         }}
         type="button"
-        onClick={onOpen}
+        onClick={() => {
+          setFocusForm(true);
+          onOpen();
+        }}
         className="self-start text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:underline"
       >
         {isDraftEmpty(draft) ? "Add a comment" : "Comment not sent · Continue"}
@@ -131,6 +144,7 @@ export function FeedbackComment({
 
   return (
     <form
+      ref={form}
       aria-label={vote === "down" ? "Tell us what was wrong" : "Add a comment"}
       onSubmit={send}
       onKeyDown={onKeyDown}
