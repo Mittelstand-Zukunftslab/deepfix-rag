@@ -43,6 +43,13 @@ describe("navigation", () => {
     const item = navigationItems("admin").find((entry) => entry.to === "/admin");
     expect(item?.label).toBe("Optimization");
   });
+
+  it("shows History only to admins", () => {
+    expect(navigationItems("member").some((item) => item.to === "/history")).toBe(false);
+    expect(navigationItems(null).some((item) => item.to === "/history")).toBe(false);
+    const item = navigationItems("admin").find((entry) => entry.to === "/history");
+    expect(item?.label).toBe("History");
+  });
 });
 
 describe("auth error fields", () => {

@@ -9,26 +9,9 @@ import {
   type OptimizationStatusResponse,
 } from "@/client";
 import { requireRole } from "@/lib/auth-middleware";
+import { unwrap } from "@/services/api-result";
 
 const adminOnly = (action: string) => requireRole("admin", `Only admins can ${action}.`);
-
-function errorDetail(error: unknown): string {
-  if (
-    error &&
-    typeof error === "object" &&
-    "detail" in error &&
-    typeof error.detail === "string" &&
-    error.detail.length > 0
-  ) {
-    return error.detail;
-  }
-  return "Unable to reach the server. Try again.";
-}
-
-function unwrap<T>(result: { data?: T; error?: unknown }): T {
-  if (result.error || result.data === undefined) throw new Error(errorDetail(result.error));
-  return result.data;
-}
 
 export const fetchOptimizationStatus = createServerFn({ method: "GET" })
   .middleware([adminOnly("view optimization")])
