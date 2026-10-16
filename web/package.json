@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "export:openapi": "cd .. && uv run python -m deepfix_rag.api.export_openapi",
     "generate:api": "npm run export:openapi && openapi-ts",
+    "fastapi": "cd .. && uv run --env-file .env uvicorn deepfix_rag.api.app:app --reload --port 8000",
     "mlflow": "cd .. && uv run mlflow server --host 0.0.0.0 --port 5000 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/"
   },
   "overrides": {
