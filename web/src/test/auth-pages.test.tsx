@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RegisterPage } from "@/features/auth/register-page";
 import { SignInPage } from "@/features/auth/sign-in-page";
 import { setAuthOrigin } from "@/lib/auth-client";
-import { createAuth, migrateAuth } from "@/lib/auth.server";
+import { createMigratedAuth } from "@/lib/auth.server";
 
 const renderPage = (ui: ReactNode) => {
   const root = createRootRoute({ component: () => ui });
@@ -49,13 +49,12 @@ describe("Auth pages against a real Better Auth server", () => {
     server = createServer();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const auth = createAuth({
+    const auth = await createMigratedAuth({
       database: new Database(":memory:"),
       baseURL: origin,
       secret: "test-secret-that-is-at-least-32-characters-long",
       allowedEmailDomains: ["example.com"],
     });
-    await migrateAuth(auth);
     server.on("request", toNodeHandler(auth.handler));
     await auth.api.signUpEmail({
       body: { email: "taken@example.com", password: "correct-horse", name: "taken" },

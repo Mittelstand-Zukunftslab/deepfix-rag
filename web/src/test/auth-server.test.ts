@@ -4,20 +4,18 @@ import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { isAuthPath, upstreamHeaders } from "@/api-proxy";
-import { createAuth, migrateAuth, toAccount, type Auth } from "@/lib/auth.server";
+import { createMigratedAuth, toAccount, type Auth } from "@/lib/auth.server";
 
 const ORIGIN = "http://localhost:8080";
 const PASSWORD = "correct-horse";
 
 async function freshAuth(allowedEmailDomains: string[] = []): Promise<Auth> {
-  const auth = createAuth({
+  return createMigratedAuth({
     database: new Database(":memory:"),
     baseURL: ORIGIN,
     secret: "test-secret-that-is-at-least-32-characters-long",
     allowedEmailDomains,
   });
-  await migrateAuth(auth);
-  return auth;
 }
 
 async function signUp(auth: Auth, email: string): Promise<string> {

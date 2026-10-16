@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { betterAuth } from "better-auth";
+import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { getMigrations } from "better-auth/db/migration";
 import { admin, jwt } from "better-auth/plugins";
@@ -35,8 +35,8 @@ export function toAccount(user: { id: string; email: string; role?: string | nul
   return { id: user.id, email: user.email, role: isAdminRole(user.role) ? "admin" : "member" };
 }
 
-export function createAuth({ database, baseURL, secret, allowedEmailDomains }: AuthSetup) {
-  return betterAuth({
+function authOptions({ database, baseURL, secret, allowedEmailDomains }: AuthSetup) {
+  return {
     appName: "Papergnx.ai",
     baseURL,
     basePath: "/api/auth",
@@ -96,15 +96,24 @@ export function createAuth({ database, baseURL, secret, allowedEmailDomains }: A
       }),
       tanstackStartCookies(),
     ],
-  });
+  } satisfies BetterAuthOptions;
+}
+
+function createAuth(setup: AuthSetup) {
+  return betterAuth(authOptions(setup));
 }
 
 export type Auth = ReturnType<typeof createAuth>;
 
-/** Create or update Better Auth's tables. Safe to run on every start. */
-export async function migrateAuth(auth: Auth): Promise<void> {
-  const { runMigrations } = await getMigrations(auth.options);
+/**
+ * Create or update Better Auth's tables, then build the instance. Migrating first keeps Better
+ * Auth's startup schema check from reporting tables that are about to be created.
+ */
+export async function createMigratedAuth(setup: AuthSetup): Promise<Auth> {
+  const options = authOptions(setup);
+  const { runMigrations } = await getMigrations(options);
   await runMigrations();
+  return betterAuth(options);
 }
 
 function openDatabase(path: string): Database.Database {
@@ -114,27 +123,20 @@ function openDatabase(path: string): Database.Database {
   return database;
 }
 
-let shared: { auth: Auth; ready: Promise<void> } | undefined;
+let shared: Promise<Auth> | undefined;
 
 /** The app's Better Auth instance, with its SQLite schema migrated. */
-export async function getAuth(): Promise<Auth> {
-  if (!shared) {
-    const auth = createAuth({
-      database: openDatabase(serverConfig.authDatabasePath),
-      baseURL: serverConfig.authBaseUrl,
-      secret: serverConfig.authSecret,
-      allowedEmailDomains: serverConfig.allowedEmailDomains,
-    });
-    shared = {
-      auth,
-      ready: migrateAuth(auth).catch((error: unknown) => {
-        shared = undefined;
-        throw error;
-      }),
-    };
-  }
-  await shared.ready;
-  return shared.auth;
+export function getAuth(): Promise<Auth> {
+  shared ??= createMigratedAuth({
+    database: openDatabase(serverConfig.authDatabasePath),
+    baseURL: serverConfig.authBaseUrl,
+    secret: serverConfig.authSecret,
+    allowedEmailDomains: serverConfig.allowedEmailDomains,
+  }).catch((error: unknown) => {
+    shared = undefined;
+    throw error;
+  });
+  return shared;
 }
 
 /** A short-lived token naming the signed-in user, or null when there is no session. */

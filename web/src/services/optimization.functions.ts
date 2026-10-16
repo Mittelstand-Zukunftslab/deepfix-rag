@@ -40,7 +40,7 @@ const scheduleInput = z.object({ cron: z.string(), enabled: z.boolean() });
 
 export const saveOptimizationSchedule = createServerFn({ method: "POST" })
   .middleware([adminOnly("change the optimization schedule")])
-  .inputValidator(scheduleInput)
+  .validator(scheduleInput)
   .handler(async ({ context, data }): Promise<OptimizationStatusResponse> => {
     return unwrap(await updateOptimizationSchedule({ body: data, headers: context.apiHeaders }));
   });

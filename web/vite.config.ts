@@ -23,4 +23,9 @@ export default defineConfig({
   },
   // The app runs as a local Node server with a SQLite auth database, not on Cloudflare.
   nitro: { preset: "node-server" },
+  vite: {
+    // Better Auth needs zod 4 while the app uses zod 3. Bundling Better Auth would resolve its
+    // zod import against the app's copy, so it stays a runtime import from node_modules.
+    ssr: { external: ["better-auth", "@better-auth/core"] },
+  },
 });
