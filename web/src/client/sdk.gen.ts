@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RetrieveData, RetrieveErrors, RetrieveResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
+import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -31,6 +31,20 @@ export const getFeedbackSummary = <ThrowOnError extends boolean = false>(options
  * Start a full repair rebuild. The current index keeps serving until it succeeds.
  */
 export const rebuildIndex = <ThrowOnError extends boolean = false>(options?: Options<RebuildIndexData, ThrowOnError>): RequestResult<RebuildIndexResponses, RebuildIndexErrors, ThrowOnError> => (options?.client ?? client).post<RebuildIndexResponses, RebuildIndexErrors, ThrowOnError>({ url: '/admin/index/rebuild', ...options });
+
+/**
+ * List search and ask history
+ *
+ * Return every user's searches and asks, newest first. Members receive 403.
+ */
+export const listInteractionHistory = <ThrowOnError extends boolean = false>(options?: Options<ListInteractionHistoryData, ThrowOnError>): RequestResult<ListInteractionHistoryResponses, ListInteractionHistoryErrors, ThrowOnError> => (options?.client ?? client).get<ListInteractionHistoryResponses, ListInteractionHistoryErrors, ThrowOnError>({ url: '/admin/interactions', ...options });
+
+/**
+ * Review one search or ask
+ *
+ * Return the passages shown, the answer, and the votes each received.
+ */
+export const reviewInteraction = <ThrowOnError extends boolean = false>(options: Options<ReviewInteractionData, ThrowOnError>): RequestResult<ReviewInteractionResponses, ReviewInteractionErrors, ThrowOnError> => (options.client ?? client).get<ReviewInteractionResponses, ReviewInteractionErrors, ThrowOnError>({ url: '/admin/interactions/{interaction_id}', ...options });
 
 /**
  * Show the optimization schedule and recent runs

@@ -15,6 +15,7 @@ from deepfix_rag.api.routes import (
     documents,
     feedback,
     health,
+    history,
     index,
     optimization,
     retrieval,
@@ -149,6 +150,7 @@ def create_app(
     app.include_router(index.router)
     app.include_router(retrieval.router)
     app.include_router(feedback.router)
+    app.include_router(history.router)
     app.include_router(optimization.router)
     for route in app.routes:
         if isinstance(route, APIRoute):

@@ -145,6 +145,13 @@ export type ErrorResponse = {
 };
 
 /**
+ * FeedbackFilter
+ *
+ * Narrow the history by the feedback an interaction received.
+ */
+export type FeedbackFilter = 'all' | 'any' | 'negative' | 'none';
+
+/**
  * FeedbackRequest
  *
  * A thumbs-up, thumbs-down, or clear on a passage or an answer.
@@ -271,6 +278,78 @@ export type HealthResponse = {
 };
 
 /**
+ * HistoryEntryResponse
+ *
+ * One search or ask in the admin history.
+ */
+export type HistoryEntryResponse = {
+    /**
+     * Answer
+     */
+    answer: string | null;
+    answer_votes: VoteCountsResponse;
+    /**
+     * Config Path
+     */
+    config_path: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * Hit Count
+     */
+    hit_count: number;
+    /**
+     * Interaction Id
+     */
+    interaction_id: string;
+    /**
+     * Kind
+     */
+    kind: 'retrieval' | 'ask';
+    passage_votes: VoteCountsResponse;
+    /**
+     * Query
+     */
+    query: string;
+    /**
+     * User Email
+     *
+     * Empty for interactions recorded before emails were kept.
+     */
+    user_email: string;
+};
+
+/**
+ * HistoryPageResponse
+ *
+ * A page of history from every user, newest first.
+ */
+export type HistoryPageResponse = {
+    /**
+     * Items
+     */
+    items: Array<HistoryEntryResponse>;
+    /**
+     * Limit
+     */
+    limit: number;
+    /**
+     * Offset
+     */
+    offset: number;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
  * HitResponse
  *
  * One passage shown for a search or an answer.
@@ -376,6 +455,27 @@ export type InteractionResponse = {
      * Vote
      */
     vote: 'up' | 'down' | null;
+};
+
+/**
+ * InteractionReviewResponse
+ *
+ * One interaction in full, for admin review.
+ */
+export type InteractionReviewResponse = {
+    /**
+     * Build Id
+     */
+    build_id: string;
+    entry: HistoryEntryResponse;
+    /**
+     * Hits
+     */
+    hits: Array<ReviewedHitResponse>;
+    /**
+     * Trace Id
+     */
+    trace_id: string | null;
 };
 
 /**
@@ -557,6 +657,35 @@ export type RetrievalResponse = {
 };
 
 /**
+ * ReviewedHitResponse
+ *
+ * A passage as it was shown, with the votes it received.
+ */
+export type ReviewedHitResponse = {
+    /**
+     * Doc Id
+     */
+    doc_id: string;
+    /**
+     * Document Filename
+     */
+    document_filename: string;
+    /**
+     * Rank
+     */
+    rank: number;
+    /**
+     * Score
+     */
+    score: number;
+    /**
+     * Text
+     */
+    text: string;
+    votes: VoteCountsResponse;
+};
+
+/**
  * StartOptimizationRequest
  *
  * Start the optimization job now. The nightly schedule calls the same function.
@@ -625,6 +754,22 @@ export type ValidationError = {
     type: string;
 };
 
+/**
+ * VoteCountsResponse
+ *
+ * Current thumbs up and down. A cleared vote no longer counts.
+ */
+export type VoteCountsResponse = {
+    /**
+     * Down
+     */
+    down: number;
+    /**
+     * Up
+     */
+    up: number;
+};
+
 export type GetFeedbackSummaryData = {
     body?: never;
     path?: never;
@@ -690,6 +835,93 @@ export type RebuildIndexResponses = {
 };
 
 export type RebuildIndexResponse = RebuildIndexResponses[keyof RebuildIndexResponses];
+
+export type ListInteractionHistoryData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Kind
+         */
+        kind?: 'retrieval' | 'ask' | null;
+        feedback?: FeedbackFilter;
+        /**
+         * Q
+         *
+         * Text in the query or email.
+         */
+        q?: string | null;
+    };
+    url: '/admin/interactions';
+};
+
+export type ListInteractionHistoryErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+};
+
+export type ListInteractionHistoryError = ListInteractionHistoryErrors[keyof ListInteractionHistoryErrors];
+
+export type ListInteractionHistoryResponses = {
+    /**
+     * Successful Response
+     */
+    200: HistoryPageResponse;
+};
+
+export type ListInteractionHistoryResponse = ListInteractionHistoryResponses[keyof ListInteractionHistoryResponses];
+
+export type ReviewInteractionData = {
+    body?: never;
+    path: {
+        /**
+         * Interaction Id
+         */
+        interaction_id: string;
+    };
+    query?: never;
+    url: '/admin/interactions/{interaction_id}';
+};
+
+export type ReviewInteractionErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type ReviewInteractionError = ReviewInteractionErrors[keyof ReviewInteractionErrors];
+
+export type ReviewInteractionResponses = {
+    /**
+     * Successful Response
+     */
+    200: InteractionReviewResponse;
+};
+
+export type ReviewInteractionResponse = ReviewInteractionResponses[keyof ReviewInteractionResponses];
 
 export type GetOptimizationStatusData = {
     body?: never;

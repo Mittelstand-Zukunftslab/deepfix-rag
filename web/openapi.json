@@ -261,6 +261,17 @@
         "title": "ErrorResponse",
         "type": "object"
       },
+      "FeedbackFilter": {
+        "description": "Narrow the history by the feedback an interaction received.",
+        "enum": [
+          "all",
+          "any",
+          "negative",
+          "none"
+        ],
+        "title": "FeedbackFilter",
+        "type": "string"
+      },
       "FeedbackRequest": {
         "description": "A thumbs-up, thumbs-down, or clear on a passage or an answer.",
         "properties": {
@@ -480,6 +491,119 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "HistoryEntryResponse": {
+        "description": "One search or ask in the admin history.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "answer_votes": {
+            "$ref": "#/components/schemas/VoteCountsResponse"
+          },
+          "config_path": {
+            "title": "Config Path",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "hit_count": {
+            "title": "Hit Count",
+            "type": "integer"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "retrieval",
+              "ask"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "passage_votes": {
+            "$ref": "#/components/schemas/VoteCountsResponse"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "user_email": {
+            "description": "Empty for interactions recorded before emails were kept.",
+            "title": "User Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "kind",
+          "user_email",
+          "query",
+          "answer",
+          "error",
+          "config_path",
+          "created_at",
+          "hit_count",
+          "answer_votes",
+          "passage_votes"
+        ],
+        "title": "HistoryEntryResponse",
+        "type": "object"
+      },
+      "HistoryPageResponse": {
+        "description": "A page of history from every user, newest first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryEntryResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "HistoryPageResponse",
+        "type": "object"
+      },
       "HitResponse": {
         "description": "One passage shown for a search or an answer.",
         "properties": {
@@ -682,6 +806,44 @@
           "hits"
         ],
         "title": "InteractionResponse",
+        "type": "object"
+      },
+      "InteractionReviewResponse": {
+        "description": "One interaction in full, for admin review.",
+        "properties": {
+          "build_id": {
+            "title": "Build Id",
+            "type": "string"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/HistoryEntryResponse"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewedHitResponse"
+            },
+            "title": "Hits",
+            "type": "array"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "entry",
+          "build_id",
+          "trace_id",
+          "hits"
+        ],
+        "title": "InteractionReviewResponse",
         "type": "object"
       },
       "OptimizationRunResponse": {
@@ -1018,6 +1180,44 @@
         "title": "RetrievalResponse",
         "type": "object"
       },
+      "ReviewedHitResponse": {
+        "description": "A passage as it was shown, with the votes it received.",
+        "properties": {
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "document_filename": {
+            "title": "Document Filename",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "votes": {
+            "$ref": "#/components/schemas/VoteCountsResponse"
+          }
+        },
+        "required": [
+          "rank",
+          "doc_id",
+          "document_filename",
+          "text",
+          "score",
+          "votes"
+        ],
+        "title": "ReviewedHitResponse",
+        "type": "object"
+      },
       "StartOptimizationRequest": {
         "description": "Start the optimization job now. The nightly schedule calls the same function.",
         "properties": {},
@@ -1105,6 +1305,27 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VoteCountsResponse": {
+        "description": "Current thumbs up and down. A cleared vote no longer counts.",
+        "properties": {
+          "down": {
+            "default": 0,
+            "title": "Down",
+            "type": "integer"
+          },
+          "up": {
+            "default": 0,
+            "title": "Up",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "up",
+          "down"
+        ],
+        "title": "VoteCountsResponse",
         "type": "object"
       }
     }
@@ -1217,6 +1438,184 @@
         "summary": "Rebuild the index",
         "tags": [
           "index"
+        ]
+      }
+    },
+    "/admin/interactions": {
+      "get": {
+        "description": "Return every user's searches and asks, newest first. Members receive 403.",
+        "operationId": "list_interaction_history",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "retrieval",
+                    "ask"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "feedback",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/FeedbackFilter",
+              "default": "all"
+            }
+          },
+          {
+            "description": "Text in the query or email.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Text in the query or email.",
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "List search and ask history",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/admin/interactions/{interaction_id}": {
+      "get": {
+        "description": "Return the passages shown, the answer, and the votes each received.",
+        "operationId": "review_interaction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interaction_id",
+            "required": true,
+            "schema": {
+              "title": "Interaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionReviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Review one search or ask",
+        "tags": [
+          "history"
         ]
       }
     },

@@ -219,3 +219,55 @@ class DocumentResponse(ApiModel):
     uploader_email: str
     created_at: str
     can_delete: bool
+
+
+class VoteCountsResponse(ApiModel):
+    """Current thumbs up and down. A cleared vote no longer counts."""
+
+    up: int = 0
+    down: int = 0
+
+
+class HistoryEntryResponse(ApiModel):
+    """One search or ask in the admin history."""
+
+    interaction_id: str
+    kind: Literal["retrieval", "ask"]
+    user_email: str = Field(description="Empty for interactions recorded before emails were kept.")
+    query: str
+    answer: str | None
+    error: str | None
+    config_path: str
+    created_at: str
+    hit_count: int
+    answer_votes: VoteCountsResponse
+    passage_votes: VoteCountsResponse
+
+
+class HistoryPageResponse(ApiModel):
+    """A page of history from every user, newest first."""
+
+    items: list[HistoryEntryResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class ReviewedHitResponse(ApiModel):
+    """A passage as it was shown, with the votes it received."""
+
+    rank: int
+    doc_id: str
+    document_filename: str
+    text: str
+    score: float
+    votes: VoteCountsResponse
+
+
+class InteractionReviewResponse(ApiModel):
+    """One interaction in full, for admin review."""
+
+    entry: HistoryEntryResponse
+    build_id: str
+    trace_id: str | None
+    hits: list[ReviewedHitResponse]
