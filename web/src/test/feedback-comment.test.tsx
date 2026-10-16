@@ -76,6 +76,7 @@ describe("comment after a vote", () => {
     const thumb = answer.getByRole("button", { name: "Dislike answer" });
     thumb.focus();
     fireEvent.click(thumb);
+    expect(thumb.className).toContain("bg-destructive");
 
     const form = answer.getByRole("form", { name: "Tell us what was wrong" });
     expect(document.activeElement).toBe(thumb);
