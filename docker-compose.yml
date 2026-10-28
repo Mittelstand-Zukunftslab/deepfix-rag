@@ -3,6 +3,7 @@
 #   MEMGRAPH_USERNAME, MEMGRAPH_PASSWORD
 #   FALKORDB_PASSWORD
 #   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+#   OH_SESSION_API_KEY, OH_SECRET_KEY, OPENHANDS_PORT
 #   HERMES_DASHBOARD, HERMES_DASHBOARD_BASIC_AUTH_*, API_SERVER_*
 #   MLFLOW_BACKEND_STORE_URI,
 #   MLFLOW_ALLOWED_HOSTS, MLFLOW_CORS_ALLOWED_ORIGINS
@@ -141,6 +142,46 @@ services:
           cpus: "2.0"
     restart: unless-stopped
 
+  openhands:
+    image: ghcr.io/openhands/agent-server:latest-python
+    container_name: openhands
+    ports:
+      - "${OPENHANDS_PORT:-8010}:8000"
+    environment:
+      SESSION_API_KEY: ${OH_SESSION_API_KEY:-}
+      OH_SECRET_KEY: ${OH_SECRET_KEY:-}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${MLFLOW_OTLP_ENDPOINT:-http://mlflow:5000/v1/traces}
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: http/protobuf
+      OTEL_EXPORTER_OTLP_HEADERS: "x-mlflow-experiment-id=${MLFLOW_EXPERIMENT_ID:-0}"
+      DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-http://diagnostic-agent:8844}
+    command: [ "--host", "0.0.0.0", "--port", "8000" ]
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - openhands_data:/workspace
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - "http://127.0.0.1:8000/health"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.15.1
     container_name: mlflow
@@ -222,6 +263,7 @@ volumes:
   falkordb_data:
   rustfs_data:
   hermes_data:
+  openhands_data:
   mlflow_artifacts:
   deepfix_tool_data:
   deepfix_server_data:

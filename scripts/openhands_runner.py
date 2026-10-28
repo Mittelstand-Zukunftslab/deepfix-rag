@@ -142,9 +142,14 @@ def _run(
             system_message_suffix=system_message(run_id, max_iterations),
         ),
     )
+
+    kwargs = dict(workspace=str(Path.cwd()))
+    if os.environ.get("OH_SESSION_HOST"):
+        kwargs["host"] = os.environ.get("OH_SESSION_HOST")
+        kwargs.pop("workspace")
+
     conversation = Conversation(
         agent=agent,
-        workspace=str(Path.cwd()),
         persistence_dir=str(run_dir / ".openhands"),
         conversation_id=conversation_id_for(run_id),
         max_iteration_per_run=max_iterations,
@@ -152,6 +157,7 @@ def _run(
         observability_metadata={"deepfix.run_id": run_id},
         observability_tags=["deepfix-optimization"],
         observability_span_name="deepfix_optimization",
+        **kwargs
     )
     controller = GoalController(prompt, judge_llm, max_iterations=goal_rounds)
     try:

@@ -27,23 +27,23 @@ class Settings(BaseSettings):
     DATA_PROCESSES_DIR: str = os.path.join(Path(__file__).parents[3], "data", "processed")
 
     # LLM
-    LLM_BASE_URL: str = "https://api.aisc.hpi.de/v1"
+    LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
     LLM_API_KEY: str | None = None
-    LLM_MODEL: str = "qwen3-8-27b"
+    LLM_MODEL: str = "anthropic/claude-haiku-5.5"
     LLM_CONTEXT_WINDOW: int = 20000
 
     # Judge
-    LLM_JUDGE_MODEL: str = "gpt-oss-120b"
+    LLM_JUDGE_MODEL: str = "openai/gpt-5.6-luna"
 
     # Embedding
-    EMBEDDING_MODEL: str = "octen-embedding-8b"
-    EMBEDDING_BASE_URL: str = "https://api.aisc.hpi.de/v1"
+    EMBEDDING_MODEL: str = "perplexity/pplx-embed-v1-4b"
+    EMBEDDING_BASE_URL: str = "https://openrouter.ai/api/v1"
     EMBEDDING_API_KEY: str | None = None
 
     # Reranker (Cohere-compatible)
     COHERE_API_KEY: str | None = None
-    COHERE_MODEL: str = "qwen3-reranker-4b"
-    COHERE_BASE_URL: str = "https://api.aisc.hpi.de"
+    COHERE_MODEL: str = "cohere/rerank-4-fast"
+    COHERE_BASE_URL: str = "https://openrouter.ai/api/v1"
 
     # Memgraph
     MEMGRAPH_URL: str = "bolt://localhost:7687"
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     MEMGRAPH_PASSWORD: str = "neo4j"
 
     # S3-compatible storage
-    S3_ENDPOINT_URL: str = "https://hpi-s3.mittelstand-zukunftslab.de"
+    S3_ENDPOINT_URL: str = "http://localhost:9000"
     S3_URI: str = "s3://deepfix-index/dev"
     S3_ACCESS_KEY_ID: str | None = None
     S3_SECRET_ACCESS_KEY: str | None = None
@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     WEB_ORIGIN: str = "http://localhost:8080"
     PRODUCT_DATA_DIR: Path = Path.home() / ".deepfix" / "product"
     WORKSPACE_DIR: Path = Path.home() / ".deepfix" / "workspace"
+    OH_SESSION_HOST: str | None = None
     # Identity tokens come from Better Auth in the web app. Issuer and audience default to
     # WEB_ORIGIN, which must match BETTER_AUTH_URL there.
     AUTH_JWKS_URL: str | None = None
