@@ -38,6 +38,18 @@ bun install
 bun run dev        # http://localhost:8080
 ```
 
+## Docker
+
+From the repository root, set `BETTER_AUTH_SECRET` in `.env` (see `../example.env`), then:
+
+```sh
+docker compose up --build web   # http://localhost:8080
+```
+
+`API_INTERNAL_URL` defaults to `http://host.docker.internal:8000`, the FastAPI process on the host. `BETTER_AUTH_URL` is `WEB_ORIGIN` and must match. SQLite auth data is stored in the `web_auth` volume (`AUTH_DATABASE_PATH=/data/auth.db`).
+
+Build the image on its own with `docker build -t deepfix-web web`.
+
 ## API client
 
 `openapi.json` and `src/client/` are generated. Never edit them by hand.
