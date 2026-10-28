@@ -1,9 +1,13 @@
 import {
   getInteraction,
   submitFeedback,
+  submitFeedbackComment,
+  type CommentReason,
+  type FeedbackCommentResponse,
   type FeedbackResponse,
   type InteractionResponse,
 } from "@/client";
+import { messageOf, unwrap } from "@/services/api-result";
 
 export class FeedbackRequestError extends Error {
   constructor(message: string) {
@@ -12,51 +16,55 @@ export class FeedbackRequestError extends Error {
   }
 }
 
-function errorDetail(error: unknown): string {
-  if (
-    error &&
-    typeof error === "object" &&
-    "detail" in error &&
-    typeof error.detail === "string" &&
-    error.detail.length > 0
-  ) {
-    return error.detail;
+async function call<T>(request: () => Promise<{ data?: T; error?: unknown }>): Promise<T> {
+  try {
+    return unwrap(await request());
+  } catch (error) {
+    throw new FeedbackRequestError(messageOf(error));
   }
-  return "Unable to reach the server. Try again.";
 }
 
 export const feedbackService = {
-  async submit(input: {
+  submit(input: {
     interactionId: string;
     target: "passage" | "answer";
     rank?: number | null;
     action: "up" | "down" | "clear";
   }): Promise<FeedbackResponse> {
-    try {
-      const result = await submitFeedback({
+    return call(() =>
+      submitFeedback({
         body: {
           interaction_id: input.interactionId,
           target: input.target,
           rank: input.rank,
           action: input.action,
         },
-      });
-      if (result.error || !result.data) throw new FeedbackRequestError(errorDetail(result.error));
-      return result.data;
-    } catch (error) {
-      if (error instanceof FeedbackRequestError) throw error;
-      throw new FeedbackRequestError("Unable to reach the server. Try again.");
-    }
+      }),
+    );
   },
 
-  async read(interactionId: string): Promise<InteractionResponse> {
-    try {
-      const result = await getInteraction({ path: { interaction_id: interactionId } });
-      if (result.error || !result.data) throw new FeedbackRequestError(errorDetail(result.error));
-      return result.data;
-    } catch (error) {
-      if (error instanceof FeedbackRequestError) throw error;
-      throw new FeedbackRequestError("Unable to reach the server. Try again.");
-    }
+  /** Append an optional comment to the current vote. Only admins can read it. */
+  comment(input: {
+    interactionId: string;
+    target: "passage" | "answer";
+    rank?: number | null;
+    reason: CommentReason | null;
+    text: string;
+  }): Promise<FeedbackCommentResponse> {
+    return call(() =>
+      submitFeedbackComment({
+        body: {
+          interaction_id: input.interactionId,
+          target: input.target,
+          rank: input.rank,
+          reason: input.reason,
+          text: input.text,
+        },
+      }),
+    );
+  },
+
+  read(interactionId: string): Promise<InteractionResponse> {
+    return call(() => getInteraction({ path: { interaction_id: interactionId } }));
   },
 };

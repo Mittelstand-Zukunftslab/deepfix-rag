@@ -1,10 +1,9 @@
+import type { OptimizationRunResponse, OptimizationStatusResponse } from "@/client";
 import {
-  getOptimizationStatus,
-  startOptimizationRun,
-  updateOptimizationSchedule,
-  type OptimizationRunResponse,
-  type OptimizationStatusResponse,
-} from "@/client";
+  fetchOptimizationStatus,
+  runOptimizationNow,
+  saveOptimizationSchedule,
+} from "@/services/optimization.functions";
 
 export type OptimizationStatus = OptimizationStatusResponse;
 
@@ -15,51 +14,29 @@ export class OptimizationRequestError extends Error {
   }
 }
 
-function errorDetail(error: unknown): string {
-  if (
-    error &&
-    typeof error === "object" &&
-    "detail" in error &&
-    typeof error.detail === "string" &&
-    error.detail.length > 0
-  ) {
-    return error.detail;
+async function call<T>(request: () => Promise<T>): Promise<T> {
+  try {
+    return await request();
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message
+        ? error.message
+        : "Unable to reach the server. Try again.";
+    throw new OptimizationRequestError(message);
   }
-  return "Unable to reach the server. Try again.";
 }
 
-async function unwrap<T>(result: { data?: T; error?: unknown }): Promise<T> {
-  if (result.error || result.data === undefined) {
-    throw new OptimizationRequestError(errorDetail(result.error));
-  }
-  return result.data;
-}
-
+/** Optimization runs only through admin-checked server functions. */
 export const optimizationService = {
-  async status(): Promise<OptimizationStatus> {
-    try {
-      return await unwrap(await getOptimizationStatus());
-    } catch (error) {
-      if (error instanceof OptimizationRequestError) throw error;
-      throw new OptimizationRequestError("Unable to reach the server. Try again.");
-    }
+  status(): Promise<OptimizationStatus> {
+    return call(() => fetchOptimizationStatus());
   },
 
-  async update(input: { cron: string; enabled: boolean }): Promise<OptimizationStatus> {
-    try {
-      return await unwrap(await updateOptimizationSchedule({ body: input }));
-    } catch (error) {
-      if (error instanceof OptimizationRequestError) throw error;
-      throw new OptimizationRequestError("Unable to reach the server. Try again.");
-    }
+  update(input: { cron: string; enabled: boolean }): Promise<OptimizationStatus> {
+    return call(() => saveOptimizationSchedule({ data: input }));
   },
 
-  async runNow(): Promise<OptimizationRunResponse> {
-    try {
-      return await unwrap(await startOptimizationRun({ body: {} }));
-    } catch (error) {
-      if (error instanceof OptimizationRequestError) throw error;
-      throw new OptimizationRequestError("Unable to reach the server. Try again.");
-    }
+  runNow(): Promise<OptimizationRunResponse> {
+    return call(() => runOptimizationNow());
   },
 };

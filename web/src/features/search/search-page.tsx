@@ -4,7 +4,9 @@ import { TopBar } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { commentKey, useFeedbackComments } from "@/features/feedback/use-feedback-comments";
 import { VoteButtons, type Vote } from "@/features/feedback/vote-buttons";
+import { VoteComment } from "@/features/feedback/vote-comment";
 import { IndexPreparing } from "@/features/index/index-preparing";
 import { feedbackService } from "@/services/feedback-service";
 import { searchService, type SearchHit } from "@/services/search-service";
@@ -26,6 +28,7 @@ export function SearchPage({
   const [interactionId, setInteractionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const comments = useFeedbackComments();
 
   useEffect(() => {
     if (hits !== undefined) return;
@@ -98,6 +101,7 @@ export function SearchPage({
         item.rank === hit.rank ? { ...item, vote: saved.vote ?? null } : item,
       ),
     );
+    comments.voted(commentKey(interactionId, "passage", hit.rank), "passage", saved.vote ?? null);
   };
 
   return (
@@ -144,6 +148,15 @@ export function SearchPage({
                     downLabel="Mark passage as not relevant"
                     onAction={(action) => void choosePassage(hit, action)}
                   />
+                  {interactionId ? (
+                    <VoteComment
+                      comments={comments}
+                      interactionId={interactionId}
+                      target="passage"
+                      rank={hit.rank}
+                      vote={hit.vote ?? null}
+                    />
+                  ) : null}
                 </Card>
               </li>
             ))}

@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from deepfix_rag.agent_process import AgentUnavailable
-from deepfix_rag.api.deps import current_user, get_settings
+from deepfix_rag.api.deps import get_settings, require_admin
 from deepfix_rag.api.errors import (
     BAD_REQUEST,
     CONFLICT,
@@ -46,7 +46,7 @@ router = APIRouter(tags=["optimization"])
 )
 def get_optimization_status(request: Request) -> OptimizationStatusResponse:
     """Return the nightly schedule, the champion diff, and recent runs."""
-    _require_admin(request, "Only admins can view optimization.")
+    require_admin(request, "Only admins can view optimization.")
     return _status(request)
 
 
@@ -62,7 +62,7 @@ def update_optimization_schedule(
     request: Request,
 ) -> OptimizationStatusResponse:
     """Store a five-field cron expression. An invalid one leaves the schedule unchanged."""
-    _require_admin(request, "Only admins can change the optimization schedule.")
+    require_admin(request, "Only admins can change the optimization schedule.")
     try:
         request.app.state.optimization.update(payload.cron, payload.enabled)
     except InvalidSchedule as exc:
@@ -82,7 +82,7 @@ def start_optimization_run_route(
     request: Request,
 ) -> OptimizationRunResponse:
     """Export feedback and start one run, or skip it when too little is labeled."""
-    _require_admin(request, "Only admins can start an optimization run.")
+    require_admin(request, "Only admins can start an optimization run.")
     settings = get_settings(request)
     try:
         run = start_optimization_run(
@@ -97,12 +97,6 @@ def start_optimization_run_route(
     except AgentUnavailable as exc:
         raise HTTPException(status_code=SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return _response(run)
-
-
-def _require_admin(request: Request, detail: str) -> None:
-    user = current_user(request)
-    if user.role != "admin":
-        raise HTTPException(status_code=FORBIDDEN, detail=detail)
 
 
 def _status(request: Request) -> OptimizationStatusResponse:

@@ -53,6 +53,7 @@ def create_document(
             settings.product_db_path,
             settings.workspace_dir,
             user_id=user.id,
+            user_email=user.email,
             filename=file.filename,
             content=file.file.read(),
             reading=reading,

@@ -10,6 +10,7 @@ import pytest
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.interactions import get_interaction
+from tests.identity import IdentityIssuer
 
 pytestmark = [pytest.mark.api, pytest.mark.integration]
 
@@ -46,28 +47,20 @@ def ask_settings(tmp_path) -> Settings:
     return Settings(
         PRODUCT_DATA_DIR=tmp_path / "private",
         WORKSPACE_DIR=tmp_path / "workspace",
-        ALLOWED_EMAIL_DOMAINS="example.com",
         WEB_ORIGIN="http://localhost:8080",
         MLFLOW_TRACKING_URI=f"sqlite:///{tmp_path / 'mlflow.db'}",
     )
 
 
-def _client(settings: Settings, llm: MockLLM) -> TestClient:
+def _client(settings: Settings, llm: MockLLM, identity: IdentityIssuer) -> TestClient:
     mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
-    return TestClient(create_app(settings, embed_model=MockEmbedding(embed_dim=16), llm=llm))
-
-
-def _login(client: TestClient) -> None:
-    created = client.post(
-        "/auth/register",
-        json={"email": "ada@example.com", "password": "correct-horse"},
+    app = create_app(
+        settings,
+        embed_model=MockEmbedding(embed_dim=16),
+        llm=llm,
+        token_verifier=identity.verifier(),
     )
-    assert created.status_code == 201
-    signed_in = client.post(
-        "/auth/login",
-        json={"email": "ada@example.com", "password": "correct-horse"},
-    )
-    assert signed_in.status_code == 200
+    return TestClient(app)
 
 
 def _index_note(client: TestClient) -> None:
@@ -80,11 +73,11 @@ def _index_note(client: TestClient) -> None:
 
 
 def test_ask_stores_the_answer_and_a_single_turn(
-    ask_settings: Settings,
+    ask_settings: Settings, identity: IdentityIssuer
 ) -> None:
     prompts.clear()
-    with _client(ask_settings, GroundedLLM()) as client:
-        _login(client)
+    with _client(ask_settings, GroundedLLM(), identity) as client:
+        identity.sign_in(client, "ada@example.com")
         _index_note(client)
         prompts.clear()
         first = client.post("/ask", json={"query": "harbor budget"})
@@ -118,9 +111,11 @@ def test_ask_stores_the_answer_and_a_single_turn(
         )
 
 
-def test_generation_failure_keeps_the_passages(ask_settings: Settings) -> None:
-    with _client(ask_settings, FailingLLM()) as client:
-        _login(client)
+def test_generation_failure_keeps_the_passages(
+    ask_settings: Settings, identity: IdentityIssuer
+) -> None:
+    with _client(ask_settings, FailingLLM(), identity) as client:
+        identity.sign_in(client, "ada@example.com")
         empty = client.post("/ask", json={"query": "   "})
         assert empty.status_code == 400
         missing = client.post("/ask", json={"query": "harbor"})

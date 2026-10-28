@@ -1,7 +1,8 @@
 // Runtime configuration for the generated API client (see runtimeConfigPath in openapi-ts.config.ts).
 // This is the only place the API origin is configured; the generated SDK in ./client reads it.
-// The browser uses the same-origin `/api` prefix. Server rendering calls API_INTERNAL_URL and
-// forwards the document request's Cookie header through the custom fetch below.
+// The browser uses the same-origin `/api` prefix, and src/server.ts swaps its session cookie for
+// a bearer token. Server rendering calls API_INTERNAL_URL directly and adds the same token for the
+// document request's user through the custom fetch below.
 import type { CreateClientConfig } from "@/client/client.gen";
 
 const BROWSER_BASE_URL = "/api";
@@ -20,11 +21,16 @@ export async function sessionFetch(
   }
 
   const headers = new Headers(init?.headers);
-  if (!headers.has("cookie")) {
-    const { incomingCookie } = await import("./session-cookie.server");
-    const cookie = incomingCookie();
-    if (cookie) {
-      headers.set("cookie", cookie);
+  if (input instanceof Request) {
+    input.headers.forEach((value, key) => {
+      if (!headers.has(key)) headers.set(key, value);
+    });
+  }
+  if (!headers.has("authorization")) {
+    const { incomingAuthorization } = await import("./request-identity.server");
+    const authorization = await incomingAuthorization();
+    if (authorization) {
+      headers.set("authorization", authorization);
     }
   }
   return globalThis.fetch(input, { ...init, headers });

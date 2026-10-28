@@ -74,6 +74,7 @@ async def retrieve(payload: QueryRequest, request: Request) -> RetrievalResponse
         settings.product_db_path,
         kind="retrieval",
         user_id=user.id,
+        user_email=user.email,
         query=query,
         build_id=build_id,
         config_path=config_path,
@@ -112,6 +113,7 @@ async def ask_question(payload: QueryRequest, request: Request) -> AskResponse:
         settings.product_db_path,
         kind="ask",
         user_id=user.id,
+        user_email=user.email,
         query=query,
         build_id=build_id,
         config_path=config_path,
@@ -134,6 +136,7 @@ def _stored_response(
     *,
     kind: str,
     user_id: str,
+    user_email: str,
     query: str,
     build_id: str,
     config_path: str,
@@ -143,6 +146,7 @@ def _stored_response(
         db_path,
         kind=kind,
         user_id=user_id,
+        user_email=user_email,
         query=query,
         build_id=build_id,
         config_path=config_path,
@@ -160,6 +164,7 @@ def _store(
     *,
     kind: str,
     user_id: str,
+    user_email: str,
     query: str,
     build_id: str,
     config_path: str,
@@ -189,6 +194,7 @@ def _store(
         db_path,
         kind=kind,
         user_id=user_id,
+        user_email=user_email,
         query=query,
         build_id=build_id,
         config_path=config_path,
@@ -229,11 +235,14 @@ def _answer_vote(db_path: Path, user_id: str, interaction_id: str) -> str | None
     summary="Read a stored search or ask",
 )
 def read_interaction(interaction_id: str, request: Request) -> InteractionResponse:
-    """Return one interaction with the current user's votes. Used after a refresh."""
+    """Return one of the caller's interactions with their votes. Used after a refresh.
+
+    Chats are private: another user's interaction answers 404, as if it did not exist.
+    """
     user = current_user(request)
     settings = get_settings(request)
     stored = get_interaction(settings.product_db_path, interaction_id)
-    if stored is None:
+    if stored is None or stored.user_id != user.id:
         raise HTTPException(status_code=NOT_FOUND, detail="No interaction with that id.")
     return InteractionResponse(
         interaction_id=stored.interaction_id,

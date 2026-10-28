@@ -6,9 +6,10 @@ from fastapi.testclient import TestClient
 from llama_index.core.embeddings import MockEmbedding
 import pytest
 
-from deepfix_rag.accounts import connect
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.settings import Settings
+from deepfix_rag.storage import connect
+from tests.identity import IdentityIssuer
 
 pytestmark = [pytest.mark.api, pytest.mark.integration]
 
@@ -27,29 +28,17 @@ def index_settings(tmp_path) -> Settings:
     return Settings(
         PRODUCT_DATA_DIR=tmp_path / "private",
         WORKSPACE_DIR=tmp_path / "workspace",
-        ALLOWED_EMAIL_DOMAINS="example.com",
         WEB_ORIGIN="http://localhost:8080",
     )
 
 
 @pytest.fixture
-def client(index_settings: Settings) -> Iterator[TestClient]:
+def client(index_settings: Settings, identity: IdentityIssuer) -> Iterator[TestClient]:
     embed_model = MockEmbedding(embed_dim=16)
-    with TestClient(create_app(index_settings, embed_model=embed_model)) as test_client:
+    with TestClient(
+        create_app(index_settings, embed_model=embed_model, token_verifier=identity.verifier())
+    ) as test_client:
         yield test_client
-
-
-def _login(client: TestClient) -> None:
-    created = client.post(
-        "/auth/register",
-        json={"email": "ada@example.com", "password": "correct-horse"},
-    )
-    assert created.status_code == 201
-    signed_in = client.post(
-        "/auth/login",
-        json={"email": "ada@example.com", "password": "correct-horse"},
-    )
-    assert signed_in.status_code == 200
 
 
 def _upload(client: TestClient, filename: str, text: str) -> str:
@@ -88,9 +77,9 @@ def _hits(client: TestClient, query: str) -> list[dict[str, object]]:
 
 
 def test_upload_and_delete_touch_only_that_documents_chunks(
-    client: TestClient, index_settings: Settings
+    client: TestClient, index_settings: Settings, identity: IdentityIssuer
 ) -> None:
-    _login(client)
+    identity.sign_in(client, "ada@example.com")
     doc_a = _upload(client, "a.txt", "Alpha harbor budget was approved.")
     doc_b = _upload(client, "b.txt", "Beta lighthouse schedule remains.")
     before = _chunks(client)
@@ -138,8 +127,10 @@ def test_upload_and_delete_touch_only_that_documents_chunks(
     assert client.get("/documents").json()[0]["doc_id"] != doc_b
 
 
-def test_failed_insert_leaves_indexed_documents_searchable(client: TestClient) -> None:
-    _login(client)
+def test_failed_insert_leaves_indexed_documents_searchable(
+    client: TestClient, identity: IdentityIssuer
+) -> None:
+    identity.sign_in(client, "ada@example.com")
     doc_a = _upload(client, "a.txt", "Alpha harbor budget was approved.")
     before = _chunks(client)
     lease = client.app.state.index.checkout()
@@ -165,11 +156,13 @@ def test_failed_insert_leaves_indexed_documents_searchable(client: TestClient) -
 
 
 def test_startup_resumes_indexing_and_deleting(
-    index_settings: Settings,
+    index_settings: Settings, identity: IdentityIssuer
 ) -> None:
     embed_model = MockEmbedding(embed_dim=16)
-    with TestClient(create_app(index_settings, embed_model=embed_model)) as client:
-        _login(client)
+    with TestClient(
+        create_app(index_settings, embed_model=embed_model, token_verifier=identity.verifier())
+    ) as client:
+        identity.sign_in(client, "ada@example.com")
         doc_a = _upload(client, "a.txt", "Alpha harbor budget was approved.")
         doc_b = _upload(client, "b.txt", "Beta lighthouse schedule remains.")
         build_id = client.get("/index").json()["serving_build_id"]
@@ -184,15 +177,13 @@ def test_startup_resumes_indexing_and_deleting(
                 (doc_b,),
             )
 
-    with TestClient(create_app(index_settings, embed_model=embed_model)) as restarted:
+    with TestClient(
+        create_app(index_settings, embed_model=embed_model, token_verifier=identity.verifier())
+    ) as restarted:
         restarted.app.state.index.wait()
         status = restarted.get("/index")
         assert status.status_code == 401
-        signed_in = restarted.post(
-            "/auth/login",
-            json={"email": "ada@example.com", "password": "correct-horse"},
-        )
-        assert signed_in.status_code == 200
+        identity.sign_in(restarted, "ada@example.com")
         restarted.app.state.index.wait()
         snapshot = restarted.get("/index").json()
         assert snapshot["serving_build_id"] == build_id

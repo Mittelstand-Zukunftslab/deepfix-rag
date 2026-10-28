@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RegisterData, RegisterErrors, RegisterResponses, RetrieveData, RetrieveErrors, RetrieveResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses, UpdateUserRoleData, UpdateUserRoleErrors, UpdateUserRoleResponses } from './types.gen';
+import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -31,6 +31,20 @@ export const getFeedbackSummary = <ThrowOnError extends boolean = false>(options
  * Start a full repair rebuild. The current index keeps serving until it succeeds.
  */
 export const rebuildIndex = <ThrowOnError extends boolean = false>(options?: Options<RebuildIndexData, ThrowOnError>): RequestResult<RebuildIndexResponses, RebuildIndexErrors, ThrowOnError> => (options?.client ?? client).post<RebuildIndexResponses, RebuildIndexErrors, ThrowOnError>({ url: '/admin/index/rebuild', ...options });
+
+/**
+ * List search and ask history
+ *
+ * Return every user's searches and asks, newest first. Members receive 403.
+ */
+export const listInteractionHistory = <ThrowOnError extends boolean = false>(options?: Options<ListInteractionHistoryData, ThrowOnError>): RequestResult<ListInteractionHistoryResponses, ListInteractionHistoryErrors, ThrowOnError> => (options?.client ?? client).get<ListInteractionHistoryResponses, ListInteractionHistoryErrors, ThrowOnError>({ url: '/admin/interactions', ...options });
+
+/**
+ * Review one search or ask
+ *
+ * Return the passages shown, the answer, and the votes each received.
+ */
+export const reviewInteraction = <ThrowOnError extends boolean = false>(options: Options<ReviewInteractionData, ThrowOnError>): RequestResult<ReviewInteractionResponses, ReviewInteractionErrors, ThrowOnError> => (options.client ?? client).get<ReviewInteractionResponses, ReviewInteractionErrors, ThrowOnError>({ url: '/admin/interactions/{interaction_id}', ...options });
 
 /**
  * Show the optimization schedule and recent runs
@@ -68,68 +82,12 @@ export const startOptimizationRun = <ThrowOnError extends boolean = false>(optio
 });
 
 /**
- * Change a user's role
- *
- * Promote or demote an account. Members receive 403. The last admin cannot be demoted.
- */
-export const updateUserRole = <ThrowOnError extends boolean = false>(options: Options<UpdateUserRoleData, ThrowOnError>): RequestResult<UpdateUserRoleResponses, UpdateUserRoleErrors, ThrowOnError> => (options.client ?? client).patch<UpdateUserRoleResponses, UpdateUserRoleErrors, ThrowOnError>({
-    url: '/admin/users/{user_id}',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
-
-/**
  * Ask a question
  *
  * Answer one question from the current index. Earlier questions are not included.
  */
 export const askQuestion = <ThrowOnError extends boolean = false>(options: Options<AskQuestionData, ThrowOnError>): RequestResult<AskQuestionResponses, AskQuestionErrors, ThrowOnError> => (options.client ?? client).post<AskQuestionResponses, AskQuestionErrors, ThrowOnError>({
     url: '/ask',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
-
-/**
- * Sign in
- *
- * Set the session cookie when the email and password match.
- */
-export const login = <ThrowOnError extends boolean = false>(options: Options<LoginData, ThrowOnError>): RequestResult<LoginResponses, LoginErrors, ThrowOnError> => (options.client ?? client).post<LoginResponses, LoginErrors, ThrowOnError>({
-    url: '/auth/login',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
-
-/**
- * Sign out
- *
- * Clear the session cookie. Signing out with no session still succeeds.
- */
-export const logout = <ThrowOnError extends boolean = false>(options?: Options<LogoutData, ThrowOnError>): RequestResult<LogoutResponses, unknown, ThrowOnError> => (options?.client ?? client).post<LogoutResponses, unknown, ThrowOnError>({ url: '/auth/logout', ...options });
-
-/**
- * Current user
- *
- * Return the id, email, and role for the session cookie.
- */
-export const me = <ThrowOnError extends boolean = false>(options?: Options<MeData, ThrowOnError>): RequestResult<MeResponses, MeErrors, ThrowOnError> => (options?.client ?? client).get<MeResponses, MeErrors, ThrowOnError>({ url: '/auth/me', ...options });
-
-/**
- * Create a member account
- *
- * Create a member. This route never creates an admin.
- */
-export const register = <ThrowOnError extends boolean = false>(options: Options<RegisterData, ThrowOnError>): RequestResult<RegisterResponses, RegisterErrors, ThrowOnError> => (options.client ?? client).post<RegisterResponses, RegisterErrors, ThrowOnError>({
-    url: '/auth/register',
     ...options,
     headers: {
         'Content-Type': 'application/json',
@@ -181,6 +139,20 @@ export const submitFeedback = <ThrowOnError extends boolean = false>(options: Op
 });
 
 /**
+ * Comment on a vote
+ *
+ * Append a comment to the user's current vote. MLflow gets it as the rationale later.
+ */
+export const submitFeedbackComment = <ThrowOnError extends boolean = false>(options: Options<SubmitFeedbackCommentData, ThrowOnError>): RequestResult<SubmitFeedbackCommentResponses, SubmitFeedbackCommentErrors, ThrowOnError> => (options.client ?? client).post<SubmitFeedbackCommentResponses, SubmitFeedbackCommentErrors, ThrowOnError>({
+    url: '/feedback/comments',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Liveness probe
  *
  * Report that the process is up. Touches no LLM, embedding, MLflow, or agent backend.
@@ -197,7 +169,9 @@ export const getIndexStatus = <ThrowOnError extends boolean = false>(options?: O
 /**
  * Read a stored search or ask
  *
- * Return one interaction with the current user's votes. Used after a refresh.
+ * Return one of the caller's interactions with their votes. Used after a refresh.
+ *
+ * Chats are private: another user's interaction answers 404, as if it did not exist.
  */
 export const getInteraction = <ThrowOnError extends boolean = false>(options: Options<GetInteractionData, ThrowOnError>): RequestResult<GetInteractionResponses, GetInteractionErrors, ThrowOnError> => (options.client ?? client).get<GetInteractionResponses, GetInteractionErrors, ThrowOnError>({ url: '/interactions/{interaction_id}', ...options });
 

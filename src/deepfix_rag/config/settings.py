@@ -73,7 +73,11 @@ class Settings(BaseSettings):
     WEB_ORIGIN: str = "http://localhost:8080"
     PRODUCT_DATA_DIR: Path = Path.home() / ".deepfix" / "product"
     WORKSPACE_DIR: Path = Path.home() / ".deepfix" / "workspace"
-    ALLOWED_EMAIL_DOMAINS: str = ""
+    # Identity tokens come from Better Auth in the web app. Issuer and audience default to
+    # WEB_ORIGIN, which must match BETTER_AUTH_URL there.
+    AUTH_JWKS_URL: str | None = None
+    AUTH_ISSUER: str | None = None
+    AUTH_AUDIENCE: str | None = None
     MAX_DISPLAYED_HITS: int = 10
     # OpenRouter credentials for the OpenHands child. The key is never the product LLM key.
     DEEPFIX_LLM_API_KEY: str | None = None
@@ -89,7 +93,7 @@ class Settings(BaseSettings):
 
     @property
     def product_db_path(self) -> Path:
-        """SQLite file for users, sessions, and documents, outside the agent workspace."""
+        """SQLite file for documents, interactions, and runs, outside the agent workspace."""
         return Path(self.PRODUCT_DATA_DIR) / "product.db"
 
     @property
@@ -98,13 +102,19 @@ class Settings(BaseSettings):
         return Path(self.WORKSPACE_DIR)
 
     @property
-    def allowed_email_domains(self) -> list[str]:
-        """Domains that may register, or an empty list when registration is open."""
-        return [
-            domain.strip().lower()
-            for domain in self.ALLOWED_EMAIL_DOMAINS.split(",")
-            if domain.strip()
-        ]
+    def auth_jwks_url(self) -> str:
+        """Where the web app publishes the public keys that sign identity tokens."""
+        return self.AUTH_JWKS_URL or f"{self.WEB_ORIGIN.rstrip('/')}/api/auth/jwks"
+
+    @property
+    def auth_issuer(self) -> str:
+        """Expected ``iss`` claim on identity tokens."""
+        return self.AUTH_ISSUER or self.WEB_ORIGIN.rstrip("/")
+
+    @property
+    def auth_audience(self) -> str:
+        """Expected ``aud`` claim on identity tokens."""
+        return self.AUTH_AUDIENCE or self.WEB_ORIGIN.rstrip("/")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
