@@ -46,7 +46,7 @@ From the repository root, set `BETTER_AUTH_SECRET` in `.env` (see `../example.en
 docker compose up --build web   # http://localhost:8080
 ```
 
-`API_INTERNAL_URL` defaults to `http://host.docker.internal:8000`, the FastAPI process on the host. `BETTER_AUTH_URL` is `WEB_ORIGIN` and must match. SQLite auth data is stored in the `web_auth` volume (`AUTH_DATABASE_PATH=/data/auth.db`).
+`API_INTERNAL_URL` defaults to `http://backend-api:8000`, the FastAPI service in Compose (`docker compose up --build backend-api`, published on the host at http://localhost:8000). `BETTER_AUTH_URL` is `WEB_ORIGIN` and must match. SQLite auth data is stored in the `web_auth` volume (`AUTH_DATABASE_PATH=/data/auth.db`).
 
 Build the image on its own with `docker build -t deepfix-web web`.
 

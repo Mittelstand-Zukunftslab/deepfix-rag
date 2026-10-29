@@ -9,39 +9,17 @@
 #   MLFLOW_ALLOWED_HOSTS, MLFLOW_CORS_ALLOWED_ORIGINS
 #   DEEPFIX_LLM_API_KEY, DEEPFIX_LLM_BASE_URL, DEEPFIX_LLM_MODEL_NAME, etc.
 #   DEEPFIX_SERVER_DATABASE_URL
+#   BETTER_AUTH_SECRET, WEB_ORIGIN, API_INTERNAL_URL, AUTH_JWKS_URL, ALLOWED_EMAIL_DOMAINS
+#   LLM_API_KEY, EMBEDDING_API_KEY, COHERE_API_KEY
 #
 #   docker compose up -d
 
+include:
+#  - compose.hermes.yml
+  - compose.graphdb.yml
+  - compose.openhands.yml
+  
 services:
-  memgraph:
-    image: memgraph/memgraph-mage:3.13.1
-    container_name: memgraph-mage
-    environment:
-      MEMGRAPH_USER: ${MEMGRAPH_USERNAME:-neo4j}
-      MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-neo4j}
-    ports:
-      - "7687:7687"
-    mem_limit: 1G
-    volumes:
-      - memgraph_lib:/var/lib/memgraph
-      - memgraph_log:/var/log/memgraph
-    command: [ "--log-level=TRACE" ]
-    restart: unless-stopped
-
-  falkordb:
-    image: falkordb/falkordb:v4.20.3-alpine
-    container_name: falkordb
-    mem_limit: 1G
-    ports:
-      - "6379:6379"
-    environment:
-      # Empty FALKORDB_PASSWORD leaves the server open, matching the app default.
-      # A non-empty value enables Redis AUTH with that same password.
-      REDIS_ARGS: ${FALKORDB_PASSWORD:+--requirepass ${FALKORDB_PASSWORD}}
-      FALKORDB_ARGS: THREAD_COUNT 4
-    volumes:
-      - falkordb_data:/var/lib/falkordb/data
-    restart: unless-stopped
 
   rustfs:
     image: rustfs/rustfs:latest
@@ -64,118 +42,6 @@ services:
         - curl
         - -f
         - "http://127.0.0.1:9000/health"
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
-
-  hermes:
-    image: nousresearch/hermes-agent:v2026.6.19
-    container_name: hermes
-    ports:
-      - "9119:9119" # dashboard
-      - "8642:8642" # OpenAI-compatible API
-    environment:
-      HERMES_DASHBOARD: "1"
-      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
-      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-change-me-please}
-      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-change-me++7iYYwx7Vdbz1MF+EPXeechLYLxPDFhKb0tuw4eSzspA}
-      API_SERVER_ENABLED: "true"
-      API_SERVER_HOST: "0.0.0.0"
-      API_SERVER_KEY: ${API_SERVER_KEY:-change-me-please}
-      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
-      MLFLOW_OTLP_ENDPOINT: ${MLFLOW_OTLP_ENDPOINT:-http://mlflow:5000/v1/traces}
-      MLFLOW_EXPERIMENT_ID: ${MLFLOW_EXPERIMENT_ID:-0}
-      DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-http://diagnostic-agent:8844}
-      PYTHONPATH: /opt/data/.python-packages
-    depends_on:
-      mlflow:
-        condition: service_healthy
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        echo "==> Setting up Hermes OpenTelemetry plugin..."
-        if [ ! -d "/opt/data/.python-packages/opentelemetry" ]; then
-          mkdir -p /opt/data/.python-packages
-          uv pip install --target /opt/data/.python-packages 'opentelemetry-api<2' 'opentelemetry-sdk<2' 'opentelemetry-exporter-otlp-proto-http<2' || true
-        fi
-        export PYTHONPATH="/opt/data/.python-packages:$${PYTHONPATH}"
-
-        if [ ! -d "/opt/data/plugins/hermes-otel" ]; then
-          hermes plugins install briancaffey/hermes-otel || true
-        fi
-        hermes plugins enable hermes_otel 2>/dev/null || true
-
-        CONFIG_DIR="$${HOME:-/opt/data}/.hermes/plugins/hermes_otel"
-        mkdir -p "$$CONFIG_DIR" "/opt/data/plugins/hermes_otel"
-        cat <<EOF | sed 's/^ *|//' > "$$CONFIG_DIR/config.yaml"
-        |enabled: true
-        |force_flush_on_session_end: true
-        |capture_sender_id: true
-        |capture_conversation_history: true
-        |
-        |backends:
-        |  - type: otlp
-        |    name: mlflow
-        |    endpoint: $${MLFLOW_OTLP_ENDPOINT}
-        |    metrics: false
-        |    logs: false
-        |    headers:
-        |      x-mlflow-experiment-id: "$${MLFLOW_EXPERIMENT_ID}"
-        EOF
-
-        cp "$$CONFIG_DIR/config.yaml" "/opt/data/plugins/hermes_otel/config.yaml" 2>/dev/null || true
-        if [ -d "/opt/data/plugins/hermes-otel" ]; then
-          cp "$$CONFIG_DIR/config.yaml" "/opt/data/plugins/hermes-otel/config.yaml" 2>/dev/null || true
-        fi
-
-        echo "==> Starting Hermes gateway..."
-        exec hermes gateway run --accept-hooks
-    volumes:
-      - hermes_data:/opt/data
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: "2.0"
-    restart: unless-stopped
-
-  openhands:
-    image: ghcr.io/openhands/agent-server:latest-python
-    container_name: openhands
-    ports:
-      - "${OPENHANDS_PORT:-8010}:8000"
-    environment:
-      SESSION_API_KEY: ${OH_SESSION_API_KEY:-}
-      OH_SECRET_KEY: ${OH_SECRET_KEY:-}
-      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${MLFLOW_OTLP_ENDPOINT:-http://mlflow:5000/v1/traces}
-      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: http/protobuf
-      OTEL_EXPORTER_OTLP_HEADERS: "x-mlflow-experiment-id=${MLFLOW_EXPERIMENT_ID:-0}"
-      DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-http://diagnostic-agent:8844}
-    command: [ "--host", "0.0.0.0", "--port", "8000" ]
-    ulimits:
-      nofile:
-        soft: 65536
-        hard: 65536
-    volumes:
-      - openhands_data:/workspace
-    depends_on:
-      mlflow:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: "2.0"
-    healthcheck:
-      test:
-        - CMD
-        - curl
-        - -f
-        - "http://127.0.0.1:8000/health"
       interval: 15s
       timeout: 5s
       retries: 5
@@ -240,7 +106,7 @@ services:
         export PATH="/root/.local/bin:$${PATH}"
         if ! command -v deepfix-server >/dev/null 2>&1; then
           echo "==> Installing deepfix-server tool via uv..."
-          uv tool install "git+https://github.com/delcaux-labs/deepfix.git#subdirectory=packages/deepfix-server"
+          uv tool install --torch-backend cpu "git+https://github.com/delcaux-labs/deepfix.git#subdirectory=packages/deepfix-server"
         fi
         mkdir -p /root/.deepfix
         echo "==> Starting deepfix-server on 0.0.0.0:8844..."
@@ -257,6 +123,69 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  backend-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: deepfix-api
+    container_name: deepfix-api
+    ports:
+      - "8000:8000"
+    environment:
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://web:8080}
+      AUTH_JWKS_URL: ${AUTH_JWKS_URL:-http://web:8080/api/auth/jwks}
+      PRODUCT_DATA_DIR: /data/product
+      WORKSPACE_DIR: /data/workspace
+      MEMGRAPH_URL: bolt://memgraph:7687
+      MEMGRAPH_USERNAME: ${MEMGRAPH_USERNAME:-neo4j}
+      MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-neo4j}
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: ${FALKORDB_PORT:-6379}
+      FALKORDB_PASSWORD: ${FALKORDB_PASSWORD:-}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://rustfs:9000}
+      S3_URI: ${S3_URI:-s3://deepfix-index/dev}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-rustfsadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-http://diagnostic-agent:8844}
+      OH_SESSION_HOST: ${OH_SESSION_HOST:-http://openhands:8000}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      LLM_MODEL: ${LLM_MODEL:-anthropic/claude-haiku-5.5}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://openrouter.ai/api/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-perplexity/pplx-embed-v1-4b}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      COHERE_BASE_URL: ${COHERE_BASE_URL:-https://openrouter.ai/api/v1}
+      COHERE_MODEL: ${COHERE_MODEL:-cohere/rerank-4-fast}
+      DEEPFIX_LLM_API_KEY: ${DEEPFIX_LLM_API_KEY:-}
+      DEEPFIX_LLM_BASE_URL: ${DEEPFIX_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      DEEPFIX_LLM_MODEL_NAME: ${DEEPFIX_LLM_MODEL_NAME:-openai/gpt-6-luna-pro}
+    volumes:
+      - api_data:/data
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+    image: deepfix-web
+    container_name: deepfix-web
+    ports:
+      - "8080:8080"
+    environment:
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_URL: ${WEB_ORIGIN:-http://localhost:8080}
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://backend-api:8000}
+      AUTH_DATABASE_PATH: /data/auth.db
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
+    volumes:
+      - web_auth:/data
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   memgraph_lib:
   memgraph_log:
@@ -267,3 +196,5 @@ volumes:
   mlflow_artifacts:
   deepfix_tool_data:
   deepfix_server_data:
+  web_auth:
+  api_data:

@@ -1,0 +1,77 @@
+
+services:
+
+  hermes:
+    image: nousresearch/hermes-agent:v2026.6.19
+    container_name: hermes
+    ports:
+      - "9119:9119" # dashboard
+      - "8642:8642" # OpenAI-compatible API
+    environment:
+      HERMES_DASHBOARD: "1"
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-change-me-please}
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-change-me++7iYYwx7Vdbz1MF+EPXeechLYLxPDFhKb0tuw4eSzspA}
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_KEY: ${API_SERVER_KEY:-change-me-please}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MLFLOW_OTLP_ENDPOINT: ${MLFLOW_OTLP_ENDPOINT:-http://mlflow:5000/v1/traces}
+      MLFLOW_EXPERIMENT_ID: ${MLFLOW_EXPERIMENT_ID:-0}
+      DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-http://diagnostic-agent:8844}
+      PYTHONPATH: /opt/data/.python-packages
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        echo "==> Setting up Hermes OpenTelemetry plugin..."
+        if [ ! -d "/opt/data/.python-packages/opentelemetry" ]; then
+          mkdir -p /opt/data/.python-packages
+          uv pip install --target /opt/data/.python-packages 'opentelemetry-api<2' 'opentelemetry-sdk<2' 'opentelemetry-exporter-otlp-proto-http<2' || true
+        fi
+        export PYTHONPATH="/opt/data/.python-packages:$${PYTHONPATH}"
+
+        if [ ! -d "/opt/data/plugins/hermes-otel" ]; then
+          hermes plugins install briancaffey/hermes-otel || true
+        fi
+        hermes plugins enable hermes_otel 2>/dev/null || true
+
+        CONFIG_DIR="$${HOME:-/opt/data}/.hermes/plugins/hermes_otel"
+        mkdir -p "$$CONFIG_DIR" "/opt/data/plugins/hermes_otel"
+        cat <<EOF | sed 's/^ *|//' > "$$CONFIG_DIR/config.yaml"
+        |enabled: true
+        |force_flush_on_session_end: true
+        |capture_sender_id: true
+        |capture_conversation_history: true
+        |
+        |backends:
+        |  - type: otlp
+        |    name: mlflow
+        |    endpoint: $${MLFLOW_OTLP_ENDPOINT}
+        |    metrics: false
+        |    logs: false
+        |    headers:
+        |      x-mlflow-experiment-id: "$${MLFLOW_EXPERIMENT_ID}"
+        EOF
+
+        cp "$$CONFIG_DIR/config.yaml" "/opt/data/plugins/hermes_otel/config.yaml" 2>/dev/null || true
+        if [ -d "/opt/data/plugins/hermes-otel" ]; then
+          cp "$$CONFIG_DIR/config.yaml" "/opt/data/plugins/hermes-otel/config.yaml" 2>/dev/null || true
+        fi
+
+        echo "==> Starting Hermes gateway..."
+        exec hermes gateway run --accept-hooks
+    volumes:
+      - hermes_data:/opt/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+    restart: unless-stopped
+
+volumes:
+  hermes_data:

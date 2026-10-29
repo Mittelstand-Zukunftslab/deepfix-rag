@@ -1,0 +1,38 @@
+
+services:
+  memgraph:
+    image: memgraph/memgraph-mage:3.13.1
+    container_name: memgraph-mage
+    environment:
+      MEMGRAPH_USER: ${MEMGRAPH_USERNAME:-neo4j}
+      MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-neo4j}
+    ports:
+      - "7687:7687"
+    mem_limit: 1G
+    volumes:
+      - memgraph_lib:/var/lib/memgraph
+      - memgraph_log:/var/log/memgraph
+    command: [ "--log-level=TRACE" ]
+    restart: unless-stopped
+
+  falkordb:
+    image: falkordb/falkordb:v4.20.3-alpine
+    container_name: falkordb
+    mem_limit: 1G
+    ports:
+      - "6379:6379"
+    environment:
+      # Empty FALKORDB_PASSWORD leaves the server open, matching the app default.
+      # A non-empty value enables Redis AUTH with that same password.
+      REDIS_ARGS: ${FALKORDB_PASSWORD:+--requirepass ${FALKORDB_PASSWORD}}
+      FALKORDB_ARGS: THREAD_COUNT 4
+    volumes:
+      - falkordb_data:/var/lib/falkordb/data
+    restart: unless-stopped
+
+
+volumes:
+  memgraph_lib:
+  memgraph_log:
+  falkordb_data:
+  
