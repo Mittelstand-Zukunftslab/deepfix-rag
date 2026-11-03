@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
 import typer
 import yaml
 
@@ -14,7 +15,9 @@ from deepfix_rag.cli.ui import (
     print_success,
 )
 from deepfix_rag.cli.utils import load_rag_config
-from deepfix_rag.config.mutator import apply_mutation, compute_config_diff
+from deepfix_rag.config.mutator import UnknownKeyError, apply_mutation, compute_config_diff
+from deepfix_rag.config.schema import CONFIG_SCHEMA_VERSION
+from deepfix_rag.index_manifest import index_time_signature
 
 
 def _parse_value(raw: str) -> Any:
@@ -76,11 +79,27 @@ def mutate_config_cmd(
 
     try:
         mutated_config = apply_mutation(base_config, overrides)
+    except UnknownKeyError as exc:
+        emit_error(
+            str(exc),
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+            error_type="unknown_key",
+            details={"path": exc.path, "suggestions": exc.suggestions},
+        )
+    except ValidationError as exc:
+        emit_error(
+            f"Configuration mutation validation failed: {exc}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+            error_type="validation_error",
+        )
     except Exception as e:
         emit_error(
             f"Configuration mutation validation failed: {e}",
             code=EXIT_VALIDATION_ERROR,
             json_output=json_output,
+            error_type="validation_error",
         )
 
     try:
@@ -99,6 +118,10 @@ def mutate_config_cmd(
         "status": "success",
         "output_path": str(output),
         "applied_overrides": overrides,
+        "ignored_keys": [],
+        "index_time_changed": index_time_signature(base_config)
+        != index_time_signature(mutated_config),
+        "schema_version": CONFIG_SCHEMA_VERSION,
         "diffs": {k: {"before": v[0], "after": v[1]} for k, v in diffs.items()},
     }
 

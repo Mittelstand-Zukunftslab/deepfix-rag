@@ -11,7 +11,7 @@ pytestmark = [pytest.mark.unit]
 
 def test_rag_config_defaults(default_rag_config: RAGConfig):
     """Verify default parameters of RAGConfig."""
-    assert default_rag_config.chunking.size == 512
+    assert default_rag_config.chunking.size == 1024
     assert default_rag_config.retrieval.top_k == 10
     assert default_rag_config.retrieval.backend == RetrievalBackend.HYBRID
     assert default_rag_config.retrieval.language == "german"
@@ -23,17 +23,17 @@ def test_apply_mutation(default_rag_config: RAGConfig):
     mutated = apply_mutation(
         default_rag_config,
         {
-            "chunking.size": 1024,
+            "chunking.size": 2048,
             "retrieval.top_k": 20,
             "retrieval.language": "english",
             "retrieval.bit_width": 2,
         },
     )
-    assert mutated.chunking.size == 1024
+    assert mutated.chunking.size == 2048
     assert mutated.retrieval.top_k == 20
     assert mutated.retrieval.language == "english"
     assert mutated.retrieval.bit_width == 2
-    assert default_rag_config.chunking.size == 512  # original unchanged
+    assert default_rag_config.chunking.size == 1024  # original unchanged
     assert default_rag_config.retrieval.language == "german"
 
 
@@ -41,11 +41,11 @@ def test_compute_config_diff(default_rag_config: RAGConfig):
     """Verify delta computation between base and mutated configurations."""
     mutated = apply_mutation(
         default_rag_config,
-        {"chunking.size": 1024, "retrieval.language": "english"},
+        {"chunking.size": 2048, "retrieval.language": "english"},
     )
     diffs = compute_config_diff(default_rag_config, mutated)
     assert "chunking.size" in diffs
-    assert diffs["chunking.size"] == (512, 1024)
+    assert diffs["chunking.size"] == (1024, 2048)
     assert "retrieval.language" in diffs
     assert diffs["retrieval.language"] == ("german", "english")
 
