@@ -11,17 +11,25 @@ skills:
   - "../../.agents/skills/optimization-loop/SKILL.md"
   - "../../.agents/skills/diagnostic-server/SKILL.md"
   - "../../.agents/skills/chunking-tuning/SKILL.md"
+  - "../../.agents/skills/hybrid-fusion-tuning/SKILL.md"
   - "../../.agents/skills/query-rewriting/SKILL.md"
   - "../../.agents/skills/rerank-calibration/SKILL.md"
+  - "../../.agents/skills/retrieval-backend-selection/SKILL.md"
   - "../../.agents/skills/embedding-selection/SKILL.md"
   - "../../.agents/skills/deflection-and-refusal/SKILL.md"
   - "../../.agents/skills/legal-retrieval-grounding/SKILL.md"
   - "../../.agents/skills/multi-hop-aggregation/SKILL.md"
+aliases:
+  embedding-selection: retrieval-backend-selection
+  query-rewriting: hybrid-fusion-tuning
 tool_requirements:
   - command: deepfix
     purpose: "Deterministic CLI execution layer for RAG operations."
+    required: true
+optional_tools:
   - command: deepfix-server
-    purpose: "DeepFix analysis server used by deepfix run-diagnostic."
+    purpose: "DeepFix analysis server used by deepfix run-diagnostic. Not used by the optimization loop."
+    required: false
 entrypoint: deepfix
 capabilities:
   - diagnostics
