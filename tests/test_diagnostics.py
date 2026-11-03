@@ -21,6 +21,7 @@ def _write_rag_config(path: Path, cfg: RAGConfig) -> Path:
 
 
 @pytest.mark.integration
+@pytest.mark.network
 def test_run_diagnostic_live_server(
     tmp_path: Path,
 ):
@@ -44,6 +45,7 @@ def test_run_diagnostic_live_server(
 
 @pytest.mark.cli
 @pytest.mark.integration
+@pytest.mark.network
 def test_run_diagnostic_cli_live_json(cli_runner: CliRunner, tmp_path: Path) -> None:
     """Verify run-diagnostic --json succeeds against the local DeepFix server."""
     cfg = RAGConfig()

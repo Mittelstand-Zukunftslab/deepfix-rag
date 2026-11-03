@@ -17,6 +17,7 @@ from deepfix_rag.cli.ui import (
 from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.config.settings import settings
 from deepfix_rag.data import DataLoaderConfig
+from deepfix_rag.index_manifest import manifest_matches, read_index_manifest
 from deepfix_rag.pipeline import RAGWorkflow
 
 
@@ -38,6 +39,11 @@ def index_cmd(
     ),
     force: bool = typer.Option(
         False, "--force", "-f", help="Overwrite existing index directory if present."
+    ),
+    if_changed: bool = typer.Option(
+        False,
+        "--if-changed",
+        help="Skip the build when the index manifest matches this config. Rebuild when it does not.",
     ),
     json_output: bool = typer.Option(False, "--json", help="Output results in JSON format."),
 ) -> None:
@@ -77,10 +83,33 @@ def index_cmd(
             json_output=json_output,
         )
 
+    rag_config.retrieval.lancedb_index_dir = str(target_index_dir)
+    rag_config.data = DataLoaderConfig(path_or_repo=target_dataset)
+
+    if not str(target_index_dir).startswith("s3://") and manifest_matches(
+        target_index_dir, rag_config
+    ):
+        if if_changed:
+            manifest = read_index_manifest(target_index_dir) or {}
+            payload = {
+                "status": "success",
+                "skipped": True,
+                "index_path": str(target_index_dir),
+                "signature_hash": manifest.get("signature_hash"),
+                "paradigm": rag_config.retrieval.backend.value,
+                "embedding_model": settings.EMBEDDING_MODEL,
+                "reranker_model": settings.COHERE_MODEL,
+            }
+            if json_output:
+                print_json(payload)
+            else:
+                print_success(f"Index at {target_index_dir} is unchanged. Skipped the rebuild.")
+            return
+
     if not str(target_index_dir).startswith("s3://"):
         local_path = Path(target_index_dir)
         if local_path.exists() and any(local_path.iterdir()):
-            if not force:
+            if not force and not if_changed:
                 emit_error(
                     f"Index directory '{target_index_dir}' already exists and is not empty. Use --force to overwrite.",
                     code=EXIT_VALIDATION_ERROR,
@@ -93,9 +122,6 @@ def index_cmd(
             local_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        rag_config.retrieval.lancedb_index_dir = str(target_index_dir)
-        rag_config.data = DataLoaderConfig(path_or_repo=target_dataset)
-
         workflow = RAGWorkflow(config=rag_config)
 
         print_info("Triggering asynchronous RAGWorkflow data ingestion...")
@@ -116,9 +142,12 @@ def index_cmd(
 
     metadata = workflow.last_build_metadata
     if json_output:
+        written = read_index_manifest(target_index_dir) or {}
         payload: dict = {
             "status": "success",
+            "skipped": False,
             "index_path": str(target_index_dir),
+            "signature_hash": written.get("signature_hash"),
             "paradigm": rag_config.retrieval.backend.value,
             "embedding_model": settings.EMBEDDING_MODEL,
             "reranker_model": settings.COHERE_MODEL,

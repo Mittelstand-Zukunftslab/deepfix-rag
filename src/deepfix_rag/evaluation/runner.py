@@ -14,6 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+import random
 from typing import Any, Iterator
 
 from deepeval.metrics import (
@@ -108,17 +109,26 @@ def resolve_eval_records(
     *,
     split: str = "test",
     limit: int | None = None,
+    seed: int | None = None,
 ) -> list[QARecord]:
-    """Load rows from disk or use records already in memory. Limit applies to both."""
+    """Load rows from disk or use records already in memory. Limit applies to both.
+
+    Without ``seed``, ``limit`` keeps the first rows. With ``seed``, it draws a
+    deterministic sample and returns those rows in their original order.
+    """
     if records is not None:
         chosen = list(records)
     elif dataset_path is None:
         raise QAValidationError("A dataset path or in-memory records are required.")
     else:
         chosen = load_qa_dataset(dataset_path, split=split)
-    if limit is not None:
+    if limit is None or limit >= len(chosen):
+        return chosen
+    if seed is None:
         return chosen[:limit]
-    return chosen
+    rng = random.Random(seed)
+    picked = sorted(rng.sample(range(len(chosen)), limit))
+    return [chosen[index] for index in picked]
 
 
 # =========================================================================
@@ -200,6 +210,9 @@ class EvaluationSummary:
     rows: list[dict[str, Any]] = field(default_factory=list)
     error_details: list[dict[str, Any]] = field(default_factory=list)
     mlflow_run_id: str | None = None
+    effective_backend: str | None = None
+    configured_backend: str | None = None
+    judge_failures: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         res: dict[str, Any] = {
@@ -211,6 +224,9 @@ class EvaluationSummary:
             "retrieval_induced_error_rate": self.retrieval_induced_error_rate,
             "failure_distribution": self.failure_distribution,
             "mlflow_run_id": self.mlflow_run_id,
+            "effective_backend": self.effective_backend,
+            "configured_backend": self.configured_backend,
+            "judge_failures": self.judge_failures,
         }
         res.update(self.metrics)
         res["rows"] = self.rows
@@ -417,6 +433,7 @@ class GenerationEvaluator:
         )
         self.generation_metrics = generation_metrics or []
         self._metric_classes = self.build_metric_classes(self.generation_metrics)
+        self.failures = 0
 
     @staticmethod
     def build_metric_classes(
@@ -455,6 +472,7 @@ class GenerationEvaluator:
                 f"{metric_type}_reason": reason,
             }
         except Exception as e:
+            self.failures += 1
             LOGGER.warning(f"Metric {metric_type} failed: {e}")
             return {
                 str(metric_type): None,
@@ -535,14 +553,31 @@ class EvaluationTracker:
         run_name: str,
         params: dict[str, Any],
         summary: EvaluationSummary,
+        *,
+        tags: dict[str, str] | None = None,
+        nested: bool = False,
+        config_yaml: str | None = None,
     ) -> None:
         """Log parameters, sanitized metrics, and table artifacts inside an MLflow run.
 
         The id of the MLflow run is stored on ``summary.mlflow_run_id``.
+        Nested configs are stored as a ``config.yaml`` artifact. Only short
+        scalar params are logged, so prompts cannot overflow MLflow's param length.
         """
-        with mlflow.start_run(run_name=run_name) as run:
+        with mlflow.start_run(run_name=run_name, nested=nested) as run:
             summary.mlflow_run_id = run.info.run_id
-            mlflow.log_params(params, synchronous=False)
+            if tags:
+                mlflow.set_tags({key: value for key, value in tags.items() if value})
+            safe_params = {
+                str(key)[:250]: value
+                for key, value in params.items()
+                if isinstance(value, (int, float, bool))
+                or (isinstance(value, str) and len(value) <= 500)
+            }
+            if safe_params:
+                mlflow.log_params(safe_params, synchronous=False)
+            if config_yaml:
+                mlflow.log_text(config_yaml, "config.yaml")
 
             flat_summary = summary.to_dict()
             mlflow_metrics = {
@@ -685,6 +720,9 @@ class EvaluationRunner:
         max_concurrency: int | None = None,
         retrieval_only: bool | None = None,
         records: list[QARecord] | None = None,
+        seed: int | None = None,
+        tags: dict[str, str] | None = None,
+        nested: bool = False,
     ) -> EvaluationSummary:
         overrides: dict[str, Any] = {}
         if split is not None:
@@ -706,6 +744,7 @@ class EvaluationRunner:
             records,
             split=self.config.data.split,
             limit=self.config.data.limit,
+            seed=seed,
         )
 
         if self.persist:
@@ -831,6 +870,11 @@ class EvaluationRunner:
             metrics=summary_metrics,
             rows=rows,
             error_details=errors,
+            effective_backend=workflow.effective_backend,
+            configured_backend=workflow.configured_backend,
+            judge_failures=(
+                self.generation_evaluator.failures if self.generation_evaluator is not None else 0
+            ),
         )
 
         run_params = {
@@ -841,7 +885,14 @@ class EvaluationRunner:
             "cutoff_k": self.cutoff_k,
         }
         if self.persist:
-            self.tracker.log_run(run_name=run_name, params=run_params, summary=summary)
+            self.tracker.log_run(
+                run_name=run_name,
+                params=run_params,
+                summary=summary,
+                tags=tags,
+                nested=nested,
+                config_yaml=self.config.to_yaml(),
+            )
 
         return summary
 
@@ -859,6 +910,9 @@ async def run_evaluation(
     embed_model: Any = None,
     llm: Any = None,
     persist: bool = True,
+    seed: int | None = None,
+    tags: dict[str, str] | None = None,
+    nested: bool = False,
 ) -> EvaluationSummary:
     """Module-level façade orchestrating EvaluationRunner."""
     if config is None:
@@ -878,4 +932,7 @@ async def run_evaluation(
         max_concurrency=max_concurrency,
         retrieval_only=retrieval_only,
         records=records,
+        seed=seed,
+        tags=tags,
+        nested=nested,
     )

@@ -20,15 +20,20 @@ pytestmark = [pytest.mark.cli, pytest.mark.integration]
 
 
 def _assert_index_metadata_payload(
-    payload: dict, *, paradigm: str, require_storage: bool = True
+    payload: dict,
+    *,
+    paradigm: str,
+    strategy: str = "recursive",
+    size: int = 1024,
+    require_storage: bool = True,
 ) -> None:
     """Assert the shared US-004 index build metadata contract."""
     assert payload["status"] == "success"
     assert payload["paradigm"] == paradigm
     assert payload["document_count"] == 5
     assert payload["chunk_statistics"]["count"] >= 1
-    assert payload["chunk_statistics"]["strategy"] == "recursive"
-    assert payload["chunk_statistics"]["size"] == 512
+    assert payload["chunk_statistics"]["strategy"] == strategy
+    assert payload["chunk_statistics"]["size"] == size
     assert payload["chunk_statistics"]["overlap"] == 64
     assert payload["build_duration_seconds"] >= 0.0
     assert payload["storage_bytes"] >= 0
@@ -69,6 +74,7 @@ def test_cli_index_cmd_missing_force_fails(
     assert "--force" in payload["error"]
 
 
+@pytest.mark.network
 def test_cli_index_cmd_with_force_succeeds(
     cli_runner: CliRunner,
     sample_corpus_path: Path,
@@ -105,6 +111,7 @@ def test_cli_index_cmd_with_force_succeeds(
     assert (index_dir / "documents.lance").exists()
 
 
+@pytest.mark.network
 def test_cli_index_cmd_declarative_config_only(
     cli_runner: CliRunner,
     sample_corpus_path: Path,
@@ -135,9 +142,10 @@ def test_cli_index_cmd_declarative_config_only(
     assert payload["status"] == "success"
     assert payload["index_path"] == str(index_dir)
     assert (index_dir / "documents.lance").exists()
-    _assert_index_metadata_payload(payload, paradigm="hybrid")
+    _assert_index_metadata_payload(payload, paradigm="hybrid", strategy="sentence")
 
 
+@pytest.mark.network
 def test_cli_index_cmd_declarative_with_cli_overrides(
     cli_runner: CliRunner,
     sample_corpus_path: Path,
@@ -172,9 +180,10 @@ def test_cli_index_cmd_declarative_with_cli_overrides(
     assert payload["index_path"] == str(cli_index_dir)
     assert (cli_index_dir / "documents.lance").exists()
     assert not config_index_dir.exists()
-    _assert_index_metadata_payload(payload, paradigm="hybrid")
+    _assert_index_metadata_payload(payload, paradigm="hybrid", strategy="sentence")
 
 
+@pytest.mark.network
 def test_cli_index_dense_config_json_metadata(
     cli_runner: CliRunner,
     sample_corpus_path: Path,
@@ -203,6 +212,7 @@ def test_cli_index_dense_config_json_metadata(
     assert payload["embedding_model"] == "octen-embedding-8b"
 
 
+@pytest.mark.network
 def test_cli_index_rerank_config_exposes_reranker_model(
     cli_runner: CliRunner,
     sample_corpus_path: Path,
@@ -239,6 +249,7 @@ def test_cli_index_rerank_config_exposes_reranker_model(
     assert reranker.model == "qwen3-reranker-4b"
 
 
+@pytest.mark.network
 def test_cli_index_hybrid_default_config_retrieve_and_rrf(
     cli_runner: CliRunner,
     sample_corpus_path: Path,
@@ -294,6 +305,7 @@ def test_cli_index_hybrid_default_config_retrieve_and_rrf(
     assert len(nodes) > 0
 
 
+@pytest.mark.network
 def test_cli_index_graph_config_json_and_retrieve(
     cli_runner: CliRunner,
     sample_corpus_path: Path,
