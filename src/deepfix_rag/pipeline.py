@@ -68,6 +68,7 @@ from deepfix_rag.config.schema import (
 )
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader, build_node_parser
+from deepfix_rag.index_manifest import write_index_manifest
 
 
 class RetrieverEvent(Event):
@@ -155,6 +156,9 @@ class RAGWorkflow(Workflow):
         self.embed_model = embed_model
         self._index: BaseIndex | None = None
         self.last_build_metadata: IndexBuildMetadata | None = None
+        backend = self.config.retrieval.backend
+        self.configured_backend = backend.value if hasattr(backend, "value") else str(backend)
+        self.effective_backend = self.configured_backend
 
     def _get_embed_model(self) -> BaseEmbedding:
         if self.embed_model is not None:
@@ -349,11 +353,13 @@ class RAGWorkflow(Workflow):
             all_nodes = parser.get_nodes_from_documents(documents)
             leaf_nodes = get_leaf_nodes(all_nodes)
             storage_context.docstore.add_documents(all_nodes)
-            return VectorStoreIndex(
+            index = VectorStoreIndex(
                 leaf_nodes,
                 storage_context=storage_context,
                 embed_model=self._get_embed_model(),
             )
+            write_index_manifest(self.config.retrieval.lancedb_index_dir, self.config)
+            return index
 
         transformations = [self._get_node_parser()]
 
@@ -385,6 +391,7 @@ class RAGWorkflow(Workflow):
             )
             if hasattr(index, "docstore") and len(index.docstore.docs) == 0:
                 index.docstore.add_documents(documents)
+        write_index_manifest(self.config.retrieval.lancedb_index_dir, self.config)
         return index
 
     def _get_dense_retriever(self, index: BaseIndex, top_k: int) -> BaseRetriever:
@@ -427,8 +434,11 @@ class RAGWorkflow(Workflow):
             nodes = self._load_nodes_from_vector_store()
             if not nodes:
                 if hasattr(index, "docstore"):
+                    self.effective_backend = RetrievalBackend.DENSE.value
                     LOGGER.warning(
-                        "BM25Retriever docstore has 0 documents; falling back to dense retriever."
+                        "BM25Retriever docstore has 0 documents; falling back to dense retriever. "
+                        f"configured_backend={self.configured_backend} "
+                        f"effective_backend={self.effective_backend}"
                     )
                     return self._get_dense_retriever(index, top_k)
                 raise ValueError("No index or docstore found for BM25Retriever")

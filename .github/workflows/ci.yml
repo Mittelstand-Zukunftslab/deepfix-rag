@@ -16,6 +16,16 @@ jobs:
       - run: uv run ruff format --check src/deepfix_rag/api tests/test_api_skeleton.py
       - run: uv run pytest -m api -v
 
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run pytest -m "(unit or cli) and not network" -v
+
   web:
     runs-on: ubuntu-latest
     steps:

@@ -43,6 +43,8 @@ def test_cli_subcommands_registered(cli_runner: CliRunner):
         "mutate-config",
         "diff-config",
         "export",
+        "gate",
+        "schema",
     ]
     for cmd in subcommands:
         result = cli_runner.invoke(app, [cmd, "--help"])
@@ -381,12 +383,12 @@ def _build_index(index_dir: Path, corpus_path: Path) -> Path:
 
 
 @pytest.fixture
-def small_index_dir(sample_corpus_path: Path, tmp_path: Path) -> Path:
-    """LanceDB index holding only the first sample document (doc_de_001)."""
+def small_index_dir(sample_corpus_path: Path, tmp_path: Path) -> tuple[Path, Path]:
+    """LanceDB index holding only the first sample document, plus that corpus path."""
     first_line = sample_corpus_path.read_text(encoding="utf-8").splitlines()[0]
     one_doc_corpus = tmp_path / "one_doc_corpus.jsonl"
     one_doc_corpus.write_text(first_line + "\n", encoding="utf-8")
-    return _build_index(tmp_path / "small_lancedb_index", one_doc_corpus)
+    return _build_index(tmp_path / "small_lancedb_index", one_doc_corpus), one_doc_corpus
 
 
 def _write_eval_config(path: Path, corpus_path: Path, index_dir: Path | str) -> Path:
@@ -401,6 +403,7 @@ def _write_eval_config(path: Path, corpus_path: Path, index_dir: Path | str) -> 
 
 
 @pytest.mark.integration
+@pytest.mark.network
 def test_eval_json_stdout_is_pure_json_with_mlflow_run_id(
     cli_runner: CliRunner,
     mlflow_tracking_uri: str,
@@ -432,21 +435,23 @@ def test_eval_json_stdout_is_pure_json_with_mlflow_run_id(
 
 
 @pytest.mark.integration
+@pytest.mark.network
 def test_eval_index_dir_applies_to_candidate_only_in_compare(
     cli_runner: CliRunner,
     mlflow_tracking_uri: str,
     sample_qa_path: Path,
     sample_corpus_path: Path,
     populated_sample_index_dir: Path,
-    small_index_dir: Path,
+    small_index_dir: tuple[Path, Path],
     tmp_path: Path,
 ):
     """The --compare baseline is scored on its own config's index, not on --index-dir."""
+    small_dir, small_corpus = small_index_dir
     champion_path = _write_eval_config(
         tmp_path / "champion.yaml", sample_corpus_path, populated_sample_index_dir
     )
     candidate_path = _write_eval_config(
-        tmp_path / "candidate.yaml", sample_corpus_path, tmp_path / "does_not_exist"
+        tmp_path / "candidate.yaml", small_corpus, tmp_path / "does_not_exist"
     )
     dataset_args = ["--dataset", str(sample_qa_path)]
 
@@ -463,7 +468,7 @@ def test_eval_index_dir_applies_to_candidate_only_in_compare(
             "--config",
             str(candidate_path),
             "--index-dir",
-            str(small_index_dir),
+            str(small_dir),
             "--compare",
             str(champion_path),
             *dataset_args,
@@ -520,6 +525,7 @@ def rejecting_embedding_url():
 
 
 @pytest.mark.integration
+@pytest.mark.network
 def test_eval_exits_2_naming_the_error_when_every_case_errors(
     rejecting_embedding_url: str,
     mlflow_tracking_uri: str,

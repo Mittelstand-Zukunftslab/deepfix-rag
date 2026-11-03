@@ -3,10 +3,23 @@
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+import Stemmer
 import yaml
 
-from .settings import settings
+CONFIG_SCHEMA_VERSION = "1.1"
+QUERY_EXPANSION_MAX = 8
+_LANGUAGE_NAMES = tuple(sorted(Stemmer.algorithms()))
+RetrievalLanguage = StrEnum(
+    "RetrievalLanguage",
+    {name.upper().replace("-", "_"): name for name in _LANGUAGE_NAMES},
+)
+
+
+class StrictModel(BaseModel):
+    """Config model that rejects keys the schema does not define."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class RetrievalBackend(StrEnum):
@@ -117,7 +130,7 @@ class ResponseSynthesizerType(StrEnum):
     REFINE = "refine"
 
 
-class DataLoaderConfig(BaseModel):
+class DataLoaderConfig(StrictModel):
     """Pydantic model to strictly validate data loading requests."""
 
     path_or_repo: str = Field(
@@ -152,7 +165,7 @@ class ChunkingStrategy(StrEnum):
     SENTENCE = "sentence"
 
 
-class ChunkingConfig(BaseModel):
+class ChunkingConfig(StrictModel):
     """Document chunking hyperparameters."""
 
     strategy: ChunkingStrategy = Field(
@@ -198,13 +211,13 @@ class ChunkingConfig(BaseModel):
         return [self.size * 4, self.size, max(self.size // 4, 64)]
 
 
-class EmbeddingConfig(BaseModel):
+class EmbeddingConfig(StrictModel):
     """Embedding model and endpoint settings."""
 
     batch_size: int = Field(default=32, ge=1, description="Embedding batch size.")
 
 
-class GraphExtractionSchema(BaseModel):
+class GraphExtractionSchema(StrictModel):
     """Extraction schema specifying entities and relations for Property Graph RAG."""
 
     entities: list[str] = Field(
@@ -251,7 +264,7 @@ GRAPH_EXTRACTION_SCHEMAS: dict[str, GraphExtractionSchema] = {
 }
 
 
-class RetrievalConfig(BaseModel):
+class RetrievalConfig(StrictModel):
     """Retrieval parameters."""
 
     backend: RetrievalBackend = Field(
@@ -266,7 +279,11 @@ class RetrievalConfig(BaseModel):
     )
     lancedb_table_name: str = Field(default="documents", description="Table name for LanceDB.")
     lancedb_index_dir: str = Field(
-        default=settings.S3_URI, description="Directory for LanceDB index."
+        default="indexes/lancedb",
+        description=(
+            "Local directory for the LanceDB index. An s3:// URI is accepted but "
+            "the CLI cannot check that remote index for staleness."
+        ),
     )
     top_k: int = Field(
         default=10, ge=1, le=100, description="Number of retrieved documents before re-ranking."
@@ -278,7 +295,8 @@ class RetrievalConfig(BaseModel):
     query_expansion_num: int = Field(
         default=1,
         ge=0,
-        description="Number of queries to expand for retrieval.",
+        le=QUERY_EXPANSION_MAX,
+        description=f"Number of queries to expand for retrieval (0 to {QUERY_EXPANSION_MAX}).",
     )
     query_gen_prompt: str = Field(
         default="You are a helpful assistant that generates multiple search queries based on a single input query. Generate {num_queries} search queries, one on each line, related to the following input query:\nQuery: {query}\nQueries:\n",
@@ -330,14 +348,17 @@ class RetrievalConfig(BaseModel):
         description="Number of knowledge graph traversal hops.",
     )
     bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")
-    language: str = Field(default="german", description="Language of the documents.")
+    language: RetrievalLanguage = Field(
+        default=RetrievalLanguage.GERMAN,
+        description="Snowball stemmer language for BM25. Must be a PyStemmer algorithm.",
+    )
     load_if_exists: bool = Field(
         default=True,
         description="Load existing index if present rather than re-ingesting corpus.",
     )
 
 
-class EvalConfig(BaseModel):
+class EvalConfig(StrictModel):
     """Evaluation hyperparameters."""
 
     retrieval_metrics: list[RetrievalMetricType] = Field(
@@ -366,7 +387,7 @@ class EvalConfig(BaseModel):
     )
 
 
-class RerankConfig(BaseModel):
+class RerankConfig(StrictModel):
     """Re-ranking stage settings."""
 
     enabled: bool = Field(default=False, description="Whether re-ranking stage is active.")
@@ -375,7 +396,7 @@ class RerankConfig(BaseModel):
     )
 
 
-class GenerationConfig(BaseModel):
+class GenerationConfig(StrictModel):
     """LLM generation and prompting settings."""
 
     temperature: float = Field(default=0.0, ge=0.0, le=2.0, description="Sampling temperature.")
@@ -386,7 +407,7 @@ class GenerationConfig(BaseModel):
     )
 
 
-class RAGConfig(BaseModel):
+class RAGConfig(StrictModel):
     """Top-level RAG Pipeline Configuration Schema."""
 
     version: str = Field(default="1.0", description="Configuration schema version.")
@@ -400,17 +421,56 @@ class RAGConfig(BaseModel):
 
     retrieval_only: bool = Field(default=False, description="Whether retrieval only is active.")
 
+    @model_validator(mode="after")
+    def validate_rerank_window(self) -> "RAGConfig":
+        """Keep the rerank window inside the retrieved pool and the cutoff inside rerank."""
+        if not self.rerank.enabled:
+            return self
+        if self.rerank.top_n > self.retrieval.top_k:
+            raise ValueError(
+                f"rerank.top_n ({self.rerank.top_n}) must be <= retrieval.top_k "
+                f"({self.retrieval.top_k}) when rerank is enabled."
+            )
+        if self.eval.cutoff_k > self.rerank.top_n:
+            raise ValueError(
+                f"eval.cutoff_k ({self.eval.cutoff_k}) must be <= rerank.top_n "
+                f"({self.rerank.top_n}) when rerank is enabled."
+            )
+        return self
+
     @classmethod
     def from_yaml(cls, path_or_str: str | Path) -> "RAGConfig":
-        """Load RAGConfig from a YAML file path or YAML string."""
-        path = Path(path_or_str)
-        if path.exists() and path.is_file():
+        """Load RAGConfig from a YAML file. A missing path raises FileNotFoundError.
+
+        A string that contains newlines, or that is not a path, is parsed as YAML.
+        """
+        if _is_config_path(path_or_str):
+            path = Path(path_or_str)
+            if not path.is_file():
+                raise FileNotFoundError(f"Config file not found: {path}")
             content = path.read_text(encoding="utf-8")
         else:
             content = str(path_or_str)
         data = yaml.safe_load(content) or {}
+        if not isinstance(data, dict):
+            raise ValueError("RAG config YAML must be a mapping.")
         return cls.model_validate(data)
 
     def to_yaml(self) -> str:
         """Serialize RAGConfig to a YAML string."""
         return yaml.safe_dump(self.model_dump(mode="json"), sort_keys=False)
+
+
+def _is_config_path(path_or_str: str | Path) -> bool:
+    """True when the value should be read from disk rather than parsed as YAML."""
+    if isinstance(path_or_str, Path):
+        return True
+    text = str(path_or_str)
+    if "\n" in text:
+        return False
+    path = Path(text)
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        return True
+    if "/" in text or text.startswith("\\"):
+        return True
+    return path.exists()

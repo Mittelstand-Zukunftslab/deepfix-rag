@@ -43,10 +43,17 @@ def emit_error(
     message: str,
     code: int = EXIT_VALIDATION_ERROR,
     json_output: bool = False,
+    error_type: str | None = None,
+    details: dict[str, Any] | None = None,
 ) -> None:
     """Emit error according to format preference and exit with designated exit code."""
     if json_output:
-        print_json({"status": "error", "error": message, "code": code})
+        payload: dict[str, Any] = {"status": "error", "error": message, "code": code}
+        if error_type is not None:
+            payload["error_type"] = error_type
+        if details:
+            payload.update(details)
+        print_json(payload)
     else:
         typer.secho(f"Error: {message}", fg=typer.colors.RED, file=sys.stdout)
     print_error(message)
