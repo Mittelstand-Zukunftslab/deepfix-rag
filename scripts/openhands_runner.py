@@ -85,12 +85,17 @@ def configure_runner_litellm() -> bool:
 def litellm_model(model: str, base_url: str | None) -> str:
     """Name the model the way LiteLLM routes it.
 
-    OpenRouter model ids such as ``openai/gpt-6-luna-pro`` need the ``openrouter/``
-    prefix, or LiteLLM sends them to the provider in the first segment.
+    OpenRouter model ids such as ``anthropic/claude-haiku-5.5`` need the
+    ``openrouter/`` prefix, or LiteLLM sends them to the provider in the first
+    segment. Bare names on other OpenAI-compatible endpoints keep the
+    ``openai/`` prefix. This process does not import the product package; keep
+    this in step with ``resolve_litellm_model``.
     """
     host = urlparse(base_url).hostname if base_url else None
     if host and host.endswith("openrouter.ai") and not model.startswith("openrouter/"):
         return f"openrouter/{model}"
+    if not (model.startswith("openai/") or "/" in model):
+        return f"openai/{model}"
     return model
 
 

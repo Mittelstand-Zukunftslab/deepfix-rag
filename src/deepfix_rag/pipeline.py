@@ -69,7 +69,7 @@ from deepfix_rag.config.schema import (
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader, build_node_parser
 from deepfix_rag.index_manifest import write_index_manifest
-from deepfix_rag.llm import litellm_additional_kwargs
+from deepfix_rag.llm import litellm_additional_kwargs, resolve_litellm_model
 
 
 class RetrieverEvent(Event):
@@ -173,9 +173,7 @@ class RAGWorkflow(Workflow):
     def _get_llm(self) -> BaseLLM:
         if self.llm is not None:
             return self.llm
-        model_name = settings.LLM_MODEL
-        if not (model_name.startswith("openai/") or "/" in model_name):
-            model_name = f"openai/{model_name}"
+        model_name = resolve_litellm_model(settings.LLM_MODEL, settings.LLM_BASE_URL)
         return CustomLiteLLM(
             model=model_name,
             temperature=self.config.generation.temperature,

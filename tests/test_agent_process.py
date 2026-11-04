@@ -184,7 +184,12 @@ def test_runner_routes_openrouter_models_and_names_conversations() -> None:
     assert runner.litellm_model("openrouter/openai/gpt-6-luna-pro", openrouter) == (
         "openrouter/openai/gpt-6-luna-pro"
     )
-    assert runner.litellm_model("qwen3-8-27b", "https://api.aisc.hpi.de/v1") == "qwen3-8-27b"
+    assert runner.litellm_model("anthropic/claude-haiku-5.5", openrouter) == (
+        "openrouter/anthropic/claude-haiku-5.5"
+    )
+    assert runner.litellm_model("qwen3-8-27b", "https://api.aisc.hpi.de/v1") == (
+        "openai/qwen3-8-27b"
+    )
     first = runner.conversation_id_for("run1")
     assert isinstance(first, uuid.UUID)
     assert first == runner.conversation_id_for("run1")

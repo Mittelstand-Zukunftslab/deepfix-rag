@@ -1,9 +1,10 @@
 import asyncio
+from typing import Any
 
 from deepeval.models.base_model import DeepEvalBaseLLM
 import litellm
 
-from deepfix_rag.llm import configure_litellm_drop_params
+from deepfix_rag.llm import configure_litellm_drop_params, resolve_litellm_model
 
 
 class ProxyJudgeLLM(DeepEvalBaseLLM):
@@ -15,11 +16,8 @@ class ProxyJudgeLLM(DeepEvalBaseLLM):
         provider: str = "openai",
         max_tokens: int = 4096,
         timeout: int = 90,
-    ):
-        if not (model.startswith("openai/") or "/" in model):
-            self.model = f"openai/{model}"
-        else:
-            self.model = model
+    ) -> None:
+        self.model = resolve_litellm_model(model, api_base)
         self.api_base = api_base
         self.api_key = api_key
         self.provider = provider
@@ -30,18 +28,29 @@ class ProxyJudgeLLM(DeepEvalBaseLLM):
     def load_model(self):
         return self.model
 
-    def generate(self, prompt: str, schema=None) -> str:
+    def _completion_kwargs(self, prompt: str) -> dict[str, Any]:
+        """Arguments for ``litellm.completion``.
+
+        An ``openrouter/`` model id already selects the provider. Passing
+        ``custom_llm_provider`` as well makes LiteLLM prepend that provider,
+        and the OpenRouter early return drops ``api_key``.
+        """
         self.drop_params = configure_litellm_drop_params()
-        r = litellm.completion(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            api_base=self.api_base,
-            api_key=self.api_key,
-            custom_llm_provider=self.provider,
-            timeout=self.timeout,
-            max_tokens=self.max_tokens,
-            drop_params=self.drop_params,
-        )
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "api_base": self.api_base,
+            "api_key": self.api_key,
+            "timeout": self.timeout,
+            "max_tokens": self.max_tokens,
+            "drop_params": self.drop_params,
+        }
+        if not self.model.startswith("openrouter/"):
+            kwargs["custom_llm_provider"] = self.provider
+        return kwargs
+
+    def generate(self, prompt: str, schema=None) -> str:
+        r = litellm.completion(**self._completion_kwargs(prompt))
         val = r.choices[0].message.content or ""
         val = val.strip()
         import re
