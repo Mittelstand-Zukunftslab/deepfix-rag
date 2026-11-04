@@ -70,7 +70,7 @@ Stories are ordered in the phases in Technical Considerations. Each story is one
 - [ ] The process runs as the image's `hermes` user. The container has no Docker socket, no published host ports, and no `HERMES_DASHBOARD`.
 - [ ] Compose memory limit is 4 GiB and CPU limit is 2, as the starting point the Dokploy test may raise. `restart: unless-stopped`.
 - [ ] `API_SERVER_ENABLED=true`, `API_SERVER_HOST=0.0.0.0`, and `API_SERVER_KEY` is required and at least 8 characters. The key is injected from the environment, never baked into the image.
-- [ ] `GET http://hermes:8642/health` returns `{"status": "ok"}` from `backend-api` on the Compose network. The host cannot open port 8642.
+- [ ] `GET http://hermes:8642/health` returns `{"status": "ok"}` from `backend-api` on the Compose network. The host cannot open port 8642. The `chat` profile's port 8643 is also unpublished. Its contract is in Design Considerations. It is not started as the optimization agent.
 - [ ] `GET /v1/capabilities` on that container advertises `run_submission`, `run_status`, `run_stop`, and `run_events_sse` before the image digest is committed. An image that lacks them is not a valid pin.
 - [ ] `uv run ruff check` and `uv run ruff format --check` pass for any Python added to the image build.
 
@@ -78,10 +78,10 @@ Stories are ordered in the phases in Technical Considerations. Each story is one
 **Description:** As an AI engineer, I want Hermes to read the corpus, the dev set, and the champion index through RustFS, so the API volume is not mounted into the sandbox.
 
 **Acceptance Criteria:**
-- [ ] Before `POST /v1/runs`, API code writes a fresh prefix `s3://<optimization-bucket>/runs/<run_id>/` containing `input/champion.yaml`, `input/feedback_dev.jsonl`, `input/corpus/` (the workspace corpus files), and `input/ledger.jsonl` when the workspace ledger exists. The champion YAML's `retrieval.lancedb_index_dir` points at `input/champion-index/`, which is a copy of the serving index made by the API. `data.path_or_repo` in that YAML is the in-container path the sync helper will use.
+- [ ] Before `POST /v1/runs`, API code writes a fresh prefix `s3://deepfix-index/optimization/runs/<run_id>/` (the bucket in `S3_URI`) containing `input/champion.yaml`, `input/feedback_dev.jsonl`, `input/corpus/` (the workspace corpus files), and `input/ledger.jsonl` when the workspace ledger exists. The champion YAML's `retrieval.lancedb_index_dir` points at `input/champion-index/`, which is a copy of the serving index made by the API with the root key. `data.path_or_repo` in that YAML is the in-container path the sync helper will use.
 - [ ] The prefix is unique per `run_id`. A later run never opens an earlier run's LanceDB directory.
 - [ ] Holdout rows are not uploaded. A test lists every object written for a run and asserts none of the holdout query texts or holdout query ids appear.
-- [ ] Hermes receives one access key that can read `runs/*/input/*` and write `runs/*/output/*` and `runs/*/candidate-index/*`. It does not receive the serving-bucket key. The API uses its own key to write inputs and to read outputs.
+- [ ] Hermes receives one IAM access key whose policy is the prefix document in Technical Considerations. It can list, get, put, and delete only under `optimization/runs/*`. It cannot get the rest of `deepfix-index`, and it is not the root key (`RUSTFS_ACCESS_KEY` / `S3_ACCESS_KEY_ID`). The API root key writes inputs and reads outputs. A test with that key against an object outside the prefix receives `AccessDenied`.
 - [ ] The Hermes image contains a sync helper the run instructions invoke: download `input/` to the container work directory, and upload `result.json` and the candidate YAML to `output/` when the agent finishes. The helper is a fixed command, not a model-written script.
 - [ ] The candidate index the agent builds uses an `s3://` URI under `runs/<run_id>/candidate-index/`. `deepfix index` already accepts that URI and skips the local manifest for `s3://` (`src/deepfix_rag/index_manifest.py`). The API promotion path does not read that index. It keeps rebuilding locally from the candidate YAML, as `apply_candidate` does today.
 - [ ] Unit tests use a local S3 stand-in only if one is already in the test suite; otherwise they test the key allowlist and the object-key layout with the real helper against `tmp_path` and a recorded request plan. No mocks of the pipeline.
@@ -120,7 +120,7 @@ Stories are ordered in the phases in Technical Considerations. Each story is one
 - [ ] The run row stores `hermes_run_id` (new column, nullable). OpenHands rows leave it null.
 - [ ] The background thread reads `GET /v1/runs/{hermes_run_id}/events` and, on a 15-second cadence, `GET /v1/runs/{hermes_run_id}`. It does not hold one chat request for the whole run. `completed` downloads the output and calls `finish_run`. `failed`, `cancelled`, and `interrupted` mark the row `failed` with the Hermes error text, or "Cancelled" / "Interrupted: Hermes restarted while the run was in progress" when the body has no error.
 - [ ] Each events frame other than a keepalive is one structured step line on the API process logger (stderr, so it shows in `docker logs` of `backend-api`): `optimization run=<deepfix run_id> hermes_run=<id> event=<name> tool=<tool or empty> preview=<truncated>`. The same line is appended to the private step log from US-007. A status payload that stays `running` is not a step and is not a heartbeat.
-- [ ] `OPTIMIZATION_HEARTBEAT_STALL_MINUTES` defaults to 15. A heartbeat is a non-keepalive events frame, or a fresh `output/heartbeat.json` from the `deepfix` shim in US-007. SSE `: keepalive` comments and a `running` status poll do not reset the stall clock: keepalives only prove the gateway is still sending frames during a long tool call. If the stall clock exceeds 15 minutes, the thread calls `stop_run` and marks the row `failed` with reason "Stalled: no heartbeat for 15 minutes." That bound is well under the 3-hour timeout.
+- [ ] `OPTIMIZATION_HEARTBEAT_STALL_MINUTES` defaults to 5 and is read from the environment. A heartbeat is a non-keepalive events frame, or a fresh `output/heartbeat.json` from the `deepfix` shim in US-007. SSE `: keepalive` comments and a `running` status poll do not reset the stall clock: keepalives only prove the gateway is still sending frames during a long tool call. If the stall clock exceeds the configured window, the thread calls `stop_run` and marks the row `failed` with reason "Stalled: no heartbeat for 5 minutes." (the number is the configured window). A long `deepfix index` or `deepfix hpo` does not trip it, because the shim rewrites the heartbeat every 30 seconds while the command is still running.
 - [ ] At `OPTIMIZATION_RUN_TIMEOUT_HOURS` (default 3) the thread calls `stop_run`, waits until the Hermes status is terminal or 2 minutes have passed, then marks the row `failed` with reason "Timed out" even if Hermes is still `stopping`.
 - [ ] `POST /admin/optimization/runs/{run_id}/cancel` (admin only, `operation_id` `cancel_optimization_run`) calls the same stop path with reason "Cancelled". Members receive 403. A row that is not `running` receives 409. OpenHands rows still use the existing process-group kill.
 - [ ] API startup, when the flag is `hermes`, does not mark a `running` row failed before it has asked Hermes. If Hermes reports the run still running and the row is younger than the timeout, the thread resumes polling. If Hermes reports a terminal status, the thread finishes the row as above. If Hermes is unreachable, the row stays `running` until `fail_stale_runs` (timeout plus the existing 15-minute grace) marks it `failed` with the existing stale reason. A second API process must not start a second Hermes run: the idempotency key is the DeepFix `run_id`.
@@ -146,11 +146,11 @@ Stories are ordered in the phases in Technical Considerations. Each story is one
 **Acceptance Criteria:**
 - [ ] The production failure this story closes: the OpenHands child writes nothing to the `backend-api` container logs. Operators see `MLflow run created` and `POST /admin/optimization/run 200`, then no further line until the run times out. A Hermes run must write a step or heartbeat line to that same stderr log at least every `OPTIMIZATION_HEARTBEAT_STALL_MINUTES` while it is healthy.
 - [ ] `iter_events` is required, not optional. The step line format is the one in US-005. Previews are truncated to 500 characters, matching the Hermes `tool.completed` preview cap, and passed through the same redaction the API already applies to secrets (FR-16). The lines are also appended to the API-private file `optimization-logs/<run_id>.log`, outside the workspace. That file is not copied to S3 and is not returned to members. The final `output` text, truncated to 64 KiB, is appended when the run ends.
-- [ ] The command named `deepfix` on the Hermes `PATH` is a shim in front of the real CLI. While the real CLI is running, the shim writes `output/heartbeat.json` every 60 seconds (`{"run_id", "pid", "elapsed_s", "argv0", "written_at"}`) and writes one `deepfix-heartbeat` line to its own stderr for the same interval. The shim forwards the child's stdout and stderr unchanged. `which deepfix` inside the container resolves to the shim. A direct call to the real interpreter does not have to heartbeat; the prompt and the skill tell the agent to run `deepfix`.
+- [ ] The command named `deepfix` on the Hermes `PATH` is a shim in front of the real CLI. While the real CLI is running, the shim writes `output/heartbeat.json` every 30 seconds (`{"run_id", "pid", "elapsed_s", "argv0", "written_at"}`) and writes one `deepfix-heartbeat` line to its own stderr on that same interval. Thirty seconds is several times shorter than the 5-minute stall window, so a long `deepfix index` or `deepfix hpo` keeps the file fresh. The shim forwards the child's stdout and stderr unchanged. `which deepfix` inside the container resolves to the shim. A direct call to the real interpreter does not have to heartbeat; the prompt and the skill tell the agent to run `deepfix`.
 - [ ] Those stdout and stderr bytes are visible in `docker logs` of the Hermes container. Hermes already writes agent activity (API calls, tool dispatch, session lifecycle) to `$HERMES_HOME/logs/agent.log`, warnings to `errors.log`, and supervised gateway output to the container log (`docker logs` and `$HERMES_HOME/logs/gateways/<profile>/current`). The docs do not say that a terminal command's full stdout and stderr are copied onto `docker logs`. The image must mirror them there: if the pinned image already logs tool output into `agent.log`, the entrypoint follows that file onto the container stderr; otherwise the shim's own stderr is the stream s6 already forwards. US-009 checks that a line from `deepfix --help` appears in `docker logs hermes` during the run. Secrets stay redacted; Hermes documents that its log files redact secrets.
 - [ ] `deepfix eval` still writes an MLflow run in `MLFLOW_DEV_RAG_EXPERIMENT` because the container has `MLFLOW_TRACKING_URI=http://mlflow:5000`. `mlflow_run_id` in `result.json` is still the admin-screen link.
 - [ ] The same run also writes an MLflow trace for the Hermes agent turn and for each LLM call, tagged with the DeepFix `run_id`, in an experiment named `deepfix_hermes` (created if missing). The pages read do not document a native OTLP exporter. The implementation sets `OTEL_EXPORTER_OTLP_ENDPOINT=http://mlflow:5000/v1/traces` and `OTEL_EXPORTER_OTLP_HEADERS=x-mlflow-experiment-id=<id>` when the pinned image honors them. If it does not, the image adds the smallest exporter that produces those spans. The unused `briancaffey/hermes-otel` plugin is allowed only when US-009 shows it is that exporter. Span attributes must not contain `API_SERVER_KEY`, `OPENROUTER_API_KEY`, or the S3 secret.
-- [ ] A failed run's `reason` includes `Timed out`, `Stalled: no heartbeat for 15 minutes.`, the result-file error, or the Hermes error. It does not include those secrets.
+- [ ] A failed run's `reason` includes `Timed out`, `Stalled: no heartbeat for 5 minutes.`, the result-file error, or the Hermes error. It does not include those secrets.
 - [ ] MLflow stays reachable the way Compose serves it today, including its published port. This story does not add MLflow authentication.
 
 ### US-008: Cancel control on the Optimization screen
@@ -174,7 +174,7 @@ Stories are ordered in the phases in Technical Considerations. Each story is one
 - [ ] Cancelling a second run that is inside `deepfix index` or `deepfix eval` moves the DeepFix row to `failed` / "Cancelled" within 2 minutes. Record whether the in-flight shell command actually stopped. That observation answers the open question on `POST /v1/runs/{id}/stop`.
 - [ ] Restarting the Hermes container during a third run ends the DeepFix row as `failed` with the interrupted reason, once the API poller has run. Restarting the API container during a fourth run either resumes polling or, if Hermes has already finished, writes the matching terminal status. After both restarts, `SELECT count(*) FROM optimization_runs WHERE status = 'running'` is 0 or equals a run whose Hermes status is still `running` and whose age is under the timeout.
 - [ ] MLflow shows the `deepfix eval` run id recorded in `result.json` when the agent completed an eval, and a trace in experiment `deepfix_hermes` whose spans include the agent turn and at least one LLM call, tagged with the DeepFix run id.
-- [ ] During that run, `docker logs` of `backend-api` contains a step or heartbeat line after the `POST /admin/optimization/run 200` line, and `docker logs` of `hermes` contains a line of `deepfix` stdout or stderr. A run whose shim heartbeats are suppressed ends `failed` with the stall reason in under 30 minutes, not at 3 hours.
+- [ ] During that run, `docker logs` of `backend-api` contains a step or heartbeat line after the `POST /admin/optimization/run 200` line, and `docker logs` of `hermes` contains a line of `deepfix` stdout or stderr. A run whose shim heartbeats are suppressed ends `failed` with the stall reason in under 10 minutes, not at 3 hours. A Hermes `GetObject` outside `optimization/runs/` returns `AccessDenied`.
 - [ ] The OpenHands path still starts when the flag is flipped back to `openhands` for one run, or the test records that the OpenHands container was required for that path (see US-010).
 
 ### US-010: Remove the OpenHands path after Hermes is proven
@@ -196,23 +196,23 @@ Stories are ordered in the phases in Technical Considerations. Each story is one
 - FR-4: Hermes model calls must use OpenRouter (`OPENROUTER_API_KEY` in the Hermes environment, `model.provider: openrouter`, `model.default: anthropic/claude-haiku-5.5`). The product `LLM_API_KEY` must not be present in that environment.
 - FR-5: The API must start an optimization run by `POST /v1/runs` and must store the returned Hermes run id. It must not use `POST /v1/chat/completions` as the 3-hour wait.
 - FR-6: The API must follow `GET /v1/runs/{run_id}/events` and poll `GET /v1/runs/{run_id}` until the run is terminal, cancelled, stalled, timed out, or the Hermes status is `unknown` and has been resolved. A `running` status poll is not evidence of progress.
-- FR-7: The API must cancel a run with `POST /v1/runs/{run_id}/stop` on admin cancel, on the 3-hour timeout, and when no heartbeat has arrived for `OPTIMIZATION_HEARTBEAT_STALL_MINUTES` (default 15).
+- FR-7: The API must cancel a run with `POST /v1/runs/{run_id}/stop` on admin cancel, on the 3-hour timeout, and when no heartbeat has arrived for `OPTIMIZATION_HEARTBEAT_STALL_MINUTES` (environment variable, default 5).
 - FR-8: The API must be the only component that reads holdout, scores holdout, and writes the champion config. Hermes must not receive holdout bytes in the prompt, the run bundle, or the environment.
 - FR-9: The API must keep the current skip rules: `OPTIMIZATION_MIN_DEV_QUESTIONS` (50), `OPTIMIZATION_MIN_NEW_DEV_QUESTIONS` (10), `OPTIMIZATION_MIN_HOLDOUT_QUESTIONS` (15), `OPTIMIZATION_MIN_PRIMARY_DELTA` (0.025), `OPTIMIZATION_SECONDARY_TOLERANCE` (-0.01), and `OPTIMIZATION_RUN_TIMEOUT_HOURS` (3).
 - FR-10: The dev/holdout split must stay `int(sha256(normalized query), 16) % 100 < 20` in `feedback.is_holdout`.
 - FR-11: Hermes must open LanceDB with `S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`, and an `s3://` URI, the same variables `RAGWorkflow._get_vector_store` already reads. No volume of the API workspace or of RustFS data may be mounted into Hermes.
-- FR-12: The Hermes S3 key must not be the serving-bucket key. Inputs and the champion-index snapshot live under a per-run prefix the API writes. Hermes can read that prefix and write only the run's output and candidate-index prefixes.
+- FR-12: The Hermes S3 credential must be a RustFS IAM user key, not the root key, with the prefix policy in Technical Considerations. Object access is `optimization/runs/*` on bucket `deepfix-index`. The API root key writes the run input, including the champion-index snapshot, and reads the output.
 - FR-13: A restart of the API or of Hermes must end with no DeepFix row stuck in `running` after the poller has observed a terminal Hermes status, or after the existing stale grace if Hermes cannot be reached.
 - FR-14: `OPTIMIZATION_AGENT=openhands` must remain the default until US-009 passes. The OpenHands child must keep working while the flag is `openhands`.
-- FR-15: The browser must talk only to the DeepFix API. A future admin chat must call Hermes through that API, using the same base URL and bearer key, on a session that is not the optimization run's session.
+- FR-15: The browser must talk only to the DeepFix API. A future admin chat uses the separate `chat` Hermes profile (port 8643, its own bearer key, no terminal), and the API proxies that profile. The chat session is never an optimization run session. The chat contract in Design Considerations is the boundary: it may read status, explain results, and start or cancel a run through the API, and it must not promote or receive holdout questions.
 - FR-16: Secrets (`API_SERVER_KEY`, `OPENROUTER_API_KEY`, the Hermes S3 secret, the product database path) must not appear in prompts, in `result.json`, in MLflow params or span attributes, in container logs, or in the admin run reason.
 - FR-17: Every Hermes optimization run must write structured step lines, from `GET /v1/runs/{run_id}/events`, to the API process stderr and to `optimization-logs/<run_id>.log`.
-- FR-18: The `deepfix` shim must refresh `output/heartbeat.json` every 60 seconds while a CLI command runs, and the API must fail the row with "Stalled: no heartbeat for 15 minutes." when that file and the non-keepalive events are both quiet for 15 minutes. SSE keepalives do not count.
+- FR-18: The `deepfix` shim must refresh `output/heartbeat.json` every 30 seconds while a CLI command runs, including `index` and `hpo`. The API must fail the row with "Stalled: no heartbeat for 5 minutes." when that file and the non-keepalive events are both quiet for `OPTIMIZATION_HEARTBEAT_STALL_MINUTES` (default 5). SSE keepalives do not count.
 - FR-19: The child's stdout and stderr must appear in `docker logs` of the Hermes container. The Hermes agent turn and each LLM call must be an MLflow trace in experiment `deepfix_hermes`, tagged with the DeepFix run id. `deepfix eval` must still create its MLflow run.
 
 ## Non-Goals
 
-- Building the natural-language admin chat. The runs API and the bearer key are chosen so a later `/admin` chat can proxy `POST /v1/chat/completions` or `POST /api/sessions/{id}/chat` without a second agent.
+- Building the natural-language admin chat UI in this feature. The sandbox must still leave a second Hermes profile for that chat, with the contract in Design Considerations. The chat is not built here.
 - Letting Hermes promote a config, score holdout, or write `configs/champion.yaml` and `indexes/current`.
 - Moving the serving index off the API volume. The API copies a snapshot into the run prefix for Hermes. Search and Ask keep reading the local serving index.
 - Replacing the in-process cron scheduler with Hermes `/api/jobs`.
@@ -227,7 +227,25 @@ Stories are ordered in the phases in Technical Considerations. Each story is one
 
 The Optimization screen stays the one in the product UI. This feature adds one control, "Cancel run", visible to admins while a row is `running`. The agent-unavailable sentence changes with the flag, as in US-004. No new member-facing screen.
 
-A future chat on `/admin` is a separate PRD. It should proxy to Hermes and keep the optimization run on its own Hermes session id, so a chat turn cannot append to the run that is allowed to write a candidate.
+### Admin chat profile
+
+The chat UI is a later feature. The sandbox that this plan deploys must already keep a second Hermes profile, `chat`, isolated from the optimization profile. Hermes profiles are separate homes (config, credentials, sessions, skills) inside one container. The chat profile gets its own `API_SERVER_PORT` (8643, not published) and its own `API_SERVER_KEY`. The optimization profile stays on 8642. A chat session id is never the optimization run's session id.
+
+The chat profile has no terminal toolset and no file-write toolset. Both profiles share one container user, and a terminal on the chat profile could read the optimization profile's `.env` on the shared data volume. Leaving the terminal off is the isolation. The chat profile also does not receive `HERMES_S3_ACCESS_KEY_ID`, the optimization OpenRouter key, or the root RustFS key.
+
+What the chat profile may do, only by asking the DeepFix API (the API performs the call in the signed-in admin's session; the profile does not hold a standing admin password):
+
+- Read optimization status: schedule, champion diff, and recent runs (status, reason, primary metric, dev delta, the aggregate holdout delta, wins, and losses already on `GET /admin/optimization`).
+- Explain those results in conversation.
+- Propose a candidate in the conversation. The proposal is text. It does not write `configs/champion.yaml`.
+- Start a run with `POST /admin/optimization/run`, and cancel one with `POST /admin/optimization/runs/{run_id}/cancel`. Starting a run still goes through `start_optimization_run`, including the skip rules and the holdout count check. The chat does not upload the dev file itself.
+
+What it must not do:
+
+- Promote a config, write the champion file, or switch the serving index. There is no promote route for it to call. Promotion stays inside `apply_candidate`.
+- See holdout questions, holdout document ids, or the holdout JSONL. Aggregate counts and deltas that the admin screen already shows are the only holdout fields it may hear. The API must not add a route that returns holdout rows to this profile.
+- Read or write `optimization/runs/` in RustFS, run `deepfix`, or attach to the optimization profile's sessions.
+- Use the optimization profile's approval mode (`off`) or its `deepfix` shim. Those exist only on the optimization profile.
 
 ## Technical Considerations
 
@@ -270,20 +288,63 @@ Checked against the docs on 2026-11-04. These are the facts the design relies on
 | Terminal backends include `local` (commands run in the Hermes process environment) and `docker` (a nested sandbox). Documented `terminal.timeout` is 180 seconds per command. `approvals.mode` is `smart` (default), `manual`, or `off`. `off` matches `HERMES_YOLO_MODE`. `approvals.deny` still blocks matching commands when mode is `off`. Unanswered approval prompts fail closed (default 300 seconds). | [Configuration](https://hermes-agent.nousresearch.com/docs/user-guide/configuration), [Security](https://hermes-agent.nousresearch.com/docs/user-guide/security) |
 | Provider HTTP timeouts default to `HERMES_API_TIMEOUT` 1800 seconds and a stale-call detector of 90 seconds, overridable with `providers.<id>.request_timeout_seconds` and `stale_timeout_seconds`. | [Configuration](https://hermes-agent.nousresearch.com/docs/user-guide/configuration) |
 | The dashboard binds 9119 inside the image when `HERMES_DASHBOARD=1`. A non-loopback bind refuses to start without an auth provider. `HERMES_DASHBOARD_INSECURE` no longer disables auth. The project documents a June 2026 incident in which exposed dashboards and API servers were used to plant a backdoor. | [Docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker) |
-| Two Hermes gateways must not share one data directory. | [Docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker) |
+| Two Hermes gateways must not share one data directory. A second profile in the same container gets its own home and, for the API server, its own `API_SERVER_PORT` in that profile's `.env`. | [Docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker) |
+
+### Verified RustFS facts
+
+`docker-compose.yml` runs `image: rustfs/rustfs:latest`. That tag is floating. Nothing in this plan executed that image. The findings below are from the current RustFS docs and from GitHub issues, read on 2026-11-04.
+
+| Fact | Source |
+| :--- | :--- |
+| RustFS has built-in IAM: root credentials (`RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY`), IAM users, groups, service accounts, and STS. Root bypasses IAM identity policies. Applications are supposed to use IAM users or service accounts, not root. | [IAM overview](https://docs.rustfs.com/en/security-compliance/iam), [S3 protocol](https://docs.rustfs.com/en/administration/protocols/s3) |
+| A policy document is IAM-style JSON (`Version` `2012-10-17`). Resource ARNs are `arn:aws:s3:::bucket` and `arn:aws:s3:::bucket/prefix/*`. Condition operators include `StringLike`. | [Users, groups, and policies](https://docs.rustfs.com/en/security-compliance/iam/policies) |
+| The docs' own example "Read/Write Restricted to a Prefix" allows `s3:ListBucket` on the bucket only when `s3:prefix` is `StringLike` `tenant-42/*`, and allows `s3:GetObject` and `s3:PutObject` only on `arn:aws:s3:::app-data/tenant-42/*`. Bucket policies can also limit an object ARN to a prefix (`arn:aws:s3:::my-bucket/public/*`). | [Users, groups, and policies](https://docs.rustfs.com/en/security-compliance/iam/policies), [Bucket policy](https://docs.rustfs.com/en/administration/data/bucket/policy) |
+| A maintainer answered a prefix-policy question with the same shape: `ListBucket` plus a `StringLike` `s3:prefix` condition, and `GetObject` on `arn:aws:s3:::bucket/prefix/`. | [rustfs/rustfs#1399](https://github.com/rustfs/rustfs/issues/1399) |
+| Service accounts are derived keys. An embedded policy is an extra restriction (parent and session policy must both allow). They cannot call `AssumeRole`. | [Service accounts and STS](https://docs.rustfs.com/en/security-compliance/iam/sts) |
+| STS `AssumeRole` with a split session policy (object ARN on one statement, `ListBucket` plus `s3:prefix` on another) returned 403 for `ListBucket` through at least `v1.0.0-alpha.99`. | [rustfs/rustfs#2699](https://github.com/rustfs/rustfs/issues/2699) |
+
+The design uses a prefix-scoped IAM user, not a second bucket. The policy attached directly to user `hermes-optimizer` is:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetBucketLocation"],
+      "Resource": ["arn:aws:s3:::deepfix-index"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::deepfix-index"],
+      "Condition": {"StringLike": {"s3:prefix": ["optimization/runs/*"]}}
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::deepfix-index/optimization/runs/*"]
+    }
+  ]
+}
+```
+
+Attach that document to the IAM user. Do not issue the Hermes credential with `AssumeRole` and a session policy until issue #2699 is confirmed fixed on the image Dokploy is running. The root key (`S3_ACCESS_KEY_ID`, mapped to `RUSTFS_ACCESS_KEY` in Compose) writes the run bundle and reads outputs. Hermes never receives it.
+
+Dokploy provisioning is a one-time manual step, not a boot script inside the Hermes container (that would put the root key in the sandbox). An operator who already has the root key in Dokploy creates the user and the policy with `rc` or the RustFS console against the internal endpoint, then stores the new access key and secret as Dokploy secrets `HERMES_S3_ACCESS_KEY_ID` and `HERMES_S3_SECRET_ACCESS_KEY` on the Hermes service only. Repeat the step only to rotate the key. US-009 confirms a `GetObject` outside `optimization/runs/` is `AccessDenied` on the deployed `latest` image. If it is not, switch to a bucket `deepfix-hermes` and a key that cannot read `deepfix-index`, and have the root key copy the champion index into that bucket.
 
 ### Assumptions
 
 These are not in the sources above. Implementation must not treat them as guarantees.
 
 - `POST /v1/runs/{id}/stop` interrupts the agent between tool calls. The docs do not say it kills a shell command that is still inside `terminal.timeout`. US-009 records what the pinned image actually does.
-- A separate RustFS bucket plus a dedicated key is enough isolation if RustFS cannot express a prefix policy. Prefix-scoped IAM on this RustFS build was not verified.
+- The prefix policy below is what the current RustFS docs specify. `docker-compose.yml` pulls `rustfs/rustfs:latest`, a floating tag, so the deployed image was not executed in this plan. US-009 checks `AccessDenied` outside the prefix on that image. If that check fails, the fallback is a separate bucket `deepfix-hermes` whose key is the only one in the Hermes container, plus a read-only copy of the champion index written into that bucket by the root key. Do not switch to that fallback before the check fails.
 - `agent.max_turns: 40` is enough for one skill load plus one hypothesis. The numeric default of the `agent.max_turns` config key was not on the pages read; the env default of `HERMES_MAX_ITERATIONS` is 500.
 - 4 GiB and 2 CPUs are enough for a sample index and a retrieval-only eval. The Dokploy run is what raises them.
 - The extra YAML keys on our `SKILL.md` files are ignored by Hermes's loader. US-006 checks `GET /v1/skills`.
 - Copying the serving LanceDB directory to the run prefix is an acceptable start-up cost for the pilot corpus. The copy size was not measured.
 - The pages read do not document a native OTLP exporter, and they do not say that terminal stdout and stderr are copied into `docker logs` or `agent.log`. US-007 requires both, and US-009 checks them. `tool.completed` is documented at the end of the tool, not as a live stdout stream, which is why the shim heartbeat is a file the API can read during a long `deepfix index`.
-- 15 minutes is the stall default chosen for this plan. The owner required a bound well under 3 hours and did not name the number. It is a setting so the pilot can change it.
+- The stall window default is the owner's choice: 5 minutes, via `OPTIMIZATION_HEARTBEAT_STALL_MINUTES`. The shim interval of 30 seconds is the plan's choice inside the 30–60 second range the owner allowed.
 - The `v2026.6.19` tag in the unused `compose.hermes.yml` is older than the runs API described here. The pin is a digest chosen after `GET /v1/capabilities`, not that tag.
 
 ### Long-run protocol
@@ -291,25 +352,25 @@ These are not in the sources above. Implementation must not treat them as guaran
 ```
 Admin or cron
     -> start_optimization_run (skip rules, holdout counted, holdout not written)
-    -> upload run bundle to s3://<optimization-bucket>/runs/<run_id>/input/
+    -> upload run bundle to s3://deepfix-index/optimization/runs/<run_id>/input/
     -> POST /v1/runs  (Idempotency-Key = deepfix run_id)
     -> store hermes_run_id
     subscribe GET /v1/runs/{hermes_run_id}/events
     loop:
         event other than keepalive -> step line on API stderr and optimization-logs/<run_id>.log
-        heartbeat.json younger than 15 min, or a non-keepalive event -> reset stall clock
+        heartbeat.json younger than OPTIMIZATION_HEARTBEAT_STALL_MINUTES (default 5), or a non-keepalive event -> reset stall clock
         keepalive or status=running -> do not reset the stall clock
         completed -> download output/result.json -> finish_run (API scores holdout)
         failed | cancelled | interrupted | resolved unknown -> mark failed
-        no heartbeat for 15 min -> POST .../stop -> mark Stalled
+        no heartbeat for 5 min -> POST .../stop -> mark Stalled
         now - started_at > 3h -> POST .../stop -> mark Timed out
-        deepfix shim -> stdout/stderr on the Hermes container log, heartbeat.json every 60s
+        deepfix shim -> stdout/stderr on the Hermes container log, heartbeat.json every 30s
 Admin Cancel -> POST .../stop -> mark Cancelled
 API restart -> GET the stored hermes_run_id and resume or finish; do not insert a second run
 Hermes restart -> next poll sees interrupted or unknown -> mark failed
 ```
 
-Chat completions stay available for a later admin chat. They are not the optimization wait. `/api/jobs` stays unused so Hermes cron cannot schedule a second optimizer.
+Chat completions on the `chat` profile stay available for a later admin chat. They are not the optimization wait, and they are not the optimization profile. `/api/jobs` stays unused so Hermes cron cannot schedule a second optimizer.
 
 The OpenHands goal judge is not reimplemented. The API already accepts or rejects the run from `result.json` alone.
 
@@ -318,7 +379,7 @@ The OpenHands goal judge is not reimplemented. The API already accepts or reject
 - Network: Hermes is attached to the Compose network. Compose does not publish 8642 or 9119. No Dokploy domain points at it. The dashboard and the webapp are off.
 - API key: `API_SERVER_KEY` is a generated secret of at least 32 hex characters (the docs' minimum is 8). It lives in the API environment and the Hermes environment. The browser never sees it. The future chat proxies through the API.
 - Model key: `OPENROUTER_API_KEY` is a key distinct from `LLM_API_KEY`, stored only in the Hermes environment (`~/.hermes/.env` on the Hermes volume). The backend does not send it in the run body.
-- S3: Hermes's key cannot read the serving bucket. The API copies the champion index into the optimization prefix with the API key. Hermes cannot list or write other runs' input prefixes if the bucket policy allows it; if the policy cannot be that tight, the residual risk is limited to the optimization bucket, and US-002 says so in the deployment note.
+- S3: Hermes's key is a RustFS IAM user limited to `optimization/runs/*`, provisioned once as below. The root key stays on the API. The API copies the champion index into the run prefix. The chat profile does not get either key.
 - Tools: `terminal.backend: local` so commands run as `hermes` inside this container. No Docker socket, so the agent cannot start a sibling container. `approvals.mode: off` is acceptable only because the container is the sandbox. `approvals.deny` covers pipe-to-shell and force-push. The skill files are not writable.
 - Holdout and promotion: unchanged. The prompt and the S3 listing test enforce the boundary.
 - MLflow: Compose publishes port 5000 and allows the public host `deepfix-mlflow.mittelstand-zukunftslab.de`. This feature leaves that in place. Eval artifacts and the API-private Hermes log must not contain the bearer token, the OpenRouter key, or the S3 secret. The skill already forbids printing API keys.
@@ -329,7 +390,7 @@ The OpenHands goal judge is not reimplemented. The API already accepts or reject
 Production today is silent. The OpenHands child writes its transcript to `runs/<run_id>/agent.log` inside the workspace and does not write those lines to the `backend-api` container log. An operator watching that log sees `MLflow run created` and `POST /admin/optimization/run 200`, then nothing until the timeout. A status of `running` for those hours does not say whether the agent is in `deepfix eval` or wedged. This design uses four channels:
 
 1. **Job API steps.** The API subscribes to `GET /v1/runs/{id}/events` and logs every non-keepalive frame (`tool.started`, `tool.completed`, `tool.failed`, message deltas, terminal run events) as one structured line on the API process stderr. The same line is stored in `optimization-logs/<run_id>.log` on the API-private volume. `GET /v1/runs/{id}` is still how the thread learns the terminal status. A body that stays `running` is not logged as progress. The admin browser does not open the SSE stream; a later chat can.
-2. **Heartbeats and stall detection.** The `deepfix` shim rewrites `output/heartbeat.json` every 60 seconds while a CLI command is in progress, including when that command prints nothing. The stall clock resets on that file or on a non-keepalive event. It does not reset on `: keepalive` (every 10 seconds while a tool is quiet) or on a `running` poll. The OpenHands failure mode is the second of those: the row stays `running` and the API log stays quiet. A Hermes keepalive is the same kind of non-progress, so it must not count. After 15 minutes with neither heartbeat, the API stops the Hermes run and marks the row `failed` with "Stalled: no heartbeat for 15 minutes." The 3-hour timeout remains the outer bound.
+2. **Heartbeats and stall detection.** The `deepfix` shim rewrites `output/heartbeat.json` every 30 seconds while a CLI command is in progress, including when that command prints nothing. `index` and `hpo` stay inside the window because the file keeps moving. The stall clock resets on that file or on a non-keepalive event. It does not reset on `: keepalive` (every 10 seconds while a tool is quiet) or on a `running` poll. The OpenHands failure mode is the second of those: the row stays `running` and the API log stays quiet. A Hermes keepalive is the same kind of non-progress, so it must not count. After `OPTIMIZATION_HEARTBEAT_STALL_MINUTES` (default 5) with neither heartbeat, the API stops the Hermes run and marks the row `failed` with "Stalled: no heartbeat for 5 minutes." The 3-hour timeout remains the outer bound. `fail_stale_runs` still uses its existing 15-minute grace after the 3-hour timeout. That grace is the restart backstop from `ddab730`. It is not this stall window.
 3. **Hermes container logs.** `deepfix` stdout and stderr must show up in `docker logs` of the Hermes container, so an operator can read the CLI's own JSON and errors without the API. Hermes already keeps `agent.log` (API calls, tool dispatch, session lifecycle), `errors.log`, and a per-profile gateway log, and supervised gateway output is what `docker logs` shows. Full terminal stdout is not documented as part of that stream, so the image has to mirror it. Log files redact secrets; the shim must not print keys either.
 4. **MLflow.** `deepfix eval` keeps writing a run in `MLFLOW_DEV_RAG_EXPERIMENT`, and the admin link stays `mlflow_run_id`. Separately, the Hermes turn and each LLM call are spans in experiment `deepfix_hermes`, tagged with the DeepFix run id, sent to `http://mlflow:5000/v1/traces`. MLflow stays public. Spans and logs carry no secrets.
 
@@ -355,8 +416,8 @@ Production today is silent. The OpenHands child writes its transcript to `runs/<
 ## Success Metrics
 
 - A Hermes run on Dokploy reaches a terminal DeepFix status, and the row is not `running` afterwards.
-- While that run is healthy, `docker logs` of `backend-api` gains a step or heartbeat line at least every 15 minutes after `POST /admin/optimization/run 200`, and `docker logs` of `hermes` shows `deepfix` stdout or stderr.
-- A run with the shim heartbeat suppressed ends `failed` with the stall reason in under 30 minutes. A run whose `heartbeat.json` stays fresh is not stalled at 15 minutes.
+- While that run is healthy, `docker logs` of `backend-api` gains a step or heartbeat line at least every 5 minutes after `POST /admin/optimization/run 200`, and `docker logs` of `hermes` shows `deepfix` stdout or stderr.
+- A run with the shim heartbeat suppressed ends `failed` with the stall reason in under 10 minutes. A run whose `heartbeat.json` is rewritten every 30 seconds is not stalled at 5 minutes.
 - MLflow experiment `deepfix_hermes` contains a trace for that run with an agent span and an LLM span.
 - Restarting either container during a run leaves zero `running` rows that Hermes no longer reports as running, once the poller or the stale grace has fired.
 - The S3 listing for the run contains no holdout query text.
@@ -367,12 +428,9 @@ Production today is silent. The OpenHands child writes its transcript to `runs/<
 ## Open Questions
 
 - Does `POST /v1/runs/{id}/stop` on the pinned image kill an in-flight `deepfix` process, or only the agent loop after the terminal tool returns? US-009 records the answer. If the shell keeps running until `terminal.timeout`, the 2-minute cancel bound fails and the image needs a further control (shorter timeout is not acceptable for a real index).
-- Can this RustFS deployment express a prefix policy, or is the isolation boundary a whole bucket and one key?
 - Which exporter on the pinned image writes the `deepfix_hermes` spans to MLflow? Native OTLP headers are the first attempt. The `hermes-otel` plugin is the fallback only if a trial shows the spans. The requirement is the spans, not a specific plugin.
-- Is 15 minutes the stall window the pilot wants? It is the default in this plan because the owner asked for a bound well under 3 hours and did not name the number. A healthy long `deepfix index` stays alive by rewriting `heartbeat.json` every 60 seconds, so the window is not the index duration.
 - Which digest implements the runs surface above? `compose.hermes.yml` pins `v2026.6.19`, which this plan does not assume is current.
 - What is the effective per-command ceiling on that image (`terminal.timeout` versus any `timeouts.tools` cap in the example config)? A 180-second default would cut off `deepfix index` and `deepfix eval`.
 - Does Hermes send a temperature other than 1 when calling `anthropic/claude-haiku-5.5` through OpenRouter? This repo sets `litellm.drop_params` because that model rejects other temperatures. Hermes is not LiteLLM, and the matching Hermes setting was not found.
 - How large is the serving-index copy into the run prefix on the pilot corpus, and does it fit the 4 GiB limit together with the embedder?
 - Can Dokploy restrict the Hermes container's egress to OpenRouter, RustFS, and MLflow? If it cannot, secret exfiltration through the terminal tool remains a residual risk.
-- Should the future admin chat use a second Hermes profile (separate `API_SERVER_PORT`, separate data) so a chat session cannot share the optimization profile's skills-write and approval settings? This PRD keeps one profile and separate session ids.
