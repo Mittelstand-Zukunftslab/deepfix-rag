@@ -8,7 +8,7 @@ from deepfix_rag.config.schema import DataLoaderConfig, RAGConfig
 from deepfix_rag.config.settings import settings
 from deepfix_rag.pipeline import RAGWorkflow, execute_pipeline
 
-pytestmark = [pytest.mark.e2e, pytest.mark.integration]
+pytestmark = [pytest.mark.e2e, pytest.mark.integration, pytest.mark.network]
 
 
 def test_e2e_pipeline_flow(sample_corpus_path: Path, tmp_path: Path):

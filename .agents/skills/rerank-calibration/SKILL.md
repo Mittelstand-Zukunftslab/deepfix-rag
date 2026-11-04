@@ -20,7 +20,7 @@ The agent environment passes the Cohere settings (`COHERE_BASE_URL`, `COHERE_API
 
 ## When not to use
 
-`recall` near zero or below 0.8 is a retrieval problem, not a ranking one. Use `chunking-tuning`, `embedding-selection` or `query-rewriting` before spending rerank calls on a weak candidate pool.
+`recall` near zero or below 0.8 is a retrieval problem, not a ranking one. Use `chunking-tuning`, `retrieval-backend-selection` or `hybrid-fusion-tuning` before spending rerank calls on a weak candidate pool.
 
 ## Procedure
 
@@ -36,7 +36,7 @@ deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.
 deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
 
-There is no `rerank.threshold` key; a `--set` of that name is silently ignored. A candidate with `errors > 0` (for example rerank timeouts) is not recommended: `candidate_config_path` stays null.
+There is no `rerank.threshold` key; a `--set` of that name exits 1 with `error_type` `unknown_key`. A candidate with `errors > 0` (for example rerank timeouts) is not recommended: `candidate_config_path` stays null.
 
 ## Valid values
 
@@ -48,7 +48,7 @@ There is no `rerank.threshold` key; a `--set` of that name is silently ignored. 
 
 ## Index-time vs query-time
 
-`rerank.enabled`, `rerank.top_n`, and `retrieval.top_k` are query-time. The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`; this skill changes none of them, so the candidate reuses the champion's index and the API does not rebuild one.
+`rerank.enabled`, `rerank.top_n`, and `retrieval.top_k` are query-time. When rerank is on, `rerank.top_n` must be <= `retrieval.top_k` and `eval.cutoff_k` must be <= `rerank.top_n`. The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, and `retrieval.graph_max_paths_per_chunk`. This skill changes none of them, so the candidate reuses the champion's index and the API does not rebuild one.
 
 ## Validated findings
 

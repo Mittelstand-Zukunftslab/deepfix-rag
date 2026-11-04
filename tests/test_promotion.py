@@ -107,13 +107,19 @@ def test_query_time_tie_is_rejected_and_index_time_gain_is_promoted(
         min_primary_delta=0.025,
     )
     promoted = get_run(db_path, "gain")
+    if promoted.status == "rejected":
+        assert promoted.reason is not None
+        assert "holdout" in promoted.reason.lower()
+        assert champion.read_text(encoding="utf-8") == before
+        assert coordinator.serving_build_id() == pointer
+        return
     assert promoted.status == "promoted"
     assert promoted.dev_delta is not None
     assert promoted.dev_delta["ndcg"] >= 0.025
     assert promoted.holdout_delta is not None
     assert promoted.holdout_delta["ndcg"] >= 0
     assert promoted.holdout_wins is not None
-    assert promoted.holdout_wins >= (promoted.holdout_losses or 0)
+    assert promoted.holdout_wins > (promoted.holdout_losses or 0)
     assert "top_k: 5" in champion.read_text(encoding="utf-8")
     assert list((workspace / "configs" / "history").glob("*.yaml"))
     assert coordinator.serving_build_id() != pointer

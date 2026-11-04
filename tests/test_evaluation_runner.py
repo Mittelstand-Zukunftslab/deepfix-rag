@@ -19,6 +19,7 @@ from deepfix_rag.evaluation.runner import EvaluationSummary, EvaluationTracker, 
 # =========================================================================
 @pytest.mark.integration
 @pytest.mark.e2e
+@pytest.mark.network
 class TestRunEvaluationLive:
     """Live integration and end-to-end evaluation tests using live judge and benchmark data."""
 
@@ -136,6 +137,7 @@ def test_tracker_log_run_records_run_id_and_logs_only_numeric_metrics(
 
 
 @pytest.mark.integration
+@pytest.mark.network
 @pytest.mark.asyncio
 async def test_run_evaluation_returns_mlflow_run_id_only_when_persisting(
     mlflow_sqlite_experiment: str,

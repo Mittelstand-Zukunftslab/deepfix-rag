@@ -1,20 +1,81 @@
 """Safe YAML mutation logic and configuration diff generation."""
 
-from typing import Any
+from difflib import get_close_matches
+from types import UnionType
+from typing import Any, Union, get_args, get_origin
+
+from pydantic import BaseModel
 
 from deepfix_rag.config.schema import RAGConfig
 
 
-def apply_mutation(base_config: RAGConfig, overrides: dict[str, Any]) -> RAGConfig:
-    """Validate and produce an updated RAGConfig instance by applying dot-notation overrides."""
-    config_dict = base_config.model_dump()
+class UnknownKeyError(ValueError):
+    """A dot-notation override does not name a RAGConfig field."""
 
+    def __init__(self, path: str, suggestions: list[str]) -> None:
+        self.path = path
+        self.suggestions = suggestions
+        hint = ""
+        if suggestions:
+            hint = " Did you mean " + ", ".join(suggestions) + "?"
+        super().__init__(f"Unknown config key '{path}'.{hint}")
+
+
+def _nested_model(annotation: object) -> type[BaseModel] | None:
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        for arg in get_args(annotation):
+            if arg is type(None):
+                continue
+            found = _nested_model(arg)
+            if found is not None:
+                return found
+    return None
+
+
+def known_config_paths(model: type[BaseModel] = RAGConfig, prefix: str = "") -> list[str]:
+    """Every dotted field path on the config schema."""
+    paths: list[str] = []
+    for name, field in model.model_fields.items():
+        dotted = f"{prefix}.{name}" if prefix else name
+        paths.append(dotted)
+        nested = _nested_model(field.annotation)
+        if nested is not None:
+            paths.extend(known_config_paths(nested, dotted))
+    return paths
+
+
+def _require_known_key(dotted: str) -> None:
+    model: type[BaseModel] = RAGConfig
+    parts = dotted.split(".")
+    walked: list[str] = []
+    for index, part in enumerate(parts):
+        walked.append(part)
+        path = ".".join(walked)
+        if part not in model.model_fields:
+            suggestions = get_close_matches(dotted, known_config_paths(), n=3, cutoff=0.4)
+            raise UnknownKeyError(path, suggestions)
+        if index == len(parts) - 1:
+            return
+        nested = _nested_model(model.model_fields[part].annotation)
+        if nested is None:
+            suggestions = get_close_matches(dotted, known_config_paths(), n=3, cutoff=0.4)
+            raise UnknownKeyError(path, suggestions)
+        model = nested
+
+
+def apply_mutation(base_config: RAGConfig, overrides: dict[str, Any]) -> RAGConfig:
+    """Validate and produce an updated RAGConfig by applying dot-notation overrides."""
+    for key in overrides:
+        _require_known_key(key)
+
+    config_dict = base_config.model_dump()
     for key, value in overrides.items():
         parts = key.split(".")
         target = config_dict
         for part in parts[:-1]:
-            if part not in target or not isinstance(target[part], dict):
-                target[part] = {}
             target = target[part]
         target[parts[-1]] = value
 

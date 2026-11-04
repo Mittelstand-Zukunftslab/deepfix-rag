@@ -14,10 +14,11 @@ trigger_conditions:
   - "An optimization round is starting and no pathology skill has been chosen yet"
   - "eval --compare JSON is available and the candidate must be recommended or discarded"
 cli_actions:
-  - "deepfix eval --config configs/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --json"
+  - "deepfix eval --config configs/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --json"
   - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
   - "deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json"
   - "deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
+  - "deepfix gate --compare <run_dir>/compare.json --primary ndcg --json"
 ---
 
 This skill is the whole contract for a round. Pathology skills are sibling folders of this one (`../chunking-tuning/SKILL.md`, and so on). Each names one hypothesis; this skill decides whether to recommend it.
@@ -46,7 +47,7 @@ This skill is the whole contract for a round. Pathology skills are sibling folde
 1. Baseline smoke test on 30 questions. Read `errors`, `total`, `recall`, `ndcg` and `failure_distribution` from the JSON.
 
 ```
-deepfix eval --config configs/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --json
+deepfix eval --config configs/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --json
 ```
 
 If `errors > 0`, STOP: write `result.json` with a null candidate, put the first error from `error_details` in `summary`, and finish. Never read errored cases as retrieval misses. `eval` exits 2 when every case errored (missing embedding or Cohere credentials, unreachable endpoint, wrong `--dataset`).
@@ -58,13 +59,15 @@ If `errors > 0`, STOP: write `result.json` with a null candidate, put the first 
 | 1 | `errors > 0` | none: stop and report (step 1) |
 | 2 | `miss_rate >= 0.3` and `recall < 0.6` | `chunking-tuning` |
 | 3 | `recall >= 0.8` and `ndcg < recall - 0.15` | `rerank-calibration` |
-| 4 | `retrieval_miss > 0` and `recall < 0.8` | `embedding-selection` |
-| 5 | `retrieval_miss > 0`, `recall >= 0.8` and the champion backend is `hybrid` | `query-rewriting` |
+| 4 | `retrieval_miss > 0` and `recall < 0.8` | `retrieval-backend-selection` |
+| 5 | `retrieval_miss > 0`, `recall >= 0.8` and the champion backend is `hybrid` | `hybrid-fusion-tuning` |
 | 6 | anything else | none: write `result.json` with a null candidate and finish |
 
-The thresholds come from a 30-question sample, where one question moves a metric by about 0.03. Read the chosen `SKILL.md`, then follow its procedure. The skills `deflection-and-refusal`, `legal-retrieval-grounding`, `multi-hop-aggregation` and `diagnostic-server` are not routed from here and must not be used in a round.
+The thresholds come from a 30-question sample, where one question moves a metric by about 0.03. Pass `--seed 0` so that sample does not depend on file order. Read the chosen `SKILL.md`, then follow its procedure. `retrieval-backend-selection` was named `embedding-selection`, and `hybrid-fusion-tuning` was named `query-rewriting`; those old folders are aliases. The skills `deflection-and-refusal`, `legal-retrieval-grounding`, `multi-hop-aggregation` and `diagnostic-server` are not routed from here and must not be used in a round.
 
-3. Write the candidate to `<run_dir>/candidate.yaml` with the pathology skill's `mutate-config` command. Confirm the JSON `diffs` object is non-empty: unknown `--set` keys are silently ignored and the command still exits 0.
+Before choosing, read `<workspace>/runs/ledger.jsonl` if it exists. Skip a hypothesis whose `skill` and `keys` already appear on a row with the same `champion_sha256` as `configs/champion.yaml`. After each command, write `<run_dir>/state.json` with `step`, `skill`, `commands`, and `status`.
+
+3. Write the candidate to `<run_dir>/candidate.yaml` with the pathology skill's `mutate-config` command. An unknown `--set` key exits 1 with `error_type` `unknown_key` and writes nothing. On success, confirm `diffs` is non-empty. `ignored_keys` is always empty. `index_time_changed` tells you whether step 4 must rebuild.
 
 ```
 deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
@@ -78,14 +81,14 @@ The example is the `rerank-calibration` hypothesis. Take the real command from t
 deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json
 ```
 
-5. Compare on the FULL dev set. Do not pass `--limit`. `--index-dir` applies to the candidate only; the baseline is scored on the index named in `configs/champion.yaml`. Drop `--index-dir` when you did not re-index. The output is long, so save it and print the gate summary. Replace `ndcg` at the end with your primary metric.
+5. Compare on the FULL dev set. Do not pass `--limit`. `--index-dir` applies to the candidate only; the baseline is scored on the index named in `configs/champion.yaml`. Drop `--index-dir` when you did not re-index. The output is long, so save it. `eval` exits 1 with `error_type` `stale_index` when the index manifest does not match the config, and exits 2 with `error_type` `partial_errors` when any compare case errored (`--max-error-rate` defaults to 0). Each side includes `effective_backend`, `configured_backend`, and `judge_failures`.
 
 ```
 deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
 
 ```
-python3 -c "import json,sys;d=json.load(open(sys.argv[1]));p=sys.argv[2];dl=d['delta'];hib=['faithfulness','context_precision','context_recall','answer_relevancy','contextual_relevancy','ndcg','recall','precision'];bad=[k for k in hib if dl.get(k,0)<0];e=d['candidate']['errors'];print(json.dumps({'primary':p,'primary_delta':dl.get(p),'regressed':bad,'candidate_errors':e,'baseline_errors':d['baseline']['errors'],'candidate_mlflow_run_id':d['candidate'].get('mlflow_run_id'),'delta':dl},indent=2));print('GATE','PASS' if dl.get(p,-1)>=0.025 and not bad and e==0 else 'FAIL')" <run_dir>/compare.json ndcg
+deepfix gate --compare <run_dir>/compare.json --primary ndcg --json
 ```
 
 6. Apply the gate (next section). If it passes, the candidate is your recommendation. If it fails or `candidate_errors > 0`, the recommendation is null.
@@ -110,24 +113,27 @@ cat <run_dir>/result.json
 
 ## Quality gate
 
-`eval --compare` puts `candidate - baseline` in `delta`. The API applies this rule on the full dev set, then on a holdout you cannot see (holdout primary delta >= 0 and no more holdout losses than wins):
+`deepfix gate` reads `OPTIMIZATION_MIN_PRIMARY_DELTA` (default 0.025) and `OPTIMIZATION_SECONDARY_TOLERANCE` (default -0.01). It uses the per-query `questions` in the compare JSON. Recommend the candidate only when the JSON field `pass` is true (`decision` is `keep`). That requires all of:
 
-- `delta[primary] >= 0.025`, with `primary` one of `ndcg`, `recall`, `precision`.
-- None of `faithfulness`, `context_precision`, `context_recall`, `answer_relevancy`, `contextual_relevancy`, `ndcg`, `recall`, `precision` may be negative in `delta`. Retrieval-only runs score only the last three, so in practice `ndcg`, `recall` and `precision` must all be `>= 0`.
+- `primary_delta` >= 0.025, with `primary` one of `ndcg`, `recall`, `precision`. The delta is the mean of paired per-query differences, and `ci95` must lie entirely above 0 (seeded 1000-sample bootstrap).
+- None of `faithfulness`, `context_precision`, `context_recall`, `answer_relevancy`, `contextual_relevancy`, `ndcg`, `recall`, `precision` may fall past the secondary tolerance in `delta`. A drop of 0.005 is allowed. A drop of 0.02 is not. Retrieval-only runs score only `ndcg`, `recall` and `precision`.
+- `errors` is 0 on both sides. `judge_failures` is 0. `effective_backend` equals `configured_backend` on both sides. A BM25 or hybrid run that fell back to dense does not pass.
 - `errors`, `retrieval_induced_error_*` and `deflection_rate` are not gate metrics (lower is better). `retrieval_induced_error_reduction_pct` and its target flag do not replace the 0.025 rule.
 - A missing delta is not an improvement.
 
-A pass here is a recommendation, not a promotion. Do not recommend on `delta < 0.025`: that is judge noise, and the `--limit 30` smoke numbers must never be used for the gate.
+The API then scores a holdout you cannot see. It rejects a candidate whose holdout primary delta is negative, whose holdout wins are not strictly greater than its losses, or that changes no holdout question.
+
+A pass here is a recommendation, not a promotion. Do not recommend when `pass` is false. Retrieval-only metrics are deterministic; a delta under 0.025 is sampling noise, which the interval measures. The `--limit 30` smoke numbers must never be used for the gate. Add a ledger row by writing `state.json` before you finish so the next round can see this hypothesis.
 
 ## Index-time vs query-time
 
-`retrieval.load_if_exists` defaults to true, so an existing index hides index-time edits. The API treats these keys as index-time (`promotion.index_time_signature`) and builds its own index when they differ from the champion: `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, `retrieval.bit_width`.
+`retrieval.load_if_exists` defaults to true, so an existing index hides index-time edits. `deepfix index` writes `<index_dir>/deepfix_index.json`. `eval` exits 1 with `error_type` `stale_index` when that manifest does not match the config. `index --if-changed` returns `skipped: true` when the hash matches. The API treats these keys as index-time (`indexing.index_time_signature`, also listed by `deepfix schema --json`) and builds its own index when they differ from the champion: `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, and `retrieval.graph_max_paths_per_chunk`.
 
 Query-time (no re-index; the existing index is reused): `retrieval.language`, `retrieval.top_k`, `retrieval.fusion_mode`, `retrieval.dense_weight`, `retrieval.bm25_weight`, `retrieval.bm25_k1`, `retrieval.bm25_b`, `rerank.enabled`, `rerank.top_n`.
 
 - `retrieval.top_k` only moves the scores through reranking (it is the pool the reranker sees) or, slightly, through hybrid fusion (each retriever returns `top_k` candidates before they are fused). With rerank off, a `top_k` above `eval.cutoff_k` does not change the dense or bm25 scores: on a 60-document test corpus the top 5 was identical for 10 of 10 queries on dense and on bm25, and changed for 2 of 10 on hybrid. A `top_k`-only candidate is not a useful hypothesis.
 - Any `chunking.*` change needs `deepfix index` into `<run_dir>/idx` before the compare.
-- To measure a `retrieval.backend` switch among `dense`, `bm25` and `hybrid` you may reuse the existing index (no `--index-dir`), as long as node text loads. If stderr says `falling back to dense`, the BM25 docstore was empty: re-index into `<run_dir>/idx` and compare again before trusting the result.
+- A `retrieval.backend` switch is index-time. The API rebuilds for it, so measure on `<run_dir>/idx` (`deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json`, then `eval --index-dir <run_dir>/idx`). Do not reuse the champion index for a backend change: the local scores and the API re-score would not be the same index. If `effective_backend` is `dense` while the config says `bm25` or `hybrid`, the docstore was empty and the gate fails.
 - Evaluating a candidate without `--index-dir` after `index --force` scores the index path stored in the YAML, which is the champion's.
 
 ## Exit codes
@@ -147,7 +153,7 @@ Benchmark evidence, not product data. Bundestag QA, first 100 training questions
 
 ## Pitfalls
 
-- A mutation with an empty `diffs` object changed nothing.
+- A mutation that exits 1 with `error_type` `unknown_key` changed nothing. A success whose `diffs` object is empty also changed nothing.
 - `--index-dir` on `eval` does not move the baseline; do not expect the champion to be scored on the candidate index.
 - Treating errored cases as retrieval misses sends you down the wrong pathology.
 - `primary_metric` must be `ndcg`, `recall` or `precision`. Values such as `ndcg@5` or `faithfulness` are never scored, so the API rejects the run.

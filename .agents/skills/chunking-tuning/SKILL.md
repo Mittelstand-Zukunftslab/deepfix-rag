@@ -20,7 +20,7 @@ Follow `optimization-loop` for the hard rules, the quality gate, the exit codes 
 
 ## When not to use
 
-High `recall` with low `ndcg` is a ranking problem. Use `rerank-calibration`. A moderate `recall` with misses that persist on coherent chunks is `embedding-selection` or `query-rewriting`.
+High `recall` with low `ndcg` is a ranking problem. Use `rerank-calibration`. A moderate `recall` with misses that persist on coherent chunks is `retrieval-backend-selection` or `hybrid-fusion-tuning`.
 
 ## Procedure
 
@@ -70,7 +70,7 @@ Semantic splits also use `chunking.semantic_buffer_size` (>= 1) and `chunking.se
 
 ## Index-time vs query-time
 
-The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Every `chunking.*` field is index-time, so each chunking candidate needs its own `deepfix index` into `<run_dir>/idx`. Keep `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width` equal to the champion: if one differs, the API rebuilds the index for a reason other than the one you measured. Query-time knobs in this skill: none.
+The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, and `retrieval.graph_max_paths_per_chunk`. Every `chunking.*` field is index-time, so each chunking candidate needs its own `deepfix index` into `<run_dir>/idx`. `eval` rejects a stale manifest. Keep `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width` equal to the champion: if one differs, the API rebuilds the index for a reason other than the one you measured. Query-time knobs in this skill: none.
 
 ## Validated findings
 
