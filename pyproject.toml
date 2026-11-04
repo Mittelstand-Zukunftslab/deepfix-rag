@@ -65,6 +65,7 @@ requires-python = "~=3.12.0"
 [project.scripts]
 deepfix = "deepfix_rag.main:app"
 deepfix-rag = "deepfix_rag.main:app"
+deepfix-sync = "deepfix_rag.hermes_sync:main"
 
 
 [tool.ruff]

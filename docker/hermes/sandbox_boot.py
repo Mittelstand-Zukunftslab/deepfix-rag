@@ -10,6 +10,11 @@ than 16 characters. Its terminal foreground cap defaults to 600 seconds
 defaults to 420 seconds. Both would cut off ``deepfix index`` or
 ``deepfix eval`` before ``terminal.timeout`` of 7200 seconds, so this script
 raises them with the sandbox config.
+
+LanceDB uses the ``S3_*`` variables the CLI already reads. Those values are
+the ``hermes-optimizer`` key (Compose maps ``HERMES_S3_ACCESS_KEY_ID`` onto
+``S3_ACCESS_KEY_ID``). The root key must not be in this environment. The
+chat profile does not receive the S3 settings.
 """
 
 from __future__ import annotations
@@ -78,10 +83,24 @@ _DEFAULT_ENV_UPDATES = (
     "OPENROUTER_API_KEY",
     FOREGROUND_TIMEOUT_ENV,
 )
-# Never leave the product key, a dashboard enablement, or a shared port in
-# the optimization profile. API_SERVER_PORT stays unset so this profile binds
-# 8642 and the chat profile can bind 8643.
-_STRIPPED_ENV_KEYS = frozenset({"LLM_API_KEY", "HERMES_DASHBOARD", "API_SERVER_PORT"})
+# Never leave the product key, the root RustFS key, a dashboard enablement,
+# or a shared port in the optimization profile. API_SERVER_PORT stays unset
+# so this profile binds 8642 and the chat profile can bind 8643.
+# HERMES_S3_* is copied into S3_* (the names the CLI reads) and then removed
+# so the secret is not stored twice.
+_STRIPPED_ENV_KEYS = frozenset(
+    {
+        "LLM_API_KEY",
+        "HERMES_DASHBOARD",
+        "API_SERVER_PORT",
+        "RUSTFS_ACCESS_KEY",
+        "RUSTFS_SECRET_KEY",
+        "HERMES_S3_ACCESS_KEY_ID",
+        "HERMES_S3_SECRET_ACCESS_KEY",
+    }
+)
+_S3_PLACEHOLDERS = _PLACEHOLDER_KEYS | {"[redacted]"}
+_ROOT_CREDENTIAL_ENVS = ("RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY")
 
 _S6_ENV_DIRS = (
     Path("/run/s6/container_environment"),
@@ -271,6 +290,70 @@ def _reject_product_key(env: Mapping[str, str]) -> None:
         )
 
 
+def _reject_root_credentials(env: Mapping[str, str]) -> None:
+    for name in _ROOT_CREDENTIAL_ENVS:
+        if env.get(name, "").strip():
+            raise SandboxBootError(
+                f"{name} must not be present in the Hermes environment. "
+                "LanceDB uses the hermes-optimizer key in S3_ACCESS_KEY_ID."
+            )
+
+
+def _require_s3_credential(name: str, value: str) -> str:
+    key = value.strip()
+    folded = key.casefold()
+    placeholder = folded in _S3_PLACEHOLDERS or folded.startswith("change-me")
+    if not key or placeholder or any(char in key for char in "\n\r\x00"):
+        raise SandboxBootError(
+            f"{name} is required and must be the hermes-optimizer key, not a placeholder. "
+            "Set HERMES_S3_ACCESS_KEY_ID and HERMES_S3_SECRET_ACCESS_KEY. "
+            "Do not copy the root S3_ACCESS_KEY_ID."
+        )
+    return key
+
+
+def _first_present(env: Mapping[str, str], *names: str) -> str:
+    for name in names:
+        value = env.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def scoped_s3_env(env: Mapping[str, str]) -> dict[str, str]:
+    """S3 settings for the optimization profile.
+
+    ``HERMES_S3_*`` wins when it is set, so a root ``S3_ACCESS_KEY_ID`` that
+    leaked into the container environment is not the key that is written.
+    The names written are the ones ``deepfix`` and LanceDB already read.
+    """
+    access = _require_s3_credential(
+        "S3_ACCESS_KEY_ID",
+        _first_present(env, "HERMES_S3_ACCESS_KEY_ID", "S3_ACCESS_KEY_ID"),
+    )
+    secret = _require_s3_credential(
+        "S3_SECRET_ACCESS_KEY",
+        _first_present(env, "HERMES_S3_SECRET_ACCESS_KEY", "S3_SECRET_ACCESS_KEY"),
+    )
+    endpoint = env.get("S3_ENDPOINT_URL", "").strip() or "http://rustfs:9000"
+    uri = env.get("S3_URI", "").strip() or "s3://deepfix-index/dev"
+    region = env.get("S3_REGION", "").strip() or "us-east-1"
+    for label, value in (
+        ("S3_ENDPOINT_URL", endpoint),
+        ("S3_URI", uri),
+        ("S3_REGION", region),
+    ):
+        if any(char in value for char in "\n\r\x00"):
+            raise SandboxBootError(f"{label} contains a newline or NUL")
+    return {
+        "S3_ENDPOINT_URL": endpoint,
+        "S3_URI": uri,
+        "S3_REGION": region,
+        "S3_ACCESS_KEY_ID": access,
+        "S3_SECRET_ACCESS_KEY": secret,
+    }
+
+
 def apply_sandbox(
     home: Path,
     env: Mapping[str, str],
@@ -278,6 +361,7 @@ def apply_sandbox(
 ) -> None:
     """Write the optimization config and the stopped chat profile."""
     _reject_product_key(env)
+    _reject_root_credentials(env)
     _assert_skills_locked(skills_dir)
     api_key = validate_api_key(env.get("API_SERVER_KEY", ""), name="API_SERVER_KEY")
     chat_key_raw = env.get(CHAT_API_KEY_ENV, "").strip()
@@ -305,6 +389,7 @@ def apply_sandbox(
         if any(char in openrouter_key for char in "\n\r\x00"):
             raise SandboxBootError("OPENROUTER_API_KEY contains a newline or NUL")
         updates["OPENROUTER_API_KEY"] = openrouter_key
+    updates.update(scoped_s3_env(env))
     _upsert_env(home / ".env", updates, _STRIPPED_ENV_KEYS)
 
     chat_dir = home / "profiles" / CHAT_PROFILE

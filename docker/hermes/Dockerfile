@@ -31,6 +31,9 @@
 # omits terminal and file.
 #
 # US-007's deepfix shim and the hermes-otel plugin are not installed here.
+# deepfix-sync is the fixed bundle command (download input/, upload output/).
+# It is not a script the model writes. The optimization profile's S3 key is
+# the hermes-optimizer prefix key, injected at boot, not baked in.
 
 FROM nousresearch/hermes-agent@sha256:e6d81ae52ebf6a43efa529701405509f20054ba818f179ddd748bed4f8af584c
 
@@ -91,6 +94,7 @@ RUN find /opt/deepfix/skills -type d -exec chmod 0755 {} + \
     && chmod 0555 /etc/cont-init.d/01b-deepfix-sandbox \
     && ln -sfn /opt/deepfix/.venv/bin/deepfix /usr/local/bin/deepfix \
     && ln -sfn /opt/deepfix/.venv/bin/deepfix-rag /usr/local/bin/deepfix-rag \
+    && ln -sfn /opt/deepfix/.venv/bin/deepfix-sync /usr/local/bin/deepfix-sync \
     && chmod -R a+rX /opt/deepfix/app
 
 # Hermes' own interpreter stays first. deepfix resolves via the venv bin

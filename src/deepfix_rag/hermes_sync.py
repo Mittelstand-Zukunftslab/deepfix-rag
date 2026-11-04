@@ -1,0 +1,192 @@
+"""Fixed sync command for the Hermes sandbox.
+
+``deepfix-sync download`` copies ``input/`` from the run prefix into the
+container work directory. ``deepfix-sync upload`` writes ``output/result.json``
+and, when the agent produced one, ``output/candidate.yaml``. The command is
+this module. The agent does not write a replacement script.
+
+Inside the container the S3 credentials are the ``hermes-optimizer`` key,
+already exposed as ``S3_ACCESS_KEY_ID`` and ``S3_SECRET_ACCESS_KEY``. The
+root key is not read. ``DEEPFIX_BUNDLE_ROOT`` selects a local directory
+layout for tests.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections.abc import Mapping
+import os
+from pathlib import Path
+import sys
+
+from deepfix_rag.run_bundle import (
+    CONTAINER_WORK_ROOT,
+    DirectoryObjectStore,
+    ObjectStore,
+    RecordingObjectStore,
+    RunBundleError,
+    S3ObjectStore,
+    StoreRequest,
+    bucket_from_s3_uri,
+    candidate_index_uri,
+    container_work_dir,
+    run_prefix,
+)
+
+EXIT_OK = 0
+EXIT_USAGE = 1
+EXIT_RUNTIME = 2
+_INPUT_DIR = "input"
+_OUTPUT_RESULT = "output/result.json"
+_OUTPUT_CANDIDATE = "output/candidate.yaml"
+
+
+def download_input(
+    store: ObjectStore,
+    *,
+    bucket: str,
+    run_id: str,
+    work_dir: Path,
+) -> tuple[StoreRequest, ...]:
+    """Download ``input/`` for one run into ``work_dir``.
+
+    Objects outside that run's ``input/`` prefix are not fetched.
+    """
+    work_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{run_prefix(run_id)}/{_INPUT_DIR}/"
+    recorder = RecordingObjectStore(store)
+    for key in recorder.list(bucket, prefix):
+        if not key.startswith(prefix):
+            continue
+        relative = key[len(run_prefix(run_id)) + 1 :]
+        target = _safe_target(work_dir, relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(recorder.get(bucket, key))
+    return tuple(recorder.requests)
+
+
+def upload_output(
+    store: ObjectStore,
+    *,
+    bucket: str,
+    run_id: str,
+    result_path: Path,
+    candidate_path: Path | None = None,
+) -> tuple[StoreRequest, ...]:
+    """Upload the result file and the candidate YAML to ``output/``."""
+    if not result_path.is_file():
+        raise RunBundleError("result file is missing")
+    prefix = run_prefix(run_id)
+    recorder = RecordingObjectStore(store)
+    recorder.put(bucket, f"{prefix}/{_OUTPUT_RESULT}", result_path.read_bytes())
+    if candidate_path is not None:
+        if not candidate_path.is_file():
+            raise RunBundleError("candidate file is missing")
+        recorder.put(bucket, f"{prefix}/{_OUTPUT_CANDIDATE}", candidate_path.read_bytes())
+    return tuple(recorder.requests)
+
+
+def describe_download(bucket: str, run_id: str, work_dir: Path) -> str:
+    """Paths the run instructions use. No credentials."""
+    lines = (
+        f"work_dir={work_dir}",
+        f"champion_config={work_dir / _INPUT_DIR / 'champion.yaml'}",
+        f"dev_file={work_dir / _INPUT_DIR / 'feedback_dev.jsonl'}",
+        f"corpus={work_dir / _INPUT_DIR / 'corpus'}",
+        f"champion_index={work_dir / _INPUT_DIR / 'champion-index'}",
+        f"candidate_index_uri={candidate_index_uri(bucket, run_id)}",
+    )
+    return "\n".join(lines) + "\n"
+
+
+def store_from_env(env: Mapping[str, str]) -> ObjectStore:
+    """Directory layout when ``DEEPFIX_BUNDLE_ROOT`` is set, otherwise S3."""
+    root = env.get("DEEPFIX_BUNDLE_ROOT", "").strip()
+    if root:
+        return DirectoryObjectStore(Path(root))
+    missing = [
+        name
+        for name in ("S3_ENDPOINT_URL", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_URI")
+        if not env.get(name, "").strip()
+    ]
+    if missing:
+        raise RunBundleError("missing " + ", ".join(missing))
+    return S3ObjectStore(
+        endpoint_url=env["S3_ENDPOINT_URL"].strip(),
+        access_key_id=env["S3_ACCESS_KEY_ID"].strip(),
+        secret_access_key=env["S3_SECRET_ACCESS_KEY"].strip(),
+        region=env.get("S3_REGION", "").strip() or "us-east-1",
+    )
+
+
+def bucket_from_env(env: Mapping[str, str]) -> str:
+    """Bucket from ``S3_URI``. The value is required."""
+    uri = env.get("S3_URI", "").strip()
+    if not uri:
+        raise RunBundleError("missing S3_URI")
+    return bucket_from_s3_uri(uri)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point for the ``deepfix-sync`` command."""
+    parser = _parser()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        code = exc.code
+        if code in (None, 0):
+            return EXIT_OK
+        return EXIT_USAGE
+    env = os.environ
+    try:
+        store = store_from_env(env)
+        bucket = bucket_from_env(env)
+        if args.command == "download":
+            work_dir = container_work_dir(args.run_id, args.work_root)
+            download_input(store, bucket=bucket, run_id=args.run_id, work_dir=work_dir)
+            sys.stdout.write(describe_download(bucket, args.run_id, work_dir))
+            return EXIT_OK
+        upload_output(
+            store,
+            bucket=bucket,
+            run_id=args.run_id,
+            result_path=args.result,
+            candidate_path=args.candidate,
+        )
+        return EXIT_OK
+    except RunBundleError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
+    except Exception as exc:
+        print(f"deepfix-sync failed: {type(exc).__name__}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="deepfix-sync",
+        description="Download a run bundle input and upload its output.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    download = sub.add_parser("download", help="Download input/ into the work directory")
+    download.add_argument("--run-id", required=True)
+    download.add_argument("--work-root", type=Path, default=CONTAINER_WORK_ROOT)
+    upload = sub.add_parser("upload", help="Upload result.json and the candidate YAML")
+    upload.add_argument("--run-id", required=True)
+    upload.add_argument("--result", type=Path, required=True)
+    upload.add_argument("--candidate", type=Path, default=None)
+    return parser
+
+
+def _safe_target(work_dir: Path, relative: str) -> Path:
+    if not relative or relative.startswith("/") or ".." in relative.split("/"):
+        raise RunBundleError("refusing to write outside the work directory")
+    root = work_dir.resolve()
+    target = root.joinpath(*relative.split("/")).resolve()
+    if not target.is_relative_to(root):
+        raise RunBundleError("refusing to write outside the work directory")
+    return target
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
