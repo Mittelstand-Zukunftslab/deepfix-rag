@@ -1,0 +1,12 @@
+# Interpreter for scripts/openhands_runner.py (/opt/openhands-agent/.venv).
+# openhands-sdk 1.54.0 allows litellm>=1.93.0 and fastmcp>=3.2,<4.
+# fastmcp 3.x requires mcp>=1.24,<2, so mcp 2.x cannot be installed here.
+# litellm 1.106.0 is the first release that imports CacheableResult from
+# mcp.types (mcp 2.x only). With tools set, completion() loads that import and
+# OpenRouter calls fail with:
+#   APIConnectionError: OpenrouterException - cannot import name 'CacheableResult'
+# 1.105.7 is the newest 1.105 release and does not import that name.
+openhands-sdk==1.54.0
+openhands-tools==1.54.0
+litellm==1.105.7
+mcp==1.30.0

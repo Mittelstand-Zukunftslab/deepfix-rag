@@ -21,10 +21,12 @@ ENV UV_COMPILE_BYTECODE=1 \
     PATH="/app/.venv/bin:${PATH}"
 
 # Pinned OpenHands interpreter, separate from the API venv so deepfix_rag is not
-# installed here. Kept before COPY src so app edits do not rebuild this layer.
+# installed here. Copy the requirements file before this RUN so a pin change
+# invalidates the layer. App source is copied later, so app edits do not rebuild it.
+COPY docker/openhands-agent-requirements.txt /tmp/openhands-agent-requirements.txt
 RUN uv venv --python 3.12 /opt/openhands-agent/.venv \
     && uv pip install --python /opt/openhands-agent/.venv/bin/python \
-        'openhands-sdk==1.54.0' 'openhands-tools==1.54.0'
+        -r /tmp/openhands-agent-requirements.txt
 
 # uv sync --frozen installs the lockfile's PyPI torch, which on Linux pulls the
 # CUDA stack. uv 0.9 only accepts --torch-backend on pip/tool installs, so drop
