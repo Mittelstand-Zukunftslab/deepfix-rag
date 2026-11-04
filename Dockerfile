@@ -5,8 +5,12 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm
 
 WORKDIR /app
 
+# scripts/openhands_runner.py forces the subprocess terminal, which starts an
+# interactive bash in a PTY and errors if bash is missing from PATH. tmux is the
+# backend the same tool auto-selects on Unix when the terminal type is unset;
+# the OpenHands agent-server image installs it for that path.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git curl ca-certificates \
+    && apt-get install -y --no-install-recommends bash git curl ca-certificates tmux \
     && rm -rf /var/lib/apt/lists/*
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -15,6 +19,12 @@ ENV UV_COMPILE_BYTECODE=1 \
     VIRTUAL_ENV=/app/.venv \
     UV_TORCH_BACKEND=cpu \
     PATH="/app/.venv/bin:${PATH}"
+
+# Pinned OpenHands interpreter, separate from the API venv so deepfix_rag is not
+# installed here. Kept before COPY src so app edits do not rebuild this layer.
+RUN uv venv --python 3.12 /opt/openhands-agent/.venv \
+    && uv pip install --python /opt/openhands-agent/.venv/bin/python \
+        'openhands-sdk==1.54.0' 'openhands-tools==1.54.0'
 
 # uv sync --frozen installs the lockfile's PyPI torch, which on Linux pulls the
 # CUDA stack. uv 0.9 only accepts --torch-backend on pip/tool installs, so drop
@@ -29,10 +39,12 @@ RUN uv venv "$VIRTUAL_ENV" \
 COPY src ./src
 RUN uv pip install --no-deps -e .
 COPY configs ./configs
+COPY scripts ./scripts
 
 ENV PYTHONUNBUFFERED=1 \
     PRODUCT_DATA_DIR=/data/product \
-    WORKSPACE_DIR=/data/workspace
+    WORKSPACE_DIR=/data/workspace \
+    OPENHANDS_PYTHON=/opt/openhands-agent/.venv/bin/python
 
 RUN mkdir -p /data/product /data/workspace
 

@@ -23,6 +23,12 @@ uv pip install --python /home/ubuntu/openhands-agent/.venv/bin/python \
 
 Set `OPENHANDS_PYTHON` to the interpreter above. Without it, the Optimization screen shows the schedule and history and disables Run now.
 
+## Docker
+
+The API image creates this environment at `/opt/openhands-agent/.venv` (Python 3.12, the same two pinned packages, no `deepfix_rag`) and sets `OPENHANDS_PYTHON=/opt/openhands-agent/.venv/bin/python`. `scripts/` is copied to `/app/scripts`, so the runner is `/app/scripts/openhands_runner.py`. The subprocess terminal backend needs `bash` on `PATH`. The image also installs `tmux`, which the tool auto-selects on Unix when the terminal type is left unset.
+
+Compose passes `OPENHANDS_PYTHON` into `backend-api`, defaulting to that interpreter. It passes `MLFLOW_EXPERIMENT_ID` through and leaves it empty when unset, which the child treats as no OTLP header. It passes `MLFLOW_DEV_RAG_EXPERIMENT`, defaulting to `dev_rag_experiment` so an unset host value does not clear the API setting of the same name. The child copies that name as-is.
+
 ## OpenRouter credentials
 
 The API writes the OpenRouter key from `DEEPFIX_LLM_API_KEY` into the run's `job.json`. The base URL is `DEEPFIX_LLM_BASE_URL` (default `https://openrouter.ai/api/v1`) and the model is `DEEPFIX_LLM_MODEL_NAME`. The runner adds the `openrouter/` prefix that LiteLLM needs to route an OpenRouter model, so `openai/gpt-6-luna-pro` becomes `openrouter/openai/gpt-6-luna-pro`. The product `LLM_API_KEY` is not copied into the child.
