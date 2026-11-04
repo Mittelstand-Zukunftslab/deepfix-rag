@@ -157,7 +157,7 @@ def _run(
         observability_metadata={"deepfix.run_id": run_id},
         observability_tags=["deepfix-optimization"],
         observability_span_name="deepfix_optimization",
-        **kwargs
+        **kwargs,
     )
     controller = GoalController(prompt, judge_llm, max_iterations=goal_rounds)
     try:
