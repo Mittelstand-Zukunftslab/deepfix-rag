@@ -42,6 +42,9 @@ COPY src ./src
 RUN uv pip install --no-deps -e .
 COPY configs ./configs
 COPY scripts ./scripts
+# skill_path() is parents[2] of this editable install (/app/src/deepfix_rag/...),
+# so the prompt looks for /app/.agents/skills. Copy that tree; do not duplicate it.
+COPY .agents ./.agents
 
 ENV PYTHONUNBUFFERED=1 \
     PRODUCT_DATA_DIR=/data/product \

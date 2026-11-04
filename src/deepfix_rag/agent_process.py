@@ -104,6 +104,42 @@ def agent_trace_env(source: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def _readable_file(path: Path) -> bool:
+    """True when ``path`` is a file this process can open."""
+    if not path.is_file() or not os.access(path, os.R_OK):
+        return False
+    try:
+        with path.open("rb") as handle:
+            handle.read(1)
+    except OSError:
+        return False
+    return True
+
+
+def _readable_dir(path: Path) -> bool:
+    """True when ``path`` is a directory this process can list."""
+    if not path.is_dir() or not os.access(path, os.R_OK | os.X_OK):
+        return False
+    try:
+        next(path.iterdir(), None)
+    except OSError:
+        return False
+    return True
+
+
+def missing_skills_reason(skill: Path, directory: Path) -> str | None:
+    """None when the optimization-loop skill and its directory can be read.
+
+    The message names the skill file when that file cannot be read, and the
+    directory when the file is readable but the directory is not.
+    """
+    if not _readable_file(skill):
+        return f"Agent skills missing: {skill}"
+    if not _readable_dir(directory):
+        return f"Agent skills missing: {directory}"
+    return None
+
+
 def interpreter_imports_agent(interpreter: Path) -> bool:
     """True when this interpreter can import the OpenHands SDK and its tools."""
     if not interpreter.is_file():
@@ -137,6 +173,8 @@ def run_agent_job(
     api_bin: Path | None = None,
     private_paths: tuple[str, ...] = (),
     on_start: Callable[[int], None] | None = None,
+    skill_path: Path | None = None,
+    skills_directory: Path | None = None,
 ) -> AgentRunResult:
     """Write the job, run one agent child, and kill its process group on timeout."""
     if _RUN_ID.fullmatch(run_id) is None:
@@ -150,11 +188,17 @@ def run_agent_job(
     _reject_private(base_url or "", private_paths)
     if not interpreter.is_file():
         raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
+    named_skills = _named_skills(skill_path, skills_directory)
+    if named_skills is not None:
+        skill, directory = named_skills
+        skills_reason = missing_skills_reason(skill, directory)
+        if skills_reason is not None:
+            raise AgentRunError(skills_reason)
 
     script = runner_script or default_runner_script()
     run_dir = workspace / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    job = {
+    job: dict[str, object] = {
         "prompt": prompt,
         "model": model,
         "base_url": base_url,
@@ -162,6 +206,10 @@ def run_agent_job(
         "max_iterations": max_iterations,
         "goal_rounds": goal_rounds,
     }
+    if named_skills is not None:
+        skill, directory = named_skills
+        job["skill_path"] = str(skill)
+        job["skills_dir"] = str(directory)
     _reject_private(json.dumps(job), private_paths)
     (run_dir / "job.json").write_text(json.dumps(job), encoding="utf-8")
 
@@ -200,6 +248,21 @@ def run_agent_job(
         timed_out=False,
         returncode=returncode,
     )
+
+
+def _named_skills(
+    skill_path: Path | None,
+    skills_directory: Path | None,
+) -> tuple[Path, Path] | None:
+    """Resolve the skill file and directory when the caller named either one."""
+    if skill_path is None and skills_directory is None:
+        return None
+    if skills_directory is None:
+        assert skill_path is not None
+        skills_directory = skill_path.parent.parent
+    if skill_path is None:
+        skill_path = skills_directory / "optimization-loop" / "SKILL.md"
+    return skill_path, skills_directory
 
 
 def _api_bin() -> Path:

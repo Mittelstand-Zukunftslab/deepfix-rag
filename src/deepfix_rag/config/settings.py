@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     # Omit sampling params the provider rejects. Claude Haiku 5.5 allows only temperature=1.
     DEEPFIX_LLM_DROP_PARAMS: bool = True
     OPENHANDS_PYTHON: str | None = None
+    # Directory of optimization-loop and the pathology skills. Unset uses the tree
+    # shipped beside the package (`.agents/skills`, `/app/.agents/skills` in the image).
+    DEEPFIX_SKILLS_DIR: Path | None = None
     OPTIMIZATION_MIN_DEV_QUESTIONS: int = 50
     OPTIMIZATION_MIN_NEW_DEV_QUESTIONS: int = 10
     OPTIMIZATION_MIN_HOLDOUT_QUESTIONS: int = 15

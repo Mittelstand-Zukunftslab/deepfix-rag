@@ -24,6 +24,7 @@ from deepfix_rag.agent_process import (
     AGENT_UNAVAILABLE_MESSAGE,
     AgentUnavailable,
     interpreter_imports_agent,
+    missing_skills_reason,
     run_agent_job,
 )
 from deepfix_rag.config.settings import LOGGER, Settings
@@ -106,6 +107,8 @@ class OptimizationSettings:
     source_env: Mapping[str, str] | None = None
     api_bin: Path | None = None
     private_paths: tuple[str, ...] = ()
+    # None uses the tree shipped beside the package (`.agents/skills`).
+    skills_dir: Path | None = None
 
 
 def settings_from(
@@ -130,23 +133,45 @@ def settings_from(
         api_key=api_key,
         source_env=env,
         private_paths=(str(settings.PRODUCT_DATA_DIR), str(settings.product_db_path)),
+        skills_dir=settings.DEEPFIX_SKILLS_DIR,
     )
+
+
+# Relative to the repository root, and to `/app` in the API image. The package is
+# installed editable from `<root>/src`, so `skill_path()` is this path under
+# `Path(__file__).parents[2]`.
+SKILL_RELATIVE = Path(".agents") / "skills" / "optimization-loop" / "SKILL.md"
 
 
 def skill_path() -> Path:
-    """The optimization-loop skill shipped with this repository."""
-    return (
-        Path(__file__).resolve().parents[2]
-        / ".agents"
-        / "skills"
-        / "optimization-loop"
-        / "SKILL.md"
-    )
+    """The optimization-loop skill shipped beside this package.
+
+    An editable install lives at ``<root>/src/deepfix_rag``. This is
+    ``<root>/.agents/skills/optimization-loop/SKILL.md``. The API image copies
+    ``.agents`` to ``/app/.agents``, which is that path in the container.
+    """
+    return Path(__file__).resolve().parents[2] / SKILL_RELATIVE
 
 
 def skills_dir() -> Path:
     """Directory that holds the optimization-loop skill and the pathology skills."""
     return skill_path().parent.parent
+
+
+def resolved_skills_dir(override: Path | None = None) -> Path:
+    """Skills directory for one run. ``override`` wins over the shipped tree."""
+    return skills_dir() if override is None else override
+
+
+def resolved_skill_path(override: Path | None = None) -> Path:
+    """Optimization-loop ``SKILL.md`` for the same directory ``resolved_skills_dir`` uses."""
+    return resolved_skills_dir(override) / "optimization-loop" / "SKILL.md"
+
+
+def skills_missing_reason(override: Path | None = None) -> str | None:
+    """None when the optimization-loop skill and its directory can be read."""
+    directory = resolved_skills_dir(override)
+    return missing_skills_reason(resolved_skill_path(override), directory)
 
 
 def optimization_prompt(
@@ -155,12 +180,15 @@ def optimization_prompt(
     workspace: Path,
     dev_path: Path,
     min_primary_delta: float,
+    skills: Path | None = None,
 ) -> str:
     """Instructions for one run. Holdout is never mentioned."""
     run_dir = workspace / "runs" / run_id
+    directory = resolved_skills_dir(skills)
+    skill = resolved_skill_path(skills)
     return (
-        f"Follow the procedure in {skill_path()} by running deepfix with --json. "
-        f"The pathology skills it routes to are in the same directory tree: {skills_dir()}. "
+        f"Follow the procedure in {skill} by running deepfix with --json. "
+        f"The pathology skills it routes to are in the same directory tree: {directory}. "
         f"Run every command from the workspace directory {workspace}, which is your current "
         "directory, with plain `deepfix` (not `uv run deepfix`). "
         "Use only the dense, hybrid, or bm25 retrieval backends. "
@@ -234,7 +262,11 @@ def start_optimization_run(
     options: OptimizationSettings,
     coordinator: IndexCoordinator | None = None,
 ) -> OptimizationRun:
-    """Export feedback, then skip, refuse, or start one background agent run."""
+    """Export feedback, then skip, refuse, or start one background agent run.
+
+    A run that would start without a readable optimization-loop skill is stored
+    as failed and does not launch the agent.
+    """
     init_optimization(db_path)
     prepare_workspace(workspace)
     exported = export_feedback(db_path, workspace)
@@ -255,9 +287,18 @@ def start_optimization_run(
             len(exported.holdout),
             options,
         )
-        if reason is None and not _can_launch(options):
+        skills_reason = None if reason is not None else skills_missing_reason(options.skills_dir)
+        if reason is None and skills_reason is None and not _can_launch(options):
             raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
-        status: RunStatus = "skipped" if reason is not None else "running"
+        if reason is not None:
+            status: RunStatus = "skipped"
+            stored_reason = reason
+        elif skills_reason is not None:
+            status = "failed"
+            stored_reason = skills_reason
+        else:
+            status = "running"
+            stored_reason = None
         conn.execute(
             """
             INSERT INTO optimization_runs (
@@ -270,16 +311,18 @@ def start_optimization_run(
                 run_id,
                 status,
                 trigger,
-                reason,
+                stored_reason,
                 exported.snapshot_id,
                 len(dev_ids),
                 new_count,
                 len(exported.holdout),
                 json.dumps(dev_ids),
                 started_at,
-                started_at if status == "skipped" else None,
+                started_at if status != "running" else None,
             ),
         )
+    if status == "failed" and skills_reason is not None:
+        LOGGER.warning("Optimization run %s marked failed: %s", run_id, skills_reason)
     if status == "running":
         _start_thread(db_path, workspace, run_id, exported.dev_path, options, coordinator)
     return get_run(db_path, run_id)
@@ -469,6 +512,8 @@ def _start_thread(
     interpreter = options.interpreter
     if interpreter is None:
         raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
+    directory = resolved_skills_dir(options.skills_dir)
+    skill = resolved_skill_path(options.skills_dir)
 
     def _target() -> None:
         try:
@@ -480,6 +525,7 @@ def _start_thread(
                     workspace=workspace,
                     dev_path=dev_path,
                     min_primary_delta=options.min_primary_delta,
+                    skills=directory,
                 ),
                 model=options.model,
                 base_url=options.base_url,
@@ -492,6 +538,8 @@ def _start_thread(
                 api_bin=options.api_bin,
                 private_paths=options.private_paths,
                 on_start=lambda pid: _set_pid(db_path, run_id, pid),
+                skill_path=skill,
+                skills_directory=directory,
             )
         except Exception as exc:
             _finish(

@@ -25,6 +25,7 @@ from deepfix_rag.agent_process import (
     run_agent_job,
 )
 from deepfix_rag.config.settings import Settings
+from deepfix_rag.optimization import skill_path, skills_dir
 
 _DUMP = """
 import json, os, sys
@@ -303,6 +304,81 @@ def test_job_uses_the_openrouter_key_and_hides_private_paths(tmp_path: Path) -> 
             interpreter=Path(sys.executable),
             goal_rounds=0,
         )
+
+
+@pytest.mark.integration
+def test_run_agent_job_does_not_start_when_skills_are_missing(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    marker = tmp_path / "started"
+    script = tmp_path / "runner.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('started', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    missing = tmp_path / "skills" / "optimization-loop" / "SKILL.md"
+    with pytest.raises(AgentRunError, match="Agent skills missing"):
+        run_agent_job(
+            workspace,
+            "run1",
+            prompt="hi",
+            model="m",
+            base_url=None,
+            api_key=None,
+            interpreter=Path(sys.executable),
+            runner_script=script,
+            skill_path=missing,
+            skills_directory=missing.parent.parent,
+        )
+    assert not marker.exists()
+    assert not (workspace / "runs" / "run1").exists()
+
+
+@pytest.mark.unit
+def test_runner_rejects_a_missing_skill_before_starting() -> None:
+    runner = _runner_module()
+    missing = Path("/no/such/skills/optimization-loop/SKILL.md")
+    reason = runner.skills_error(
+        {"skill_path": str(missing), "skills_dir": str(missing.parent.parent)}
+    )
+    assert reason == f"Agent skills missing: {missing}"
+    assert runner.skills_error({"prompt": "hi"}) is None
+    shipped = runner.skills_error(
+        {"skill_path": str(skill_path()), "skills_dir": str(skills_dir())}
+    )
+    assert shipped is None
+
+
+@pytest.mark.integration
+def test_runner_exits_before_the_agent_when_skills_are_missing(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    run_dir = workspace / "runs" / "run1"
+    run_dir.mkdir(parents=True)
+    missing = tmp_path / "skills" / "optimization-loop" / "SKILL.md"
+    (run_dir / "job.json").write_text(
+        json.dumps(
+            {
+                "prompt": "hi",
+                "model": "m",
+                "max_iterations": 15,
+                "goal_rounds": 3,
+                "skill_path": str(missing),
+                "skills_dir": str(missing.parent.parent),
+            }
+        ),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [sys.executable, str(default_runner_script()), "run1"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 1
+    assert "ModuleNotFoundError" not in completed.stderr
+    payload = json.loads((run_dir / "agent_output.json").read_text(encoding="utf-8"))
+    assert payload == {"final_response": None, "error": f"Agent skills missing: {missing}"}
 
 
 @pytest.mark.integration

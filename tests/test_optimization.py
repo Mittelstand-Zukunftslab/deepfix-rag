@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from deepfix_rag.feedback import is_holdout, normalize_query, query_id_for, reco
 from deepfix_rag.interactions import record_interaction
 from deepfix_rag.optimization import (
     INTERRUPTED_REASON,
+    SKILL_RELATIVE,
     STALE_GRACE_SECONDS,
     STALE_REASON,
     OptimizationSettings,
@@ -26,8 +28,10 @@ from deepfix_rag.optimization import (
     get_run,
     init_optimization,
     optimization_prompt,
+    settings_from,
     skill_path,
     skills_dir,
+    skills_missing_reason,
     start_optimization_run,
     wait_for_run,
 )
@@ -174,6 +178,198 @@ def test_prompt_hides_holdout_and_thresholds_match_the_defaults() -> None:
     assert Settings.model_fields["OPTIMIZATION_GOAL_ROUNDS"].default == 3
 
 
+@pytest.mark.unit
+def test_prompt_uses_a_configured_skills_directory() -> None:
+    directory = Path("/opt/skills")
+    prompt = optimization_prompt(
+        run_id="run1",
+        workspace=Path("/data/workspace"),
+        dev_path=Path("/data/workspace/feedback/snap/feedback_dev.jsonl"),
+        min_primary_delta=0.025,
+        skills=directory,
+    )
+    skill = directory / "optimization-loop" / "SKILL.md"
+    assert str(skill) in prompt
+    assert str(directory) in prompt
+
+
+@pytest.mark.unit
+def test_shipped_skills_are_readable() -> None:
+    assert skills_missing_reason() is None
+    assert skill_path().is_file()
+    assert skills_dir().is_dir()
+    assert (skills_dir() / "rerank-calibration" / "SKILL.md").is_file()
+
+
+def test_missing_skills_name_the_skill_file(tmp_path: Path) -> None:
+    missing = tmp_path / "absent"
+    skill = missing / "optimization-loop" / "SKILL.md"
+    assert skills_missing_reason(missing) == f"Agent skills missing: {skill}"
+    present = tmp_path / "skills"
+    present.mkdir()
+    expected = present / "optimization-loop" / "SKILL.md"
+    assert skills_missing_reason(present) == f"Agent skills missing: {expected}"
+
+
+def test_unreadable_skill_file_and_directory_are_reported(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    skill = root / "optimization-loop" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("procedure\n", encoding="utf-8")
+    skill.chmod(0)
+    try:
+        assert skills_missing_reason(root) == f"Agent skills missing: {skill}"
+    finally:
+        skill.chmod(0o644)
+    root.chmod(0o111)
+    try:
+        assert skills_missing_reason(root) == f"Agent skills missing: {root}"
+    finally:
+        root.chmod(0o755)
+
+
+@pytest.mark.unit
+def test_settings_forward_a_skills_directory() -> None:
+    custom = Path("/opt/skills")
+    options = settings_from(Settings(DEEPFIX_SKILLS_DIR=custom))
+    assert options.skills_dir == custom
+
+
+@pytest.mark.unit
+def test_image_copies_skills_to_the_path_the_prompt_uses() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    dockerfile = (repo / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY src ./src" in dockerfile
+    assert "uv pip install --no-deps -e ." in dockerfile
+    installed = Path("/app/src/deepfix_rag/optimization.py")
+    assert installed.parents[2] == Path("/app")
+    image_skill = installed.parents[2] / SKILL_RELATIVE
+    assert image_skill == Path("/app/.agents/skills/optimization-loop/SKILL.md")
+    copied = _agents_copy_destination(dockerfile)
+    assert copied / "skills" / "optimization-loop" / "SKILL.md" == image_skill
+    assert skill_path() == (repo / SKILL_RELATIVE).resolve()
+    assert skill_path().relative_to(repo) == SKILL_RELATIVE
+    assert image_skill.relative_to("/app") == SKILL_RELATIVE
+    shipped = sorted(path.parent.name for path in (repo / ".agents" / "skills").glob("*/SKILL.md"))
+    assert "optimization-loop" in shipped
+    assert {"chunking-tuning", "rerank-calibration", "hybrid-fusion-tuning"} <= set(shipped)
+    ignore = (repo / ".dockerignore").read_text(encoding="utf-8")
+    for name in shipped:
+        relative = f".agents/skills/{name}/SKILL.md"
+        assert not _dockerignore_excludes(ignore, relative), relative
+    assert _dockerignore_excludes(ignore, ".git/HEAD")
+    assert _dockerignore_excludes(ignore, "src/pkg/__pycache__/mod.pyc")
+    assert _dockerignore_excludes(ignore, "src/mod.pyc")
+    assert _dockerignore_excludes(ignore, "trace.log")
+    assert _dockerignore_excludes(ignore, ".env")
+    assert _dockerignore_excludes(ignore, ".env.local")
+    assert _dockerignore_excludes(ignore, "web/node_modules/left-pad/index.js")
+    assert not _dockerignore_excludes(ignore, "src/deepfix_rag/optimization.py")
+    prompt = optimization_prompt(
+        run_id="run1",
+        workspace=Path("/data/workspace"),
+        dev_path=Path("/data/workspace/feedback/snap/feedback_dev.jsonl"),
+        min_primary_delta=0.025,
+    )
+    assert str(skill_path()) in prompt
+    assert str(skills_dir()) in prompt
+
+
+def _agents_copy_destination(dockerfile: str) -> Path:
+    """Directory the Dockerfile's ``COPY .agents`` instruction creates."""
+    workdir = Path("/")
+    found: Path | None = None
+    for raw in dockerfile.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if parts[0] == "WORKDIR":
+            candidate = Path(parts[1])
+            workdir = candidate if candidate.is_absolute() else workdir / candidate
+            continue
+        if parts[0] != "COPY":
+            continue
+        args = [part for part in parts[1:] if not part.startswith("--")]
+        if len(args) != 2:
+            continue
+        src, dest = args
+        if src.rstrip("/") not in {".agents", "./.agents"}:
+            continue
+        destination = Path(dest)
+        if not destination.is_absolute():
+            destination = Path(os.path.normpath(workdir / destination))
+        found = destination
+    if found is None:
+        raise AssertionError("Dockerfile does not copy .agents")
+    return found
+
+
+def _dockerignore_excludes(text: str, relative: str) -> bool:
+    excluded = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        negate = line.startswith("!")
+        pattern = line[1:] if negate else line
+        if _dockerignore_pattern_matches(pattern, relative):
+            excluded = not negate
+    return excluded
+
+
+def _dockerignore_pattern_matches(pattern: str, relative: str) -> bool:
+    token = pattern[1:] if pattern.startswith("/") else pattern
+    token = token.rstrip("/")
+    if not token:
+        return False
+    expression = _docker_glob_to_regex(token)
+    if "/" not in token:
+        return any(re.fullmatch(expression, part) for part in relative.split("/"))
+    candidate = relative
+    while True:
+        if re.fullmatch(expression, candidate):
+            return True
+        if "/" not in candidate:
+            return False
+        candidate = candidate.rsplit("/", 1)[0]
+
+
+def _docker_glob_to_regex(token: str) -> str:
+    parts: list[str] = []
+    index = 0
+    while index < len(token):
+        if token.startswith("**/", index):
+            parts.append("(?:.*/)?")
+            index += 3
+            continue
+        if token.startswith("**", index):
+            parts.append(".*")
+            index += 2
+            continue
+        char = token[index]
+        if char == "*":
+            parts.append("[^/]*")
+            index += 1
+            continue
+        if char == "?":
+            parts.append("[^/]")
+            index += 1
+            continue
+        if char == "[":
+            end = token.find("]", index + 1)
+            if end == -1:
+                parts.append(re.escape(char))
+                index += 1
+                continue
+            parts.append(token[index : end + 1])
+            index = end + 1
+            continue
+        parts.append(re.escape(char))
+        index += 1
+    return "".join(parts)
+
+
 def test_empty_feedback_is_skipped_without_starting_an_agent(
     tmp_path: Path, sample_corpus_path: Path
 ) -> None:
@@ -202,6 +398,78 @@ def test_empty_feedback_is_skipped_without_starting_an_agent(
     assert run.holdout_count == 0
     assert not (workspace / "runs" / run.run_id).exists()
     assert (workspace / "corpus" / "sample_corpus.jsonl").is_file()
+
+
+def test_missing_skills_fail_the_run_without_starting_the_agent(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace = tmp_path / "workspace"
+    db_path = tmp_path / "private" / "product.db"
+    marker = tmp_path / "agent-started"
+    script = tmp_path / "runner.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('started', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    missing = tmp_path / "no-skills"
+    skill = missing / "optimization-loop" / "SKILL.md"
+    run = start_optimization_run(
+        db_path,
+        workspace,
+        trigger="manual",
+        options=_options(
+            tmp_path,
+            min_dev_questions=0,
+            min_new_dev_questions=0,
+            min_holdout_questions=0,
+            runner_script=script,
+            skills_dir=missing,
+        ),
+    )
+    wait_for_run(run.run_id, timeout=5)
+    assert run.status == "failed"
+    assert run.reason == f"Agent skills missing: {skill}"
+    assert run.ended_at is not None
+    stored = get_run(db_path, run.run_id)
+    assert stored.status == "failed"
+    assert stored.reason == run.reason
+    assert not marker.exists()
+    assert not (workspace / "runs" / run.run_id).exists()
+
+
+def test_a_readable_skills_directory_is_the_path_in_the_prompt(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace = tmp_path / "workspace"
+    db_path = tmp_path / "private" / "product.db"
+    script = tmp_path / "runner.py"
+    script.write_text(_SCRIPT, encoding="utf-8")
+    workspace.mkdir()
+    (workspace / "mode.txt").write_text("null\n", encoding="utf-8")
+    skills = tmp_path / "skills"
+    skill = skills / "optimization-loop" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("procedure\n", encoding="utf-8")
+    run = start_optimization_run(
+        db_path,
+        workspace,
+        trigger="manual",
+        options=_options(
+            tmp_path,
+            min_dev_questions=0,
+            min_new_dev_questions=0,
+            min_holdout_questions=0,
+            runner_script=script,
+            skills_dir=skills,
+        ),
+    )
+    wait_for_run(run.run_id)
+    finished = get_run(db_path, run.run_id)
+    assert finished.status == "succeeded"
+    job = json.loads((workspace / "runs" / run.run_id / "job.json").read_text(encoding="utf-8"))
+    assert str(skill) in job["prompt"]
+    assert str(skills) in job["prompt"]
+    assert job["skill_path"] == str(skill)
+    assert job["skills_dir"] == str(skills)
 
 
 def test_a_second_start_conflicts_while_one_run_is_active(tmp_path: Path) -> None:

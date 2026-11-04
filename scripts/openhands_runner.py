@@ -43,6 +43,9 @@ def main(argv: list[str]) -> int:
         api_key = job.get("api_key") or None
         max_iterations = _positive(job, "max_iterations", _DEFAULT_ITERATIONS)
         goal_rounds = _positive(job, "goal_rounds", _DEFAULT_GOAL_ROUNDS)
+        skills_problem = skills_error(job)
+        if skills_problem is not None:
+            raise RuntimeError(skills_problem)
         final_response, goal = _run(
             run_dir, run_id, prompt, model, base_url, api_key, max_iterations, goal_rounds
         )
@@ -59,6 +62,55 @@ def main(argv: list[str]) -> int:
 
 
 _DROP_PARAMS_FALSE = frozenset({"0", "false", "no", "off", "f", "n"})
+
+
+def _readable_file(path: Path) -> bool:
+    """True when ``path`` is a file this process can open."""
+    if not path.is_file() or not os.access(path, os.R_OK):
+        return False
+    try:
+        with path.open("rb") as handle:
+            handle.read(1)
+    except OSError:
+        return False
+    return True
+
+
+def _readable_dir(path: Path) -> bool:
+    """True when ``path`` is a directory this process can list."""
+    if not path.is_dir() or not os.access(path, os.R_OK | os.X_OK):
+        return False
+    try:
+        next(path.iterdir(), None)
+    except OSError:
+        return False
+    return True
+
+
+def skills_error(job: dict[str, Any]) -> str | None:
+    """Return a failure reason when the job names skills that cannot be read.
+
+    Jobs that do not name a skill path skip the check. Keep the message in step
+    with ``missing_skills_reason`` in the API process. This module does not
+    import the product package.
+    """
+    if "skill_path" not in job and "skills_dir" not in job:
+        return None
+    raw_dir = job.get("skills_dir")
+    raw_skill = job.get("skill_path")
+    directory = Path(str(raw_dir)) if raw_dir else None
+    skill = Path(str(raw_skill)) if raw_skill else None
+    if directory is None and skill is not None:
+        directory = skill.parent.parent
+    if skill is None and directory is not None:
+        skill = directory / "optimization-loop" / "SKILL.md"
+    if skill is None or directory is None:
+        return "Agent skills missing: skills directory"
+    if not _readable_file(skill):
+        return f"Agent skills missing: {skill}"
+    if not _readable_dir(directory):
+        return f"Agent skills missing: {directory}"
+    return None
 
 
 def llm_drop_params_enabled() -> bool:
