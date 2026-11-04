@@ -70,7 +70,13 @@ deepfix-rag = "deepfix_rag.main:app"
 [tool.ruff]
 line-length = 99
 src = ["src", "tests"]
-include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py", "scripts/openhands_runner.py"]
+include = [
+    "pyproject.toml",
+    "src/**/*.py",
+    "tests/**/*.py",
+    "scripts/openhands_runner.py",
+    "docker/hermes/sandbox_boot.py",
+]
 
 
 [tool.ruff.lint]

@@ -233,15 +233,14 @@ FALKORDB_PASSWORD=
 FALKORDB_DATABASE=my_knowledge_graph
 
 # ------------------------------------------------------------------------------
-# Hermes Agent
+# Hermes Agent (internal sandbox; no published port, dashboard off)
 # ------------------------------------------------------------------------------
-HERMES_DASHBOARD=
-HERMES_DASHBOARD_BASIC_AUTH_USERNAME=
-HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=
-HERMES_DASHBOARD_BASIC_AUTH_SECRET=
-API_SERVER_ENABLED=
-API_SERVER_HOST=
+# Required. At least 16 characters. Generate with: openssl rand -hex 32
 API_SERVER_KEY=
+# Distinct from LLM_API_KEY. Not sent to the Hermes container as LLM_API_KEY.
+OPENROUTER_API_KEY=
+# Optional chat-profile key. The chat profile is not started.
+HERMES_CHAT_API_SERVER_KEY=
 
 # ------------------------------------------------------------------------------
 # MLflow Server (docker compose)
