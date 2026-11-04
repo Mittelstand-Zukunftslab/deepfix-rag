@@ -245,6 +245,9 @@ API_SERVER_KEY=
 # Point that URI at http://localhost:5000 to use this local server.
 MLFLOW_ALLOWED_HOSTS=localhost,127.0.0.1
 MLFLOW_CORS_ALLOWED_ORIGINS=http://localhost:5000
+# Optional overrides. MLflow 3.x matches Host exactly (include hostname:port).
+MLFLOW_SERVER_ALLOWED_HOSTS=hermes,openhands,localhost,diagnostic-agent,mlflow,mlflow:5000,localhost:5000,127.0.0.1,127.0.0.1:5000,backend-api,deepfix-mlflow.mittelstand-zukunftslab.de
+MLFLOW_SERVER_CORS_ALLOWED_ORIGINS=http://hermes,http://openhands,http://localhost,http://diagnostic-agent,http://mlflow:5000,http://backend-api:8000,https://deepfix-mlflow.mittelstand-zukunftslab.de
 ```
 ---
 ## Quickstart: Step-by-Step Optimization Walkthrough
