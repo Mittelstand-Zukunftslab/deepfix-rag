@@ -1,12 +1,14 @@
 """The admin route starts the shared optimization job."""
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi.testclient import TestClient
 import mlflow
 import pytest
 
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.settings import Settings
-from deepfix_rag.optimization import init_optimization
+from deepfix_rag.optimization import INTERRUPTED_REASON, STALE_REASON, init_optimization
 from deepfix_rag.storage import connect
 from tests.identity import IdentityIssuer
 
@@ -63,6 +65,90 @@ def test_a_running_job_returns_conflict(settings: Settings, identity: IdentityIs
                 VALUES ('active', 'running', 'manual', 'snap', 0, 0, 0, '[]', 't')
                 """
             )
+        conflict = client.post("/admin/optimization/run", json={})
+        assert conflict.status_code == 409
+        assert conflict.json()["detail"] == "A run is already in progress."
+
+
+def _insert_running(
+    settings: Settings, run_id: str, started_at: str, *, pid: int | None = None
+) -> None:
+    init_optimization(settings.product_db_path)
+    with connect(settings.product_db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO optimization_runs (
+                run_id, status, trigger_kind, snapshot_id, dev_count, new_dev_count,
+                holdout_count, dev_query_ids, pid, started_at
+            )
+            VALUES (?, 'running', 'manual', 'snap', 0, 0, 0, '[]', ?, ?)
+            """,
+            (run_id, pid, started_at),
+        )
+
+
+def test_startup_fails_a_run_left_running(settings: Settings, identity: IdentityIssuer) -> None:
+    _insert_running(
+        settings,
+        "orphan",
+        datetime.now(timezone.utc).isoformat(),
+        pid=-1,
+    )
+    with _client(settings, identity) as client:
+        identity.sign_in(client, "admin@example.com", "admin")
+        status = client.get("/admin/optimization")
+        assert status.status_code == 200, status.text
+        run = status.json()["runs"][0]
+        assert run["run_id"] == "orphan"
+        assert run["status"] == "failed"
+        assert run["reason"] == INTERRUPTED_REASON
+        assert run["ended_at"] is not None
+        with connect(settings.product_db_path) as conn:
+            pid = conn.execute(
+                "SELECT pid FROM optimization_runs WHERE run_id = 'orphan'"
+            ).fetchone()["pid"]
+        assert pid is None
+        started = client.post("/admin/optimization/run", json={})
+        assert started.status_code == 200, started.text
+        assert started.json()["status"] == "skipped"
+
+
+def test_status_fails_a_run_older_than_the_timeout(
+    settings: Settings, identity: IdentityIssuer
+) -> None:
+    with _client(settings, identity) as client:
+        identity.sign_in(client, "admin@example.com", "admin")
+        _insert_running(
+            settings,
+            "stale",
+            (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat(),
+        )
+        status = client.get("/admin/optimization")
+        assert status.status_code == 200, status.text
+        run = status.json()["runs"][0]
+        assert run["status"] == "failed"
+        assert run["reason"] == STALE_REASON
+        assert run["ended_at"] is not None
+        started = client.post("/admin/optimization/run", json={})
+        assert started.status_code == 200, started.text
+        assert started.json()["run_id"] != "stale"
+
+
+def test_status_keeps_a_run_that_is_inside_the_timeout(
+    settings: Settings, identity: IdentityIssuer
+) -> None:
+    with _client(settings, identity) as client:
+        identity.sign_in(client, "admin@example.com", "admin")
+        _insert_running(
+            settings,
+            "active",
+            (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        )
+        status = client.get("/admin/optimization")
+        assert status.status_code == 200, status.text
+        run = status.json()["runs"][0]
+        assert run["status"] == "running"
+        assert run["ended_at"] is None
         conflict = client.post("/admin/optimization/run", json={})
         assert conflict.status_code == 409
         assert conflict.json()["detail"] == "A run is already in progress."

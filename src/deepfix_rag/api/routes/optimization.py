@@ -26,6 +26,7 @@ from deepfix_rag.api.schemas import (
 from deepfix_rag.optimization import (
     OptimizationRun,
     RunInProgress,
+    fail_stale_runs,
     mlflow_run_url,
     recent_runs,
     settings_from,
@@ -101,6 +102,10 @@ def start_optimization_run_route(
 
 def _status(request: Request) -> OptimizationStatusResponse:
     settings = get_settings(request)
+    fail_stale_runs(
+        settings.product_db_path,
+        timeout_seconds=settings.OPTIMIZATION_RUN_TIMEOUT_HOURS * 60 * 60,
+    )
     schedule = request.app.state.optimization.view()
     workspace = settings.workspace_dir
     runs = [

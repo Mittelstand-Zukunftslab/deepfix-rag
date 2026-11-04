@@ -35,7 +35,11 @@ from deepfix_rag.storage import connect
 
 RunStatus = Literal["running", "skipped", "rejected", "promoted", "succeeded", "failed"]
 RunTrigger = Literal["cron", "manual"]
-_INTERRUPTED = "Interrupted by restart"
+INTERRUPTED_REASON = "Interrupted: backend restarted while the run was in progress"
+STALE_REASON = "Stale: the run exceeded the configured timeout."
+# The child is already killed at the run timeout. The grace covers the bookkeeping
+# that follows, so a live finish is not marked stale in the same moment.
+STALE_GRACE_SECONDS = 15 * 60
 _TIMED_OUT = "Timed out"
 _INVALID_RESULT = "The run did not write a valid result."
 
@@ -237,6 +241,8 @@ def start_optimization_run(
     dev_ids = sorted(question.query_id for question in exported.dev)
     run_id = uuid.uuid4().hex
     started_at = _now()
+    # A row left running by a dead thread must not block the next manual or nightly start.
+    fail_stale_runs(db_path, timeout_seconds=options.timeout_seconds)
     with connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         if _running_id(conn) is not None:
@@ -399,17 +405,46 @@ def _finish_run_impl(
 
 
 def fail_interrupted(db_path: Path) -> int:
-    """Fail runs left running by a restart and kill any child that is still alive."""
+    """Fail runs left running by a restart and stop any child pid this process recorded.
+
+    The row is committed before the pid is signaled. A reused or missing pid must not
+    keep the run in ``running`` or take down this process.
+    """
     init_optimization(db_path)
     with connect(db_path) as conn:
         rows = conn.execute(
             "SELECT run_id, pid FROM optimization_runs WHERE status = 'running'"
         ).fetchall()
-        stuck = [(str(row["run_id"]), row["pid"]) for row in rows]
-    for run_id, pid in stuck:
-        _kill_pid(pid)
-        _finish(db_path, run_id, status="failed", reason=_INTERRUPTED)
-    return len(stuck)
+    stuck = [(str(row["run_id"]), _pid(row["pid"])) for row in rows]
+    return _fail_selected(db_path, stuck, INTERRUPTED_REASON)
+
+
+def fail_stale_runs(
+    db_path: Path,
+    *,
+    timeout_seconds: float,
+    now: datetime | None = None,
+) -> int:
+    """Fail ``running`` rows older than the run timeout plus ``STALE_GRACE_SECONDS``.
+
+    Questions on those rows stay consumed, the same as any other failed run.
+    """
+    init_optimization(db_path)
+    moment = _as_utc(now) if now is not None else datetime.now(timezone.utc)
+    limit_seconds = timeout_seconds + STALE_GRACE_SECONDS
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT run_id, pid, started_at FROM optimization_runs
+            WHERE status = 'running'
+            """
+        ).fetchall()
+    stale = [
+        (str(row["run_id"]), _pid(row["pid"]))
+        for row in rows
+        if _older_than(row["started_at"], moment, limit_seconds)
+    ]
+    return _fail_selected(db_path, stale, STALE_REASON)
 
 
 def wait_for_run(run_id: str, timeout: float = 30) -> None:
@@ -463,16 +498,22 @@ def _start_thread(
                 db_path, run_id, status="failed", reason=str(exc) or "The agent runner failed."
             )
             return
-        finish_run(
-            db_path,
-            workspace,
-            run_id,
-            runner_error=outcome.error,
-            timed_out=outcome.timed_out,
-            coordinator=coordinator,
-            min_primary_delta=options.min_primary_delta,
-            private_paths=options.private_paths,
-        )
+        try:
+            finish_run(
+                db_path,
+                workspace,
+                run_id,
+                runner_error=outcome.error,
+                timed_out=outcome.timed_out,
+                coordinator=coordinator,
+                min_primary_delta=options.min_primary_delta,
+                private_paths=options.private_paths,
+            )
+        except Exception as exc:
+            LOGGER.exception("Optimization run %s failed while finishing", run_id)
+            _finish(
+                db_path, run_id, status="failed", reason=str(exc) or "The agent runner failed."
+            )
 
     thread = threading.Thread(target=_target, name=f"optimization-{run_id}", daemon=True)
     with _threads_lock:
@@ -613,12 +654,58 @@ def _set_pid(db_path: Path, run_id: str, pid: int) -> None:
         )
 
 
+def _fail_selected(
+    db_path: Path,
+    rows: list[tuple[str, int | None]],
+    reason: str,
+) -> int:
+    """Commit each failure, then signal only that run's recorded process group."""
+    failed = 0
+    for run_id, pid in rows:
+        if not _finish(db_path, run_id, status="failed", reason=reason):
+            continue
+        failed += 1
+        LOGGER.warning("Optimization run %s marked failed: %s", run_id, reason)
+        _kill_pid(pid)
+    return failed
+
+
+def _pid(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _older_than(started_at: object, moment: datetime, limit_seconds: float) -> bool:
+    if not isinstance(started_at, str):
+        return False
+    started = _parse_time(started_at)
+    if started is None:
+        return False
+    return (moment - started).total_seconds() > limit_seconds
+
+
+def _parse_time(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return _as_utc(parsed)
+
+
+def _as_utc(moment: datetime) -> datetime:
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
 def _kill_pid(pid: int | None) -> None:
-    if not pid:
+    """Stop the recorded child process group and no other process."""
+    if pid is None or pid <= 0 or pid == os.getpid() or pid == os.getpgrp():
         return
     try:
         os.killpg(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
+    except (OSError, OverflowError):
         return
 
 
@@ -656,9 +743,10 @@ def _finish(
     holdout_delta: dict[str, float] | None = None,
     holdout_wins: int | None = None,
     holdout_losses: int | None = None,
-) -> None:
+) -> bool:
+    """Mark one running row finished. Returns whether this call changed it."""
     with connect(db_path) as conn:
-        conn.execute(
+        updated = conn.execute(
             """
             UPDATE optimization_runs
             SET status = ?, reason = ?, primary_metric = ?, candidate_config_path = ?,
@@ -681,6 +769,7 @@ def _finish(
                 run_id,
             ),
         )
+        return updated.rowcount > 0
 
 
 def _run_from_row(row: sqlite3.Row) -> OptimizationRun:

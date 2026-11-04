@@ -1,5 +1,6 @@
 """Optimization runs skip, conflict, and finish without starting OpenHands."""
 
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -15,9 +16,13 @@ from deepfix_rag.config.settings import Settings
 from deepfix_rag.feedback import is_holdout, normalize_query, query_id_for, record_vote
 from deepfix_rag.interactions import record_interaction
 from deepfix_rag.optimization import (
+    INTERRUPTED_REASON,
+    STALE_GRACE_SECONDS,
+    STALE_REASON,
     OptimizationSettings,
     RunInProgress,
     fail_interrupted,
+    fail_stale_runs,
     get_run,
     init_optimization,
     optimization_prompt,
@@ -361,24 +366,194 @@ def test_timeout_kills_the_agent_process_group(tmp_path: Path) -> None:
     assert _alive(child) is False
 
 
-def test_restart_fails_a_running_run_and_kills_its_process(tmp_path: Path) -> None:
-    db_path = tmp_path / "private" / "product.db"
-    process = subprocess.Popen(["sleep", "60"], start_new_session=True)
+def _insert_run(
+    db_path: Path,
+    run_id: str,
+    *,
+    status: str = "running",
+    started_at: str = "t",
+    ended_at: str | None = None,
+    pid: int | None = None,
+    dev_query_ids: list[str] | None = None,
+    trigger: str = "manual",
+) -> None:
     init_optimization(db_path)
+    ids = dev_query_ids or []
     with connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO optimization_runs (
                 run_id, status, trigger_kind, snapshot_id, dev_count, new_dev_count,
-                holdout_count, dev_query_ids, pid, started_at
+                holdout_count, dev_query_ids, pid, started_at, ended_at
             )
-            VALUES ('stuck', 'running', 'cron', 'snap', 0, 0, 0, '[]', ?, 't')
+            VALUES (?, ?, ?, 'snap', ?, ?, 0, ?, ?, ?, ?)
             """,
-            (process.pid,),
+            (
+                run_id,
+                status,
+                trigger,
+                len(ids),
+                len(ids),
+                json.dumps(ids),
+                pid,
+                started_at,
+                ended_at,
+            ),
         )
+
+
+def _stored_pid(db_path: Path, run_id: str) -> int | None:
+    with connect(db_path) as conn:
+        return conn.execute(
+            "SELECT pid FROM optimization_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()["pid"]
+
+
+def test_restart_fails_a_running_run_and_kills_only_its_process(tmp_path: Path) -> None:
+    db_path = tmp_path / "private" / "product.db"
+    process = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    unrelated = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        _insert_run(db_path, "stuck", pid=process.pid, trigger="cron")
+        _insert_run(
+            db_path,
+            "done",
+            status="succeeded",
+            pid=unrelated.pid,
+            started_at="t0",
+            ended_at="t1",
+        )
+        assert fail_interrupted(db_path) == 1
+        finished = get_run(db_path, "stuck")
+        assert finished.status == "failed"
+        assert finished.reason == INTERRUPTED_REASON
+        assert finished.ended_at is not None
+        assert _stored_pid(db_path, "stuck") is None
+        assert get_run(db_path, "done").status == "succeeded"
+        assert _stored_pid(db_path, "done") == unrelated.pid
+        process.wait(timeout=2)
+        assert process.returncode is not None
+        assert _alive(unrelated.pid)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
+        if unrelated.poll() is None:
+            unrelated.kill()
+            unrelated.wait(timeout=2)
+
+
+def test_restart_records_failure_when_the_pid_cannot_be_signaled(tmp_path: Path) -> None:
+    db_path = tmp_path / "private" / "product.db"
+    _insert_run(
+        db_path,
+        "orphan",
+        pid=-1,
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
     assert fail_interrupted(db_path) == 1
-    finished = get_run(db_path, "stuck")
+    finished = get_run(db_path, "orphan")
     assert finished.status == "failed"
-    assert finished.reason == "Interrupted by restart"
-    process.wait(timeout=2)
-    assert process.returncode is not None
+    assert finished.reason == INTERRUPTED_REASON
+    assert finished.ended_at is not None
+    assert _stored_pid(db_path, "orphan") is None
+    assert _alive(os.getpid())
+
+
+def test_a_running_run_fails_only_after_the_timeout_plus_grace(tmp_path: Path) -> None:
+    db_path = tmp_path / "private" / "product.db"
+    start = datetime(2026, 11, 4, 12, 0, tzinfo=timezone.utc)
+    _insert_run(db_path, "old", started_at=start.isoformat(), dev_query_ids=["q-old"])
+    _insert_run(db_path, "unparsed", started_at="t")
+    timeout = 3 * 60 * 60
+    limit = timeout + STALE_GRACE_SECONDS
+    assert (
+        fail_stale_runs(
+            db_path,
+            timeout_seconds=timeout,
+            now=start + timedelta(seconds=timeout + 1),
+        )
+        == 0
+    )
+    assert get_run(db_path, "old").status == "running"
+    assert (
+        fail_stale_runs(db_path, timeout_seconds=timeout, now=start + timedelta(seconds=limit))
+        == 0
+    )
+    assert (
+        fail_stale_runs(
+            db_path,
+            timeout_seconds=timeout,
+            now=start + timedelta(seconds=limit + 1),
+        )
+        == 1
+    )
+    stale = get_run(db_path, "old")
+    assert stale.status == "failed"
+    assert stale.reason == STALE_REASON
+    assert stale.ended_at is not None
+    assert _stored_pid(db_path, "old") is None
+    assert get_run(db_path, "unparsed").status == "running"
+
+
+def test_the_next_start_is_not_blocked_by_a_stale_run(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace = tmp_path / "workspace"
+    db_path = tmp_path / "private" / "product.db"
+    # Test options time out in 30s, so this row is past that timeout plus the grace.
+    old = datetime.now(timezone.utc) - timedelta(seconds=STALE_GRACE_SECONDS + 120)
+    _insert_run(db_path, "old", started_at=old.isoformat(), dev_query_ids=["q-old"])
+    run = start_optimization_run(
+        db_path,
+        workspace,
+        trigger="cron",
+        options=_options(tmp_path),
+    )
+    assert run.status == "skipped"
+    assert run.run_id != "old"
+    stored = get_run(db_path, "old")
+    assert stored.status == "failed"
+    assert stored.reason == STALE_REASON
+    assert stored.ended_at is not None
+
+
+def test_a_run_inside_the_timeout_still_conflicts(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace = tmp_path / "workspace"
+    db_path = tmp_path / "private" / "product.db"
+    started = datetime.now(timezone.utc) - timedelta(seconds=30)
+    _insert_run(db_path, "active", started_at=started.isoformat())
+    with pytest.raises(RunInProgress, match="already in progress"):
+        start_optimization_run(
+            db_path,
+            workspace,
+            trigger="manual",
+            options=_options(
+                tmp_path, min_dev_questions=0, min_new_dev_questions=0, min_holdout_questions=0
+            ),
+        )
+    assert get_run(db_path, "active").status == "running"
+    assert get_run(db_path, "active").ended_at is None
+
+
+def test_an_interrupted_run_still_consumes_its_dev_questions(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace = tmp_path / "workspace"
+    db_path = tmp_path / "private" / "product.db"
+    query_id = _label(db_path, _dev_query())
+    _insert_run(db_path, "orphan", dev_query_ids=[query_id], pid=-1)
+    assert fail_interrupted(db_path) == 1
+    assert get_run(db_path, "orphan").status == "failed"
+    run = start_optimization_run(
+        db_path,
+        workspace,
+        trigger="cron",
+        options=_options(
+            tmp_path, min_dev_questions=1, min_new_dev_questions=1, min_holdout_questions=0
+        ),
+    )
+    assert run.status == "skipped"
+    assert run.new_dev_count == 0
+    assert run.dev_count == 1
+    assert "0 new labeled questions in dev, 1 needed" in (run.reason or "")
