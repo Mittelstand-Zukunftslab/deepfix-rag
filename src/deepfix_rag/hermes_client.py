@@ -2,7 +2,7 @@
 
 One module starts, polls, stops, and streams a run on the Hermes API server
 (``http://hermes:8642``). Route handlers do not call Hermes. The optimization
-loop does not call this module yet.
+loop calls it only when ``OPTIMIZATION_AGENT`` is ``hermes``.
 
 Every request sets a connect timeout and a read timeout. ``POST /v1/runs``
 returns as soon as the run is accepted, so a hung socket fails in seconds
@@ -35,6 +35,7 @@ from deepfix_rag.run_bundle import RunBundleError, container_work_dir, validate_
 # socket stalled.
 DEFAULT_SSE_IDLE_TIMEOUT = 25.0
 DEFAULT_CONNECT_TIMEOUT = 5.0
+HERMES_HEALTH_TIMEOUT = 2.0
 DEFAULT_READ_TIMEOUT = 30.0
 DEFAULT_WRITE_TIMEOUT = 30.0
 DEFAULT_POOL_TIMEOUT = 5.0
@@ -191,6 +192,50 @@ def optimization_instructions(run_id: str) -> str:
         f"When candidate_config_path is a path, also pass `--candidate {candidate}`. "
         "The task is complete only when that result file exists with those keys."
     )
+
+
+def hermes_health_ok(
+    base_url: str,
+    api_server_key: str | None = None,
+    *,
+    timeout: float = HERMES_HEALTH_TIMEOUT,
+) -> bool:
+    """True when ``GET /health`` returns HTTP 200 and ``{"status": "ok"}``.
+
+    The key is not sent. Health is unauthenticated. The key is used only to
+    refuse a base URL that already contains it.
+    """
+    try:
+        origin = _check_base_url(base_url, api_server_key or "")
+    except HermesClientError:
+        return False
+    try:
+        response = httpx.get(
+            f"{origin}/health",
+            timeout=timeout,
+            trust_env=False,
+            follow_redirects=False,
+        )
+    except httpx.HTTPError:
+        return False
+    if response.status_code != 200:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("status") == "ok"
+
+
+def hermes_agent_available(base_url: str, api_server_key: str | None) -> bool:
+    """True when ``API_SERVER_KEY`` is set and ``GET /health`` succeeds."""
+    if not isinstance(api_server_key, str):
+        return False
+    try:
+        _visible_secret(api_server_key)
+    except HermesClientError:
+        return False
+    return hermes_health_ok(base_url, api_server_key)
 
 
 class HermesClient:
@@ -777,7 +822,11 @@ def _visible_secret(api_server_key: str) -> str:
 
 
 def _check_base_url(base_url: str, api_server_key: str) -> str:
-    if not isinstance(base_url, str) or api_server_key in base_url:
+    if not isinstance(base_url, str):
+        raise HermesClientError("Hermes base URL must be an http or https URL")
+    # An empty key is a substring of every URL. Callers that have no key yet
+    # pass "" and only the shape of the URL is checked.
+    if api_server_key and api_server_key in base_url:
         raise HermesClientError("Hermes base URL must not contain API_SERVER_KEY")
     parsed = urllib.parse.urlsplit(base_url.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:

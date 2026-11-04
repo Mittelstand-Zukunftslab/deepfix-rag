@@ -131,7 +131,9 @@ def _status(request: Request) -> OptimizationStatusResponse:
         timezone=schedule.timezone,
         enabled=schedule.enabled,
         next_run_at=schedule.next_run_at,
+        agent=schedule.agent,
         agent_available=schedule.agent_available,
+        agent_unavailable_message=schedule.agent_unavailable_message,
         champion_config_path=str(workspace / "configs" / "champion.yaml"),
         champion_diff={
             key: ConfigChange(before=_scalar(change["before"]), after=_scalar(change["after"]))

@@ -1,7 +1,7 @@
 """Stage one optimization run under a fresh RustFS prefix.
 
-``stage_run_bundle`` is what API code runs before ``POST /v1/runs``. The
-OpenHands path does not call it. The Hermes client (a later story) does.
+``stage_run_bundle`` is what the Hermes optimization path runs before
+``POST /v1/runs``. The OpenHands path does not call it.
 
 The prefix is ``s3://<bucket>/optimization/runs/<run_id>/``. ``<bucket>`` is
 the bucket in ``S3_URI``. The root key writes ``input/`` and later reads

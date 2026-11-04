@@ -42,6 +42,7 @@ class Call:
     headers: dict[str, str]
     body: bytes
     authorized: bool
+    authorization_present: bool = False
 
 
 class HermesApi:
@@ -56,6 +57,8 @@ class HermesApi:
         self._scripts: list[Script] = []
         self._counter = 0
         self._lock = threading.Lock()
+        self.health_ok = True
+        self.on_accept: Callable[[str, str], None] | None = None
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self._httpd.api = self  # type: ignore[attr-defined]
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
@@ -146,6 +149,8 @@ class HermesApi:
             "run_id": hermes_id,
             "status": "started",
         }
+        if self.on_accept is not None:
+            self.on_accept(hermes_id, key)
         _send_json(
             handler,
             202,
@@ -192,17 +197,28 @@ class _Handler(BaseHTTPRequestHandler):
         api: HermesApi = self.server.api  # type: ignore[attr-defined]
         raw = {key: value for key, value in self.headers.items()}
         authorized = raw.get("Authorization") == f"Bearer {api.api_key}"
-        api.record(
-            Call(
-                method=self.command,
-                path=self.path,
-                headers={
-                    key: value for key, value in raw.items() if key.lower() != "authorization"
-                },
-                body=body,
-                authorized=authorized,
-            )
+        present = any(key.lower() == "authorization" for key in raw)
+        call = Call(
+            method=self.command,
+            path=self.path,
+            headers={key: value for key, value in raw.items() if key.lower() != "authorization"},
+            body=body,
+            authorized=authorized,
+            authorization_present=present,
         )
+        path = self.path.split("?", 1)[0]
+        if self.command == "GET" and path == "/health":
+            api.record(call)
+            if api.health_ok:
+                _send_json(
+                    self,
+                    200,
+                    {"status": "ok", "platform": "hermes-agent", "version": "0.22.7"},
+                )
+            else:
+                _send_json(self, 503, {"status": "unavailable"})
+            return
+        api.record(call)
         if not authorized:
             _send_json(self, 401, _error("unauthorized", "unauthorized"))
             return
@@ -743,10 +759,11 @@ def test_route_handlers_do_not_call_hermes() -> None:
         assert "hermes_client" not in text
         assert "HermesClient" not in text
         assert "/v1/runs" not in text
-    for relative in ("optimization.py", "agent_process.py"):
-        text = (REPO / "src" / "deepfix_rag" / relative).read_text(encoding="utf-8")
-        assert "HermesClient" not in text
-        assert "hermes_client" not in text
+    agent = (REPO / "src" / "deepfix_rag" / "agent_process.py").read_text(encoding="utf-8")
+    assert "HermesClient" not in agent
+    assert "hermes_client" not in agent
+    loop = (REPO / "src" / "deepfix_rag" / "optimization.py").read_text(encoding="utf-8")
+    assert "from deepfix_rag.hermes_client import" in loop
 
 
 class _Grab(logging.Handler):

@@ -166,6 +166,8 @@ def test_prompt_hides_holdout_and_thresholds_match_the_defaults() -> None:
     assert "complete only when" in prompt
     assert str(skill_path()) in prompt
     assert skill_path().is_file()
+    assert Settings.model_fields["OPTIMIZATION_AGENT"].default == "openhands"
+    assert Settings.model_fields["HERMES_BASE_URL"].default == "http://hermes:8642"
     assert Settings.model_fields["OPTIMIZATION_MIN_DEV_QUESTIONS"].default == 50
     assert Settings.model_fields["OPTIMIZATION_MIN_NEW_DEV_QUESTIONS"].default == 10
     assert Settings.model_fields["OPTIMIZATION_MIN_HOLDOUT_QUESTIONS"].default == 15

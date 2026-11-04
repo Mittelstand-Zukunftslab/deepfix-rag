@@ -2,6 +2,7 @@ import logging
 import os
 from pathlib import Path
 import sys
+from typing import Literal
 
 import mlflow
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -87,6 +88,12 @@ class Settings(BaseSettings):
     # Omit sampling params the provider rejects. Claude Haiku 5.5 allows only temperature=1.
     DEEPFIX_LLM_DROP_PARAMS: bool = True
     OPENHANDS_PYTHON: str | None = None
+    # openhands keeps the child process. hermes submits to HERMES_BASE_URL.
+    # The default stays openhands until a Hermes run is proven.
+    OPTIMIZATION_AGENT: Literal["openhands", "hermes"] = "openhands"
+    HERMES_BASE_URL: str = "http://hermes:8642"
+    # Bearer token for the Hermes API. Empty leaves the hermes agent unavailable.
+    API_SERVER_KEY: str | None = None
     OPTIMIZATION_MIN_DEV_QUESTIONS: int = 50
     OPTIMIZATION_MIN_NEW_DEV_QUESTIONS: int = 10
     OPTIMIZATION_MIN_HOLDOUT_QUESTIONS: int = 15

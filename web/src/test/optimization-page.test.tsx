@@ -17,7 +17,9 @@ import type { OptimizationStatus } from "@/services/optimization-service";
 
 function status(overrides: Partial<OptimizationStatus> = {}): OptimizationStatus {
   return {
+    agent: "openhands",
     agent_available: true,
+    agent_unavailable_message: null,
     champion_config_path: "/workspace/configs/champion.yaml",
     champion_diff: {},
     cron: "0 2 * * *",
@@ -82,6 +84,30 @@ describe("Optimization screen", () => {
     expect(screen.getByRole("switch", { name: "Enabled" })).toBeTruthy();
     expect(screen.getByText("No optimization runs yet.")).toBeTruthy();
     expect(screen.getByText("No differences from the previous champion.")).toBeTruthy();
+  });
+
+  it("names Hermes when that agent is not set up and still shows the schedule", () => {
+    const hermes =
+      "Hermes is not set up on this server, so a run cannot start. The schedule and history are still shown.";
+    render(
+      <OptimizationPage
+        status={status({
+          agent: "hermes",
+          agent_available: false,
+          agent_unavailable_message: hermes,
+        })}
+        onRun={async () => {}}
+        onSave={async () => {}}
+      />,
+    );
+    expect(screen.getByText(hermes)).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.",
+      ),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    expect(screen.getByLabelText("Schedule")).toHaveValue("0 2 * * *");
   });
 
   it("disables Run now and notes that a run is already in progress", () => {

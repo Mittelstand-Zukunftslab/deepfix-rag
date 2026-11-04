@@ -652,9 +652,17 @@ export type OptimizationRunSummary = {
  */
 export type OptimizationStatusResponse = {
     /**
+     * Agent
+     */
+    agent: 'openhands' | 'hermes';
+    /**
      * Agent Available
      */
     agent_available: boolean;
+    /**
+     * Agent Unavailable Message
+     */
+    agent_unavailable_message: string | null;
     /**
      * Champion Config Path
      */

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import threading
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from deepfix_rag.agent_process import AgentUnavailable
@@ -17,7 +18,7 @@ from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.optimization import (
     OptimizationSettings,
     RunInProgress,
-    agent_available,
+    agent_status,
     start_optimization_run,
 )
 from deepfix_rag.storage import connect
@@ -58,7 +59,9 @@ class ScheduleView:
     timezone: str
     enabled: bool
     next_run_at: str | None
+    agent: Literal["openhands", "hermes"]
     agent_available: bool
+    agent_unavailable_message: str | None
 
 
 def compile_cron(expression: str) -> CompiledCron:
@@ -165,12 +168,19 @@ class OptimizationScheduler:
             cron = self._cron
             enabled = self._enabled
             nxt = self._next
+        options = self._options_for()
+        available, message = agent_status(options)
+        agent: Literal["openhands", "hermes"] = (
+            "hermes" if options.agent == "hermes" else "openhands"
+        )
         return ScheduleView(
             cron=cron,
             timezone=self._timezone,
             enabled=enabled,
             next_run_at=None if not enabled or nxt is None else nxt.isoformat(),
-            agent_available=agent_available(self._options_for()),
+            agent=agent,
+            agent_available=available,
+            agent_unavailable_message=message,
         )
 
     def update(self, cron: str, enabled: bool) -> ScheduleView:

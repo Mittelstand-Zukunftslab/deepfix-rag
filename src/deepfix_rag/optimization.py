@@ -1,13 +1,17 @@
 """Optimization runs owned by the API.
 
 The same function starts a scheduled run and a manual one. It exports a feedback
-snapshot, skips when too little is labeled, and otherwise launches one OpenHands child.
-When the child names a candidate, API code scores it and may promote it.
+snapshot, skips when too little is labeled, and otherwise launches one agent.
+``OPTIMIZATION_AGENT=openhands`` (the default) starts the OpenHands child.
+``hermes`` stages the run bundle, submits it with ``HermesClient``, and copies
+``output/result.json`` back before ``finish_run``. Holdout scoring and promotion
+stay in this process either way.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import StrEnum
 import hashlib
 import json
 import os
@@ -15,6 +19,7 @@ from pathlib import Path
 import signal
 import sqlite3
 import threading
+import time
 from typing import Literal
 import uuid
 
@@ -22,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from deepfix_rag.agent_process import (
     AGENT_UNAVAILABLE_MESSAGE,
+    AgentRunResult,
     AgentUnavailable,
     interpreter_imports_agent,
     run_agent_job,
@@ -29,13 +35,40 @@ from deepfix_rag.agent_process import (
 from deepfix_rag.config.settings import LOGGER, Settings
 from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.feedback import export_feedback
+from deepfix_rag.hermes_client import (
+    HermesClient,
+    HermesClientError,
+    HermesRun,
+    hermes_agent_available,
+)
+from deepfix_rag.hermes_sync import bucket_from_env, download_result, store_from_env
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.promotion import PromotionDecision, apply_candidate
+from deepfix_rag.run_bundle import RunBundleError, stage_run_bundle
 from deepfix_rag.storage import connect
+
+
+class OptimizationAgent(StrEnum):
+    """Which sandbox ``start_optimization_run`` launches. The default is OpenHands."""
+
+    OPENHANDS = "openhands"
+    HERMES = "hermes"
+
 
 RunStatus = Literal["running", "skipped", "rejected", "promoted", "succeeded", "failed"]
 RunTrigger = Literal["cron", "manual"]
 INTERRUPTED_REASON = "Interrupted: backend restarted while the run was in progress"
+HERMES_STATUS_POLL_SECONDS = 15.0
+HERMES_UNAVAILABLE_MESSAGE = "Hermes is not set up on this server, so a run cannot start."
+OPENHANDS_STATUS_MESSAGE = (
+    "OpenHands is not set up on this server, so a run cannot start. "
+    "The schedule and history are still shown."
+)
+HERMES_STATUS_MESSAGE = (
+    "Hermes is not set up on this server, so a run cannot start. "
+    "The schedule and history are still shown."
+)
+_HERMES_IN_PROGRESS = frozenset({"started", "running", "stopping", "queued"})
 STALE_REASON = "Stale: the run exceeded the configured timeout."
 # The child is already killed at the run timeout. The grace covers the bookkeeping
 # that follows, so a live finish is not marked stale in the same moment.
@@ -106,6 +139,10 @@ class OptimizationSettings:
     source_env: Mapping[str, str] | None = None
     api_bin: Path | None = None
     private_paths: tuple[str, ...] = ()
+    agent: OptimizationAgent = OptimizationAgent.OPENHANDS
+    hermes_base_url: str = "http://hermes:8642"
+    hermes_api_key: str | None = None
+    hermes_status_poll_seconds: float = HERMES_STATUS_POLL_SECONDS
 
 
 def settings_from(
@@ -130,6 +167,9 @@ def settings_from(
         api_key=api_key,
         source_env=env,
         private_paths=(str(settings.PRODUCT_DATA_DIR), str(settings.product_db_path)),
+        agent=OptimizationAgent(settings.OPTIMIZATION_AGENT),
+        hermes_base_url=settings.HERMES_BASE_URL.strip().rstrip("/"),
+        hermes_api_key=settings.API_SERVER_KEY,
     )
 
 
@@ -256,7 +296,7 @@ def start_optimization_run(
             options,
         )
         if reason is None and not _can_launch(options):
-            raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
+            raise AgentUnavailable(_launch_blocked_message(options))
         status: RunStatus = "skipped" if reason is not None else "running"
         conn.execute(
             """
@@ -281,7 +321,16 @@ def start_optimization_run(
             ),
         )
     if status == "running":
-        _start_thread(db_path, workspace, run_id, exported.dev_path, options, coordinator)
+        _start_thread(
+            db_path,
+            workspace,
+            run_id,
+            exported.dev_path,
+            options,
+            coordinator,
+            holdout_queries=tuple(question.query for question in exported.holdout),
+            holdout_query_ids=tuple(question.query_id for question in exported.holdout),
+        )
     return get_run(db_path, run_id)
 
 
@@ -458,6 +507,162 @@ def wait_for_run(run_id: str, timeout: float = 30) -> None:
         raise TimeoutError(f"Run {run_id} is still running.")
 
 
+def run_hermes_job(
+    workspace: Path,
+    run_id: str,
+    *,
+    dev_path: Path,
+    options: OptimizationSettings,
+    holdout_queries: tuple[str, ...] = (),
+    holdout_query_ids: tuple[str, ...] = (),
+) -> AgentRunResult:
+    """Stage the bundle, submit the run, and copy ``output/result.json`` locally.
+
+    The caller passes that file to ``finish_run``. This function does not score
+    holdout and does not promote. Hermes prose is discarded.
+
+    Cancel, the stall window, ``stop_run`` on timeout, event lines, and restart
+    recovery that asks Hermes before failing a row are later work. A poll that
+    passes ``timeout_seconds`` returns ``timed_out`` so the row can finish. It
+    does not call ``stop_run``.
+    """
+    env = options.source_env if options.source_env is not None else os.environ
+    store = store_from_env(env)
+    bucket = bucket_from_env(env)
+    stage_run_bundle(
+        run_id=run_id,
+        workspace=workspace,
+        dev_path=dev_path,
+        store=store,
+        bucket=bucket,
+        holdout_queries=holdout_queries,
+        holdout_query_ids=holdout_query_ids,
+    )
+    secret = options.hermes_api_key
+    with HermesClient(options.hermes_base_url, secret or "") as client:
+        accepted = client.start_run(run_id)
+        deadline = time.monotonic() + options.timeout_seconds
+        current = _poll_hermes(client, accepted.hermes_run_id, deadline, options, run_id)
+        if current is None:
+            return AgentRunResult(final_response=None, error=None, timed_out=True, returncode=None)
+        download_result(
+            store,
+            bucket=bucket,
+            run_id=run_id,
+            destination=workspace / "runs" / run_id / "result.json",
+        )
+        if current.status == "completed":
+            return AgentRunResult(final_response=None, error=None, timed_out=False, returncode=0)
+        reason = current.error or f"The Hermes run ended with status {current.status}."
+        return AgentRunResult(
+            final_response=None,
+            error=_redact(reason, secret),
+            timed_out=False,
+            returncode=1,
+        )
+
+
+def _poll_hermes(
+    client: HermesClient,
+    hermes_run_id: str,
+    deadline: float,
+    options: OptimizationSettings,
+    run_id: str,
+) -> HermesRun | None:
+    """Poll until the run leaves the in-progress statuses, or the deadline passes."""
+    while True:
+        if time.monotonic() >= deadline:
+            return None
+        try:
+            current = client.get_run(hermes_run_id)
+        except HermesClientError as exc:
+            LOGGER.warning("optimization run=%s hermes status poll failed: %s", run_id, exc)
+        else:
+            if current.status not in _HERMES_IN_PROGRESS:
+                return current
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(_poll_delay(options, remaining))
+
+
+def _poll_delay(options: OptimizationSettings, remaining: float) -> float:
+    interval = options.hermes_status_poll_seconds
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval <= 0:
+        interval = HERMES_STATUS_POLL_SECONDS
+    return min(float(interval), remaining)
+
+
+def _start_hermes_thread(
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    dev_path: Path,
+    options: OptimizationSettings,
+    coordinator: IndexCoordinator | None,
+    *,
+    holdout_queries: tuple[str, ...],
+    holdout_query_ids: tuple[str, ...],
+) -> None:
+    def _target() -> None:
+        try:
+            outcome = run_hermes_job(
+                workspace,
+                run_id,
+                dev_path=dev_path,
+                options=options,
+                holdout_queries=holdout_queries,
+                holdout_query_ids=holdout_query_ids,
+            )
+        except Exception as exc:
+            _finish(db_path, run_id, status="failed", reason=_hermes_failure(exc, options))
+            return
+        try:
+            finish_run(
+                db_path,
+                workspace,
+                run_id,
+                runner_error=outcome.error,
+                timed_out=outcome.timed_out,
+                coordinator=coordinator,
+                min_primary_delta=options.min_primary_delta,
+                private_paths=options.private_paths,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Optimization run %s failed while finishing (%s)",
+                run_id,
+                type(exc).__name__,
+            )
+            _finish(db_path, run_id, status="failed", reason=_hermes_failure(exc, options))
+
+    thread = threading.Thread(target=_target, name=f"optimization-{run_id}", daemon=True)
+    with _threads_lock:
+        _threads[run_id] = thread
+    thread.start()
+
+
+def _hermes_failure(exc: Exception, options: OptimizationSettings) -> str:
+    """Admin-visible text. Unknown failures do not include the exception string."""
+    if isinstance(exc, (HermesClientError, RunBundleError)):
+        text = str(exc).strip() or "The Hermes run could not be started."
+    else:
+        text = "The Hermes run could not be started."
+    return _redact(text, options.hermes_api_key)
+
+
+def _redact(text: str, secret: str | None) -> str:
+    if secret:
+        return text.replace(secret, "[redacted]")
+    return text
+
+
+def _launch_blocked_message(options: OptimizationSettings) -> str:
+    if options.agent is OptimizationAgent.HERMES:
+        return HERMES_UNAVAILABLE_MESSAGE
+    return AGENT_UNAVAILABLE_MESSAGE
+
+
 def _start_thread(
     db_path: Path,
     workspace: Path,
@@ -465,7 +670,22 @@ def _start_thread(
     dev_path: Path,
     options: OptimizationSettings,
     coordinator: IndexCoordinator | None,
+    *,
+    holdout_queries: tuple[str, ...] = (),
+    holdout_query_ids: tuple[str, ...] = (),
 ) -> None:
+    if options.agent is OptimizationAgent.HERMES:
+        _start_hermes_thread(
+            db_path,
+            workspace,
+            run_id,
+            dev_path,
+            options,
+            coordinator,
+            holdout_queries=holdout_queries,
+            holdout_query_ids=holdout_query_ids,
+        )
+        return
     interpreter = options.interpreter
     if interpreter is None:
         raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
@@ -548,7 +768,9 @@ def _interpreter_ready(interpreter: Path | None) -> bool:
 
 
 def _can_launch(options: OptimizationSettings) -> bool:
-    """True when this process can start the child that the run will use."""
+    """True when this process can start the agent the run will use."""
+    if options.agent is OptimizationAgent.HERMES:
+        return agent_available(options)
     if not _interpreter_ready(options.interpreter):
         return False
     if not options.api_key or not options.base_url or not options.model:
@@ -562,8 +784,23 @@ def _can_launch(options: OptimizationSettings) -> bool:
 _import_cache: dict[str, bool] = {}
 
 
+def agent_status(options: OptimizationSettings) -> tuple[bool, str | None]:
+    """Whether a run can start, and the admin sentence when it cannot."""
+    if agent_available(options):
+        return True, None
+    if options.agent is OptimizationAgent.HERMES:
+        return False, HERMES_STATUS_MESSAGE
+    return False, OPENHANDS_STATUS_MESSAGE
+
+
 def agent_available(options: OptimizationSettings) -> bool:
-    """True when OpenHands can be started. The import check is cached for this process."""
+    """True when the selected agent can be started.
+
+    OpenHands checks the interpreter, and that import check is cached.
+    Hermes is true when ``API_SERVER_KEY`` is set and ``GET /health`` succeeds.
+    """
+    if options.agent is OptimizationAgent.HERMES:
+        return hermes_agent_available(options.hermes_base_url, options.hermes_api_key)
     if not _interpreter_ready(options.interpreter) or options.interpreter is None:
         return False
     if not options.api_key or not options.base_url or not options.model:

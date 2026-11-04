@@ -19,6 +19,8 @@ import os
 from pathlib import Path
 import sys
 
+from botocore.exceptions import ClientError
+
 from deepfix_rag.run_bundle import (
     CONTAINER_WORK_ROOT,
     DirectoryObjectStore,
@@ -84,6 +86,44 @@ def upload_output(
             raise RunBundleError("candidate file is missing")
         recorder.put(bucket, f"{prefix}/{_OUTPUT_CANDIDATE}", candidate_path.read_bytes())
     return tuple(recorder.requests)
+
+
+def download_result(
+    store: ObjectStore,
+    *,
+    bucket: str,
+    run_id: str,
+    destination: Path,
+) -> bool:
+    """Copy ``output/result.json`` onto ``destination``.
+
+    Returns False when that object is absent. The API calls this with the
+    root key and then reads the local file from ``finish_run``. A missing
+    object is not an error here. Other store failures propagate, and their
+    text is not rewritten.
+    """
+    key = f"{run_prefix(run_id)}/{_OUTPUT_RESULT}"
+    try:
+        body = store.get(bucket, key)
+    except KeyError:
+        return False
+    except ClientError as exc:
+        if not _missing_object(exc):
+            raise
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(body)
+    return True
+
+
+def _missing_object(exc: ClientError) -> bool:
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    error = response.get("Error")
+    if not isinstance(error, dict):
+        return False
+    return error.get("Code") in {"NoSuchKey", "404", "NotFound"}
 
 
 def describe_download(bucket: str, run_id: str, work_dir: Path) -> str:

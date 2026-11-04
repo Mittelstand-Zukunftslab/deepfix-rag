@@ -5,8 +5,8 @@
 # No Docker socket. No HERMES_DASHBOARD. The process user is the image's
 # hermes user (s6 starts as root and drops privileges for the gateway).
 #
-# OPTIMIZATION_AGENT is unchanged and still defaults to the OpenHands child.
-# This file does not select the agent. Wiring the flag is US-004.
+# OPTIMIZATION_AGENT defaults to openhands. The API reads the flag; this
+# file does not select the agent. Hermes runs only when the flag is hermes.
 #
 # Secrets (API_SERVER_KEY, OPENROUTER_API_KEY, HERMES_CHAT_API_SERVER_KEY)
 # are interpolated from the environment. They are not baked into the image.

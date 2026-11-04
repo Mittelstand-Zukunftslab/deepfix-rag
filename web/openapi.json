@@ -1183,9 +1183,29 @@
       "OptimizationStatusResponse": {
         "description": "Schedule, champion diff, and the 20 most recent runs.",
         "properties": {
+          "agent": {
+            "default": "openhands",
+            "enum": [
+              "openhands",
+              "hermes"
+            ],
+            "title": "Agent",
+            "type": "string"
+          },
           "agent_available": {
             "title": "Agent Available",
             "type": "boolean"
+          },
+          "agent_unavailable_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Unavailable Message"
           },
           "champion_config_path": {
             "title": "Champion Config Path",
@@ -1234,7 +1254,9 @@
           "timezone",
           "enabled",
           "next_run_at",
+          "agent",
           "agent_available",
+          "agent_unavailable_message",
           "champion_config_path",
           "champion_diff",
           "runs"

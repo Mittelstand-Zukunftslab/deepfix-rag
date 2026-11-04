@@ -18,8 +18,12 @@ import {
 import { formatDateTime } from "@/lib/format";
 import type { OptimizationStatus } from "@/services/optimization-service";
 
-const AGENT_UNAVAILABLE =
+const OPENHANDS_UNAVAILABLE =
   "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.";
+
+function unavailableMessage(status: OptimizationStatus): string {
+  return status.agent_unavailable_message || OPENHANDS_UNAVAILABLE;
+}
 
 const STATUS_LABEL: Record<OptimizationStatus["runs"][number]["status"], string> = {
   running: "Running",
@@ -121,7 +125,7 @@ export function OptimizationPage({
         }
       />
 
-      {status.agent_available ? null : <p>{AGENT_UNAVAILABLE}</p>}
+      {status.agent_available ? null : <p>{unavailableMessage(status)}</p>}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="rounded-2xl shadow-soft">
