@@ -6,7 +6,7 @@
 #   OH_SESSION_API_KEY, OH_SECRET_KEY, OPENHANDS_PORT
 #   HERMES_DASHBOARD, HERMES_DASHBOARD_BASIC_AUTH_*, API_SERVER_*
 #   MLFLOW_BACKEND_STORE_URI,
-#   MLFLOW_ALLOWED_HOSTS, MLFLOW_CORS_ALLOWED_ORIGINS
+#   MLFLOW_SERVER_ALLOWED_HOSTS, MLFLOW_SERVER_CORS_ALLOWED_ORIGINS
 #   DEEPFIX_LLM_API_KEY, DEEPFIX_LLM_BASE_URL, DEEPFIX_LLM_MODEL_NAME, etc.
 #   DEEPFIX_SERVER_DATABASE_URL
 #   BETTER_AUTH_SECRET, WEB_ORIGIN, API_INTERNAL_URL, AUTH_JWKS_URL, ALLOWED_EMAIL_DOMAINS
@@ -57,10 +57,12 @@ services:
       - mlflow_artifacts:/opt/mlflow/data
     environment:
       MLFLOW_BACKEND_STORE_URI: sqlite:////opt/mlflow/data/mlflow.db
-      MLFLOW_SERVER_ALLOWED_HOSTS: "hermes,openhands,localhost,diagnostic-agent"
-      MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: "http://hermes,http://openhands,http://localhost,http://diagnostic-agent"
+      # MLflow 3.x matches the Host header exactly (hostname and hostname:port
+      # are different entries). Setting this replaces the localhost defaults.
+      MLFLOW_SERVER_ALLOWED_HOSTS: "${MLFLOW_SERVER_ALLOWED_HOSTS:-hermes,openhands,localhost,diagnostic-agent,mlflow,mlflow:5000,localhost:5000,127.0.0.1,127.0.0.1:5000,backend-api,deepfix-mlflow.mittelstand-zukunftslab.de}"
+      MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: "${MLFLOW_SERVER_CORS_ALLOWED_ORIGINS:-http://hermes,http://openhands,http://localhost,http://diagnostic-agent,http://mlflow:5000,http://backend-api:8000,https://deepfix-mlflow.mittelstand-zukunftslab.de}"
     mem_limit: 1G
-    command: mlflow server --host 0.0.0.0 --port 5000 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/
+    command: mlflow server --host 0.0.0.0 --port 5000 --workers 1 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/
     healthcheck:
       test:
         - CMD
