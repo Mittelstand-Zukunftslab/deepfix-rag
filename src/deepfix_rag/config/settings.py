@@ -84,6 +84,8 @@ class Settings(BaseSettings):
     DEEPFIX_LLM_API_KEY: str | None = None
     DEEPFIX_LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
     DEEPFIX_LLM_MODEL_NAME: str = "openai/gpt-6-luna-pro"
+    # Omit sampling params the provider rejects. Claude Haiku 5.5 allows only temperature=1.
+    DEEPFIX_LLM_DROP_PARAMS: bool = True
     OPENHANDS_PYTHON: str | None = None
     OPTIMIZATION_MIN_DEV_QUESTIONS: int = 50
     OPTIMIZATION_MIN_NEW_DEV_QUESTIONS: int = 10

@@ -58,6 +58,30 @@ def main(argv: list[str]) -> int:
         return 1
 
 
+_DROP_PARAMS_FALSE = frozenset({"0", "false", "no", "off", "f", "n"})
+
+
+def llm_drop_params_enabled() -> bool:
+    """Whether this process should drop LiteLLM params the provider rejects.
+
+    ``DEEPFIX_LLM_DROP_PARAMS`` defaults to enabled. This process does not
+    import the product package; keep the accepted values in step with that flag.
+    """
+    raw = os.environ.get("DEEPFIX_LLM_DROP_PARAMS", "").strip().lower()
+    if raw == "":
+        return True
+    return raw not in _DROP_PARAMS_FALSE
+
+
+def configure_runner_litellm() -> bool:
+    """Set ``litellm.drop_params`` before the OpenHands SDK calls LiteLLM."""
+    import litellm
+
+    enabled = llm_drop_params_enabled()
+    litellm.drop_params = enabled
+    return enabled
+
+
 def litellm_model(model: str, base_url: str | None) -> str:
     """Name the model the way LiteLLM routes it.
 
@@ -128,6 +152,7 @@ def _run(
             base_url=base_url,
             api_key=SecretStr(api_key) if api_key else None,
             usage_id=usage_id,
+            drop_params=configure_runner_litellm(),
         )
 
     llm = make_llm("deepfix-optimizer")

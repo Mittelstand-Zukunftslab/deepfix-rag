@@ -69,6 +69,7 @@ from deepfix_rag.config.schema import (
 from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.data import DataLoader, build_node_parser
 from deepfix_rag.index_manifest import write_index_manifest
+from deepfix_rag.llm import litellm_additional_kwargs
 
 
 class RetrieverEvent(Event):
@@ -182,6 +183,7 @@ class RAGWorkflow(Workflow):
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
             system_prompt=self.config.generation.system_prompt,
+            additional_kwargs=litellm_additional_kwargs(),
         )
 
     def _get_reranker(self) -> CohereRerank | None:

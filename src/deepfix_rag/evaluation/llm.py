@@ -3,6 +3,8 @@ import asyncio
 from deepeval.models.base_model import DeepEvalBaseLLM
 import litellm
 
+from deepfix_rag.llm import configure_litellm_drop_params
+
 
 class ProxyJudgeLLM(DeepEvalBaseLLM):
     def __init__(
@@ -23,11 +25,13 @@ class ProxyJudgeLLM(DeepEvalBaseLLM):
         self.provider = provider
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.drop_params = configure_litellm_drop_params()
 
     def load_model(self):
         return self.model
 
     def generate(self, prompt: str, schema=None) -> str:
+        self.drop_params = configure_litellm_drop_params()
         r = litellm.completion(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
@@ -36,6 +40,7 @@ class ProxyJudgeLLM(DeepEvalBaseLLM):
             custom_llm_provider=self.provider,
             timeout=self.timeout,
             max_tokens=self.max_tokens,
+            drop_params=self.drop_params,
         )
         val = r.choices[0].message.content or ""
         val = val.strip()

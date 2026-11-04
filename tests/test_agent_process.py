@@ -84,6 +84,7 @@ def test_child_env_keeps_openrouter_and_retrieval_settings_and_drops_secrets(
         "DEEPFIX_LLM_API_KEY": "openrouter-key",
         "DEEPFIX_LLM_BASE_URL": "https://openrouter.ai/api/v1",
         "DEEPFIX_LLM_MODEL_NAME": "openai/gpt-6-luna-pro",
+        "DEEPFIX_LLM_DROP_PARAMS": "1",
         "LLM_API_KEY": "product-key",
         "OPENROUTER_API_KEY": "stale-key",
         "MLFLOW_TRACKING_URI": "http://127.0.0.1:5000",
@@ -107,6 +108,7 @@ def test_child_env_keeps_openrouter_and_retrieval_settings_and_drops_secrets(
     env = build_child_env(source, api_bin)
     assert env["PATH"].startswith(str(api_bin) + os.pathsep)
     assert env["DEEPFIX_LLM_API_KEY"] == "openrouter-key"
+    assert env["DEEPFIX_LLM_DROP_PARAMS"] == "1"
     assert "OPENROUTER_API_KEY" not in env
     assert env["NO_COLOR"] == "1"
     assert "LLM_API_KEY" not in env
@@ -199,6 +201,23 @@ def test_runner_system_message_states_the_step_budget() -> None:
     assert "timeout" in message and "30 seconds" in message
     assert "finish action" in message
     assert "7 agent steps" in _runner_module().system_message("run1", 7)
+
+
+@pytest.mark.unit
+def test_runner_drops_unsupported_litellm_params_by_default() -> None:
+    runner = _runner_module()
+    previous = os.environ.pop("DEEPFIX_LLM_DROP_PARAMS", None)
+    try:
+        assert runner.llm_drop_params_enabled() is True
+        os.environ["DEEPFIX_LLM_DROP_PARAMS"] = "0"
+        assert runner.llm_drop_params_enabled() is False
+        os.environ["DEEPFIX_LLM_DROP_PARAMS"] = "1"
+        assert runner.llm_drop_params_enabled() is True
+    finally:
+        if previous is None:
+            os.environ.pop("DEEPFIX_LLM_DROP_PARAMS", None)
+        else:
+            os.environ["DEEPFIX_LLM_DROP_PARAMS"] = previous
 
 
 @pytest.mark.unit

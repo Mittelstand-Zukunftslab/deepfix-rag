@@ -111,6 +111,8 @@ DEEPFIX_LLM_TEMPERATURE=0.7
 DEEPFIX_LLM_MAX_TOKENS=8000
 DEEPFIX_LLM_CACHE=1
 DEEPFIX_LLM_TRACK_USAGE=1
+# LiteLLM reads this flag. Claude Haiku 5.5 allows only temperature=1.
+LITELLM_DROP_PARAMS=1
 
 DEEPFIX_SEARCH_PROVIDER="duckduckgo"
 
@@ -188,6 +190,8 @@ LLM_BASE_URL=https://api.aisc.hpi.de/v1
 LLM_API_KEY=
 LLM_MODEL=qwen3-8-27b
 LLM_JUDGE_MODEL=gpt-oss-120b
+# Drop sampling params the provider rejects (Claude Haiku 5.5 allows only temperature=1).
+DEEPFIX_LLM_DROP_PARAMS=1
 
 # S3-compatible storage
 S3_ENDPOINT_URL=https://hpi-s3.mittelstand-zukunftslab.de
