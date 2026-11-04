@@ -17,6 +17,7 @@ import yaml
 from deepfix_rag.cli.eval import metric_delta
 from deepfix_rag.config.mutator import compute_config_diff
 from deepfix_rag.config.schema import RAGConfig, RetrievalBackend
+from deepfix_rag.config.settings import settings
 from deepfix_rag.data import QARecord, qa_record_from_row
 from deepfix_rag.evaluation.runner import EvaluationSummary, run_evaluation
 from deepfix_rag.feedback import build_questions
@@ -344,7 +345,13 @@ def _rejection(
     minimum: float,
     wins: int,
     losses: int,
+    secondary_tolerance: float | None = None,
 ) -> str | None:
+    tolerance = (
+        settings.OPTIMIZATION_SECONDARY_TOLERANCE
+        if secondary_tolerance is None
+        else secondary_tolerance
+    )
     if metric not in dev_delta:
         return f"The dev set did not score {metric}."
     if dev_delta[metric] < minimum:
@@ -352,14 +359,16 @@ def _rejection(
     for key, value in dev_delta.items():
         if key == metric or key not in _HIGHER_IS_BETTER:
             continue
-        if value < 0:
+        if value < tolerance:
             return f"The dev metric {key} fell by {abs(value):.3f}."
     if metric not in holdout_delta:
         return f"The holdout set did not score {metric}."
     if holdout_delta[metric] < 0:
         return f"The holdout {metric} delta is {holdout_delta[metric]:.3f}."
-    if wins < losses:
-        return "The candidate lost more holdout questions than it won."
+    if wins + losses == 0:
+        return "The candidate changed no holdout questions."
+    if wins <= losses:
+        return "The candidate did not win more holdout questions than it lost."
     return None
 
 

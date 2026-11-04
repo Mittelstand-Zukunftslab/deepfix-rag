@@ -8,6 +8,7 @@ When the child names a candidate, API code scores it and may promote it.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -170,6 +171,11 @@ def optimization_prompt(
         f"Recommend a candidate only when its primary metric gains at least "
         f"{min_primary_delta:g} over the champion on the full dev set and no other "
         "retrieval metric drops. "
+        f"The ledger of earlier rounds is {workspace / 'runs' / 'ledger.jsonl'} (read only). "
+        "Skip a hypothesis whose skill and changed keys are already in that ledger for "
+        "this champion. "
+        f"After each command, write {run_dir / 'state.json'} as JSON with the keys "
+        "step, skill, commands, and status. "
         "Test one hypothesis in this run. If it does not clear the gate, do not try "
         "another: write result.json with candidate_config_path null and finish. "
         f"Finish by writing {run_dir / 'result.json'} as JSON with the keys "
@@ -319,6 +325,33 @@ def get_run(db_path: Path, run_id: str) -> OptimizationRun:
 
 
 def finish_run(
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    *,
+    runner_error: str | None,
+    timed_out: bool,
+    coordinator: IndexCoordinator | None = None,
+    min_primary_delta: float = 0.025,
+    private_paths: tuple[str, ...] = (),
+) -> None:
+    """Apply result.json, then append one ledger row for the round."""
+    try:
+        _finish_run_impl(
+            db_path,
+            workspace,
+            run_id,
+            runner_error=runner_error,
+            timed_out=timed_out,
+            coordinator=coordinator,
+            min_primary_delta=min_primary_delta,
+            private_paths=private_paths,
+        )
+    finally:
+        _record_ledger(db_path, workspace, run_id)
+
+
+def _finish_run_impl(
     db_path: Path,
     workspace: Path,
     run_id: str,
@@ -532,6 +565,44 @@ def _read_result(path: Path) -> AgentResultFile | None:
         return AgentResultFile.model_validate(payload)
     except (OSError, json.JSONDecodeError, ValidationError):
         return None
+
+
+def _record_ledger(db_path: Path, workspace: Path, run_id: str) -> None:
+    """Append one round to runs/ledger.jsonl. Holdout numbers are not written."""
+    try:
+        stored = get_run(db_path, run_id)
+    except KeyError:
+        return
+    if stored.status == "running":
+        return
+    state_path = workspace / "runs" / run_id / "state.json"
+    state: dict = {}
+    if state_path.is_file():
+        try:
+            loaded = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            state = loaded
+    champion = workspace / "configs" / "champion.yaml"
+    champion_hash = (
+        hashlib.sha256(champion.read_bytes()).hexdigest() if champion.is_file() else None
+    )
+    keys = state.get("keys") if isinstance(state.get("keys"), list) else []
+    row = {
+        "run_id": run_id,
+        "skill": state.get("skill"),
+        "keys": keys,
+        "dev_delta": stored.dev_delta,
+        "decision": stored.status,
+        "champion_sha256": champion_hash,
+        "primary_metric": stored.primary_metric,
+        "snapshot_id": stored.snapshot_id,
+    }
+    path = workspace / "runs" / "ledger.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, default=str) + "\n")
 
 
 def _set_pid(db_path: Path, run_id: str, pid: int) -> None:

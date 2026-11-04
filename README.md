@@ -6,7 +6,7 @@
 [![Evaluation: DeepEval](https://img.shields.io/badge/Evaluation-DeepEval-purple.svg)](https://github.com/confident-ai/deepeval)
 [![Tracking: MLflow](https://img.shields.io/badge/Tracking-MLflow-blue.svg)](https://mlflow.org/)
 **DeepFix** is an agentic framework engineered for autonomous diagnosis and hyperparameter optimization of Retrieval-Augmented Generation (RAG) pipelines. It decouples deterministic RAG system operations from agentic reasoning:
-1. **Deterministic Python CLI (`deepfix`)**: Scriptable, atomic subcommands (`dataset`, `index`, `eval`, `mutate-config`, `diff-config`, `run-diagnostic`, `export`) that execute pipeline tasks with structured JSON outputs and predictable exit codes.
+1. **Deterministic Python CLI (`deepfix`)**: Scriptable, atomic subcommands (`dataset`, `index`, `eval`, `gate`, `mutate-config`, `diff-config`, `schema`, `run-diagnostic`, `export`) that execute pipeline tasks with structured JSON outputs and predictable exit codes.
 2. **Agent-Agnostic Skill Plugin**: Modular failure-remediation skills (`SKILL.md`) that guide long-running AI agents (such as Hermes, Claude, or Antigravity) to identify root causes and run remediation cycles autonomously.
 3. **MLflow Experiment Lineage**: Automatic tracking of config mutations, benchmark metrics, prompt artifacts, and evaluation deltas across optimization runs.
 Developed by **Mittelstand Zukunftslab & AI Service Center (AISC) — HPI**.
@@ -45,8 +45,10 @@ DeepFix separates the optimization loop into two clear layers:
 | :--- | :---: | :--- |
 | `deepfix dataset load` | `[Ready]` | Ingests benchmark datasets (Bundestag, Legal RAG Bench, local files) into standardized JSON Lines format. |
 | `deepfix index` | `[Ready]` | Builds vector & lexical tables in LanceDB with Octen-8B / Qwen embeddings. |
-| `deepfix eval` | `[Ready]` | Runs DeepEval scoring; supports `--compare` for automatic delta metrics. |
-| `deepfix mutate-config` | `[Ready]` | Validates dot-notation parameter overrides against Pydantic schema and outputs updated YAML. |
+| `deepfix eval` | `[Ready]` | Runs DeepEval scoring; supports `--compare` for automatic delta metrics and `--no-mlflow` for offline runs. |
+| `deepfix gate` | `[Ready]` | Decides keep or revert from paired per-query compare results and a seeded bootstrap interval. |
+| `deepfix schema` | `[Ready]` | Prints the RAGConfig schema, including the index-time keys. |
+| `deepfix mutate-config` | `[Ready]` | Validates dot-notation parameter overrides against Pydantic schema and outputs updated YAML. Unknown keys exit 1. |
 | `deepfix diff-config` | `[Ready]` | Computes structural and hyperparameter diffs between two YAML configurations. |
 | `deepfix hpo` | `[Ready]` | Executes multi-paradigm hyperparameter optimization (dense, hybrid, graph) using Optuna. |
 | `deepfix run-diagnostic` | `[In Progress]` | Categorizes failure modes (retrieval vs. ranking vs. grounding vs. entity). |
@@ -68,8 +70,8 @@ DeepFix targets complex, domain-specific legal and parliamentary RAG benchmarks 
 ### Setup
 ```bash
 # 1. Clone repository
-git clone https://github.com/hpi-dhc/pilotproject-deepfix.git
-cd pilotproject-deepfix
+git clone https://github.com/Mittelstand-Zukunftslab/deepfix-rag.git
+cd deepfix-rag
 # 2. Create environment & install dependencies with uv
 uv sync
 # 3. Activate the virtual environment
@@ -294,19 +296,19 @@ deepfix eval \
   --index-dir data/indexes/bundestag_train \
   --limit 20
 ```
-Output includes `candidate`, `baseline`, and `delta` for:
-- `faithfulness_avg`
-- `contextual_precision_avg`
-- `answer_correctness_avg`
-- `deflection_rate`
+Output includes `candidate`, `baseline`, and `delta`. Metric keys are unsuffixed names such as `faithfulness`, `context_precision`, `context_recall`, `answer_relevancy`, `contextual_relevancy`, `ndcg`, `recall`, `precision`, and `deflection_rate`. Compare runs also include `effective_backend`, `configured_backend`, `judge_failures`, and per-query `questions`. Decide keep or revert with:
+
+```bash
+deepfix gate --compare compare.json --primary ndcg --json
+```
 ### 6. Register Prompts in MLflow
 Register system and query prompts to MLflow:
 ```bash
-python register_prompt.py
+python scripts/register_prompt.py
 ```
 ---
 ## CLI Command Reference
-All subcommands support `--json` for headless automation by LLM agents.
+All subcommands support `--json` for headless automation by LLM agents. `deepfix export` is not implemented and always exits 2.
 ### `deepfix dataset load`
 Download and format benchmark datasets into canonical JSON Lines format.
 ```bash
@@ -315,12 +317,12 @@ deepfix dataset load --name <preset_or_hf_repo> [--split train] [--limit <N>] [-
 ### `deepfix index`
 Build dense, sparse, or hybrid LanceDB indexes from a corpus.
 ```bash
-deepfix index --dataset <path_to_corpus> --config <config.yaml> --index-dir <dir> [--force] [--json]
+deepfix index --dataset <path_to_corpus> --config <config.yaml> --index-dir <dir> [--force] [--if-changed] [--json]
 ```
 ### `deepfix eval`
 Run DeepEval benchmark evaluation on a QA dataset.
 ```bash
-deepfix eval --dataset <path_to_qa> --config <config.yaml> [--index-dir <dir>] [--compare <base.yaml>] [--limit <N>] [--json]
+deepfix eval --dataset <path_to_qa> --config <config.yaml> [--index-dir <dir>] [--compare <base.yaml>] [--limit <N>] [--seed <N>] [--no-mlflow] [--json]
 ```
 ### `deepfix mutate-config`
 Validate and mutate RAG pipeline hyperparameters using dot-notation keys.
@@ -332,10 +334,20 @@ Structural diff between two RAG YAML configurations.
 ```bash
 deepfix diff-config <config_a.yaml> <config_b.yaml> [--json]
 ```
-### `deepfix run-diagnostic` `[In Progress]`
-Classify low-scoring queries into specific failure modes.
+### `deepfix gate`
+Decide keep or revert from an `eval --compare` JSON file. The threshold is `OPTIMIZATION_MIN_PRIMARY_DELTA` (default 0.025), not a hardcoded constant.
 ```bash
-deepfix run-diagnostic --dataset <path> --type <retrieval|entity|ranking|grounding> [--threshold 0.7] [--json]
+deepfix gate --compare <compare.json> --primary <ndcg|recall|precision> [--json]
+```
+### `deepfix schema`
+Print fields, bounds, enums, and the index-time key list.
+```bash
+deepfix schema --json
+```
+### `deepfix run-diagnostic` `[In Progress]`
+Classify low-scoring queries into specific failure modes. There is no `--type` or `--threshold` flag.
+```bash
+deepfix run-diagnostic --dataset <path> --config <config.yaml> [--server-url <url>] [--limit <N>] [--json]
 ```
 ### `deepfix export` `[In Progress]`
 Export the best candidate configuration bundle and metadata.
@@ -353,45 +365,47 @@ Configurations are validated against Pydantic models in `src/deepfix_rag/config/
 ```yaml
 version: "1.0"
 chunking:
-  strategy: recursive        # recursive | fixed | semantic
-  size: 512                 # 64 to 4096
-  overlap: 64
+  strategy: sentence        # sentence | recursive | fixed | semantic | hierarchical
+  size: 1024                # 64 to 16000
+  overlap: 64               # must be < size for sentence and fixed
 embedding:
-  model: octen-embedding-8b # octen-embedding-8b | Qwen/Qwen3-Embedding-4B
-  provider: aisc            # aisc | octen | hpi | openrouter
-  batch_size: 32
+  batch_size: 32            # the model id is EMBEDDING_MODEL in the environment, not a config key
 retrieval:
-  backend: hybrid           # hybrid | dense | pyterrier | bm25
+  backend: hybrid           # hybrid | dense | bm25 | graph | mixed
   top_k: 10                 # 1 to 100
-  dense_weight: 0.5         # 0.0 to 1.0 (dense component weight)
-  bm25_weight: 0.5          # 0.0 to 1.0 (lexical component weight)
+  fusion_mode: reciprocal_rerank  # reciprocal_rerank | relative_score | dist_based_score | simple
+  dense_weight: 0.5         # 0.0 to 1.0
+  bm25_weight: 0.5          # 0.0 to 1.0
+  language: german          # a PyStemmer algorithm name
+  query_expansion_num: 1    # 0 to 8
 rerank:
   enabled: false
-  model: rerank-english-v3.0
-  top_n: 5
+  top_n: 5                  # when enabled, top_n <= retrieval.top_k and eval.cutoff_k <= top_n
 generation:
-  model: Qwen/Qwen2.5-32B-Instruct
-  provider: hpi
   temperature: 0.0
-  max_tokens: 1024
+  max_tokens: 4096
+eval:
+  cutoff_k: 5               # nDCG@k, R@k, and P@k. Independent of retrieval.top_k
 ```
+
+`embedding.model`, `rerank.model`, and `generation.model` are not config keys. `deepfix mutate-config` rejects them. The embedding model, reranker, and generation model come from `EMBEDDING_MODEL`, `COHERE_MODEL`, and `LLM_MODEL`. Run `deepfix schema --json` for the live field list and `index_time_keys`.
 ---
 ## Autonomous Optimization Workflow (Hermes Agent)
 In autonomous mode, an LLM agent executes multi-cycle optimization loops guided by the DeepFix skill plugin:
 1. **Observe**: Agent runs `deepfix run-diagnostic` and `deepfix eval` on the `dev` split.
-2. **Match Skill**: Agent matches identified failures to modular skill instructions:
-   - `skills/chunking-tuning/SKILL.md` (addressing context fragmentation)
-   - `skills/rerank-calibration/SKILL.md` (calibrating cross-encoder thresholds)
-   - `skills/query-rewriting/SKILL.md` (resolving vocabulary mismatch and multi-turn context)
-   - `skills/deflection-and-refusal/SKILL.md` (tuning confidence cutoffs for unanswerable queries)
-   - `skills/embedding-model-selection/SKILL.md` (dense vs. hybrid trade-offs)
+2. **Match Skill**: Agent matches identified failures to modular skill instructions under `.agents/skills/`:
+   - `.agents/skills/chunking-tuning/SKILL.md` (addressing context fragmentation)
+   - `.agents/skills/rerank-calibration/SKILL.md` (raising `retrieval.top_k` and turning rerank on)
+   - `.agents/skills/hybrid-fusion-tuning/SKILL.md` (fusion mode and weights; alias `query-rewriting`)
+   - `.agents/skills/deflection-and-refusal/SKILL.md` (manual only; not used by the optimization loop)
+   - `.agents/skills/retrieval-backend-selection/SKILL.md` (dense vs. bm25 vs. hybrid; alias `embedding-selection`)
 3. **Act**: Agent mutates configuration (`deepfix mutate-config`), rebuilds index (`deepfix index` if needed), and re-evaluates (`deepfix eval --compare`).
 4. **Decide**: If metrics improve, the mutation is adopted as the new baseline; otherwise, it is reverted.
 5. **Log**: All runs, parameters, and evaluation deltas are logged to MLflow.
 ---
 ## Project Organization
 ```
-pilotproject-deepfix/
+deepfix-rag/
 ├── configs/                       <- RAG configuration YAML templates
 │   ├── default.yaml               <- Default hybrid baseline
 │   ├── octen.yaml                 <- Octen-8B embedding configuration
@@ -440,7 +454,7 @@ pilotproject-deepfix/
 ├── candidate_manifest.json        <- Example MLflow candidate artifact
 ├── Makefile                       <- Development and environment convenience tasks
 ├── pyproject.toml                 <- Package dependencies, Ruff & pytest configuration
-├── register_prompt.py             <- Script to register RAG prompts with MLflow
+├── scripts/register_prompt.py     <- Script to register RAG prompts with MLflow
 └── README.md                      <- Project documentation (this file)
 ```
 ---

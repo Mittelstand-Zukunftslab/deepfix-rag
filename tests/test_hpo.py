@@ -20,6 +20,7 @@ from deepfix_rag.main import app
 
 
 @pytest.mark.integration
+@pytest.mark.network
 def test_hyperparameter_opt_retrieval_only_run(
     populated_sample_index_dir: Path,
     sample_qa_path: Path,
@@ -97,6 +98,7 @@ def test_cli_hpo_missing_config_fails(cli_runner: CliRunner, tmp_path: Path):
 
 
 @pytest.mark.cli
+@pytest.mark.network
 def test_cli_hpo_json_execution(
     cli_runner: CliRunner,
     populated_sample_index_dir: Path,
@@ -145,6 +147,7 @@ def test_cli_hpo_json_execution(
 
 
 @pytest.mark.cli
+@pytest.mark.network
 def test_cli_hpo_declarative_execution(
     cli_runner: CliRunner,
     populated_sample_index_dir: Path,

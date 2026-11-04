@@ -31,8 +31,8 @@ LOOP_SKILL = "optimization-loop"
 ROUTED_SKILLS = (
     "chunking-tuning",
     "rerank-calibration",
-    "embedding-selection",
-    "query-rewriting",
+    "retrieval-backend-selection",
+    "hybrid-fusion-tuning",
 )
 UNROUTED_SKILLS = (
     "deflection-and-refusal",
@@ -206,7 +206,7 @@ def test_routed_skills_stay_within_the_gate() -> None:
         backends = set(re.findall(r"retrieval\.backend=([a-z0-9_]+)", text))
         assert backends <= allowed, f"{name} sets backends {backends - allowed}"
         assert "Promote" not in text, f"{name} tells the agent to promote"
-        assert "EMBEDDING_MODEL" not in text, f"{name} offers an unusable embedding lever"
+        assert "EMBEDDING_MODEL=" not in text, f"{name} offers an unusable embedding lever"
 
 
 def test_loop_skill_states_the_result_contract_and_the_gate() -> None:
@@ -251,12 +251,27 @@ def test_unrouted_skills_say_they_are_not_for_api_runs(name: str) -> None:
 def test_index_time_keys_are_listed_in_every_pathology_skill() -> None:
     """Each pathology skill names the keys that `index_time_signature` treats as index-time."""
     signature = index_time_signature(RAGConfig())
-    expected = ["`chunking.*`" if key == "chunking" else f"`retrieval.{key}`" for key in signature]
+    mentions = {
+        "chunking": "`chunking.*`",
+        "embedding_model": "`EMBEDDING_MODEL`",
+        "corpus_sha256": "`corpus_sha256`",
+    }
+    expected = [mentions.get(key, f"`retrieval.{key}`") for key in signature]
     for name in ROUTED_SKILLS:
         text = _read(name)
         missing = [key for key in expected if key not in text]
         assert not missing, f"{name} does not list index-time keys {missing}"
-    assert set(signature) == {"chunking", "backend", "vector_store", "bit_width"}
+    assert set(signature) == {
+        "chunking",
+        "backend",
+        "vector_store",
+        "bit_width",
+        "embedding_model",
+        "corpus_sha256",
+        "graph_store",
+        "graph_extraction_schema",
+        "graph_max_paths_per_chunk",
+    }
 
 
 def test_language_values_are_real_stemmers() -> None:
@@ -265,7 +280,7 @@ def test_language_values_are_real_stemmers() -> None:
     for name in OPTIMIZATION_SKILLS:
         values = set(re.findall(r"retrieval\.language=([a-z]+)", _read(name)))
         assert values <= algorithms, f"{name} sets unknown languages {values - algorithms}"
-    listed = set(re.findall(r"`([a-z]+)`", _read("embedding-selection")))
+    listed = set(re.findall(r"`([a-z]+)`", _read("retrieval-backend-selection")))
     assert algorithms <= listed, f"missing stemmers: {algorithms - listed}"
 
 

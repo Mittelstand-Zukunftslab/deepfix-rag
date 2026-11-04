@@ -30,6 +30,7 @@ from deepfix_rag.documents import (
     init_documents,
     set_document_status,
 )
+from deepfix_rag.index_manifest import index_time_signature
 from deepfix_rag.pipeline import RAGWorkflow
 from deepfix_rag.service import QueryService
 from deepfix_rag.storage import connect
@@ -89,16 +90,6 @@ class IndexSnapshot:
     config_path: str
     serving_build_id: str | None
     error: str | None
-
-
-def index_time_signature(config: RAGConfig) -> dict[str, object]:
-    """Return the config fields that require a new index."""
-    return {
-        "chunking": config.chunking.model_dump(mode="json"),
-        "backend": config.retrieval.backend.value,
-        "vector_store": config.retrieval.vector_store.value,
-        "bit_width": config.retrieval.bit_width,
-    }
 
 
 def bind_locations(config: RAGConfig, workspace: Path, index_dir: Path) -> RAGConfig:
