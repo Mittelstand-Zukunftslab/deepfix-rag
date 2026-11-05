@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     OPTIMIZATION_MIN_PRIMARY_DELTA: float = 0.025
     OPTIMIZATION_SECONDARY_TOLERANCE: float = -0.01
     OPTIMIZATION_RUN_TIMEOUT_HOURS: float = 3
+    # No non-keepalive Hermes event and no fresh output/heartbeat.json for this
+    # many minutes fails the row. SSE ": keepalive" comments do not count.
+    OPTIMIZATION_HEARTBEAT_STALL_MINUTES: float = 5
     OPTIMIZATION_GOAL_ROUNDS: int = 3
 
     @property

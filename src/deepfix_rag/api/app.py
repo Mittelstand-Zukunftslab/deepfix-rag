@@ -25,7 +25,7 @@ from deepfix_rag.config.settings import settings as default_settings
 from deepfix_rag.documents import MAX_UPLOAD_BYTES, init_documents, prepare_workspace
 from deepfix_rag.feedback import FeedbackWorker
 from deepfix_rag.indexing import IndexCoordinator
-from deepfix_rag.optimization import fail_interrupted, init_optimization, settings_from
+from deepfix_rag.optimization import init_optimization, recover_running_runs, settings_from
 from deepfix_rag.optimization_schedule import OptimizationScheduler
 from deepfix_rag.storage import drop_account_tables
 
@@ -92,7 +92,6 @@ def create_app(
         drop_account_tables(app.state.settings.product_db_path)
         init_documents(app.state.settings.product_db_path)
         init_optimization(app.state.settings.product_db_path)
-        fail_interrupted(app.state.settings.product_db_path)
         prepare_workspace(app.state.settings.workspace_dir)
         coordinator = IndexCoordinator(
             app.state.settings.workspace_dir,
@@ -102,6 +101,12 @@ def create_app(
         )
         app.state.index = coordinator
         coordinator.startup()
+        recover_running_runs(
+            app.state.settings.product_db_path,
+            app.state.settings.workspace_dir,
+            settings_from(app.state.settings),
+            coordinator=coordinator,
+        )
         worker = FeedbackWorker(app.state.settings.product_db_path)
         app.state.feedback = worker
         worker.start()

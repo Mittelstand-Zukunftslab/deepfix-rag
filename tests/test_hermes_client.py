@@ -45,6 +45,10 @@ class Call:
     authorization_present: bool = False
 
 
+class _ReuseHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
 class HermesApi:
     """Tiny Hermes runs API. Scripts, when present, answer before the default."""
 
@@ -59,9 +63,10 @@ class HermesApi:
         self._lock = threading.Lock()
         self.health_ok = True
         self.on_accept: Callable[[str, str], None] | None = None
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        self._httpd.api = self  # type: ignore[attr-defined]
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self.events_body: bytes | None = None
+        self._host = "127.0.0.1"
+        self._port: int | None = None
+        self._bind()
 
     def __enter__(self) -> HermesApi:
         self._thread.start()
@@ -69,9 +74,30 @@ class HermesApi:
 
     def __exit__(self, *args: object) -> None:
         self.released.set()
-        self._httpd.shutdown()
-        self._httpd.server_close()
-        self._thread.join(timeout=5)
+        if self._thread.is_alive():
+            self._httpd.shutdown()
+            self._httpd.server_close()
+            self._thread.join(timeout=5)
+
+    def suspend(self) -> None:
+        """Stop listening so new connections are refused. Stored runs stay put."""
+        if self._thread.is_alive():
+            self._httpd.shutdown()
+            self._httpd.server_close()
+            self._thread.join(timeout=5)
+
+    def resume(self) -> None:
+        """Listen again on the same port after ``suspend``."""
+        self._bind()
+        self._thread.start()
+
+    def _bind(self) -> None:
+        port = 0 if self._port is None else self._port
+        self._httpd = _ReuseHTTPServer((self._host, port), _Handler)
+        self._httpd.api = self  # type: ignore[attr-defined]
+        if self._port is None:
+            self._port = int(self._httpd.server_address[1])
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
 
     @property
     def base_url(self) -> str:
@@ -103,11 +129,15 @@ class HermesApi:
             _send_json(handler, 404, _error("not_found", "not found"))
             return
         if method == "GET" and action == "events":
-            _send_sse(
-                handler, _stream(tool_started=True, keepalive=True, terminal="run.completed")
-            )
+            payload = self.events_body
+            if payload is None:
+                payload = _stream(tool_started=True, keepalive=True, terminal="run.completed")
+            _send_sse(handler, payload)
             return
         if method == "POST" and action == "stop":
+            run = self.runs.get(run_id)
+            if run is not None and run.get("status") not in {"completed", "failed", "cancelled"}:
+                run["status"] = "stopping"
             _send_json(handler, 200, {"status": "stopping", "run_id": run_id})
             return
         if method == "POST" and action == "resolve-unknown":

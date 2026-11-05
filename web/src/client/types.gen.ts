@@ -1114,6 +1114,48 @@ export type StartOptimizationRunResponses = {
 
 export type StartOptimizationRunResponse = StartOptimizationRunResponses[keyof StartOptimizationRunResponses];
 
+export type CancelOptimizationRunData = {
+    body?: never;
+    path: {
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/admin/optimization/runs/{run_id}/cancel';
+};
+
+export type CancelOptimizationRunErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * The request conflicts with the current state.
+     */
+    409: ErrorResponse;
+};
+
+export type CancelOptimizationRunError = CancelOptimizationRunErrors[keyof CancelOptimizationRunErrors];
+
+export type CancelOptimizationRunResponses = {
+    /**
+     * Successful Response
+     */
+    200: OptimizationRunResponse;
+};
+
+export type CancelOptimizationRunResponse = CancelOptimizationRunResponses[keyof CancelOptimizationRunResponses];
+
 export type AskQuestionData = {
     body: QueryRequest;
     path?: never;

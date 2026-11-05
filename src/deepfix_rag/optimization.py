@@ -3,12 +3,12 @@
 The same function starts a scheduled run and a manual one. It exports a feedback
 snapshot, skips when too little is labeled, and otherwise launches one agent.
 ``OPTIMIZATION_AGENT=openhands`` (the default) starts the OpenHands child.
-``hermes`` stages the run bundle, submits it with ``HermesClient``, and copies
-``output/result.json`` back before ``finish_run``. Holdout scoring and promotion
-stay in this process either way.
+``hermes`` stages the run bundle, submits it with ``HermesClient``, and follows
+``GET /v1/runs/{id}/events`` plus a status poll. ``output/result.json`` is copied
+back before ``finish_run``. Holdout scoring and promotion stay in this process.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -27,7 +27,6 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from deepfix_rag.agent_process import (
     AGENT_UNAVAILABLE_MESSAGE,
-    AgentRunResult,
     AgentUnavailable,
     interpreter_imports_agent,
     run_agent_job,
@@ -38,13 +37,25 @@ from deepfix_rag.feedback import export_feedback
 from deepfix_rag.hermes_client import (
     HermesClient,
     HermesClientError,
+    HermesEvent,
     HermesRun,
+    HermesStreamError,
     hermes_agent_available,
 )
-from deepfix_rag.hermes_sync import bucket_from_env, download_result, store_from_env
+from deepfix_rag.hermes_sync import (
+    bucket_from_env,
+    download_result,
+    heartbeat_timestamp,
+    store_from_env,
+)
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.promotion import PromotionDecision, apply_candidate
-from deepfix_rag.run_bundle import RunBundleError, stage_run_bundle
+from deepfix_rag.run_bundle import (
+    ObjectStore,
+    RunBundleError,
+    stage_run_bundle,
+    validate_run_id,
+)
 from deepfix_rag.storage import connect
 
 
@@ -58,7 +69,13 @@ class OptimizationAgent(StrEnum):
 RunStatus = Literal["running", "skipped", "rejected", "promoted", "succeeded", "failed"]
 RunTrigger = Literal["cron", "manual"]
 INTERRUPTED_REASON = "Interrupted: backend restarted while the run was in progress"
+HERMES_INTERRUPTED_REASON = "Interrupted: Hermes restarted while the run was in progress"
+CANCELLED_REASON = "Cancelled"
 HERMES_STATUS_POLL_SECONDS = 15.0
+HERMES_STOP_WAIT_SECONDS = 120.0
+HEARTBEAT_STALL_MINUTES = 5.0
+STEP_PREVIEW_LIMIT = 500
+_STEP_LOG_DIRNAME = "optimization-logs"
 HERMES_UNAVAILABLE_MESSAGE = "Hermes is not set up on this server, so a run cannot start."
 OPENHANDS_STATUS_MESSAGE = (
     "OpenHands is not set up on this server, so a run cannot start. "
@@ -85,6 +102,13 @@ class RunInProgress(Exception):
 
     def __init__(self) -> None:
         super().__init__("A run is already in progress.")
+
+
+class RunNotRunning(Exception):
+    """Cancel was asked for a row that is not running."""
+
+    def __init__(self) -> None:
+        super().__init__("This run is not in progress.")
 
 
 class AgentResultFile(BaseModel):
@@ -115,6 +139,7 @@ class OptimizationRun:
     mlflow_run_id: str | None
     started_at: str
     ended_at: str | None
+    hermes_run_id: str | None = None
     dev_delta: dict[str, float] | None = None
     holdout_delta: dict[str, float] | None = None
     holdout_wins: int | None = None
@@ -143,6 +168,9 @@ class OptimizationSettings:
     hermes_base_url: str = "http://hermes:8642"
     hermes_api_key: str | None = None
     hermes_status_poll_seconds: float = HERMES_STATUS_POLL_SECONDS
+    heartbeat_stall_seconds: float = HEARTBEAT_STALL_MINUTES * 60
+    hermes_stop_wait_seconds: float = HERMES_STOP_WAIT_SECONDS
+    step_log_dir: Path | None = None
 
 
 def settings_from(
@@ -170,6 +198,8 @@ def settings_from(
         agent=OptimizationAgent(settings.OPTIMIZATION_AGENT),
         hermes_base_url=settings.HERMES_BASE_URL.strip().rstrip("/"),
         hermes_api_key=settings.API_SERVER_KEY,
+        heartbeat_stall_seconds=_stall_seconds(settings.OPTIMIZATION_HEARTBEAT_STALL_MINUTES),
+        step_log_dir=Path(settings.PRODUCT_DATA_DIR) / _STEP_LOG_DIRNAME,
     )
 
 
@@ -254,6 +284,7 @@ def init_optimization(db_path: Path) -> None:
                 mlflow_run_id TEXT,
                 summary TEXT,
                 pid INTEGER,
+                hermes_run_id TEXT,
                 started_at TEXT NOT NULL,
                 ended_at TEXT,
                 dev_delta TEXT,
@@ -282,7 +313,11 @@ def start_optimization_run(
     run_id = uuid.uuid4().hex
     started_at = _now()
     # A row left running by a dead thread must not block the next manual or nightly start.
-    fail_stale_runs(db_path, timeout_seconds=options.timeout_seconds)
+    fail_stale_runs(
+        db_path,
+        timeout_seconds=options.timeout_seconds,
+        options=options,
+    )
     with connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         if _running_id(conn) is not None:
@@ -418,6 +453,8 @@ def _finish_run_impl(
     private_paths: tuple[str, ...] = (),
 ) -> None:
     """Apply result.json. A candidate is scored here and is not trusted on its own."""
+    if not _row_is_running(db_path, run_id):
+        return
     if timed_out:
         _finish(db_path, run_id, status="failed", reason=_TIMED_OUT)
         return
@@ -436,6 +473,8 @@ def _finish_run_impl(
             mlflow_run_id=result.mlflow_run_id,
             summary=result.summary,
         )
+        return
+    if not _row_is_running(db_path, run_id):
         return
     stored = get_run(db_path, run_id)
     decision = apply_candidate(
@@ -473,10 +512,13 @@ def fail_stale_runs(
     *,
     timeout_seconds: float,
     now: datetime | None = None,
+    options: OptimizationSettings | None = None,
 ) -> int:
     """Fail ``running`` rows older than the run timeout plus ``STALE_GRACE_SECONDS``.
 
     Questions on those rows stay consumed, the same as any other failed run.
+    OpenHands rows still use the recorded pid. A Hermes row is also asked to stop
+    when the flag is ``hermes``.
     """
     init_optimization(db_path)
     moment = _as_utc(now) if now is not None else datetime.now(timezone.utc)
@@ -484,16 +526,21 @@ def fail_stale_runs(
     with connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT run_id, pid, started_at FROM optimization_runs
+            SELECT run_id, pid, hermes_run_id, started_at FROM optimization_runs
             WHERE status = 'running'
             """
         ).fetchall()
-    stale = [
-        (str(row["run_id"]), _pid(row["pid"]))
-        for row in rows
-        if _older_than(row["started_at"], moment, limit_seconds)
+    stale = [row for row in rows if _older_than(row["started_at"], moment, limit_seconds)]
+    selected = [(str(row["run_id"]), _pid(row["pid"])) for row in stale]
+    failed = _fail_selected(db_path, selected, STALE_REASON)
+    hermes_ids = [
+        (str(row["run_id"]), str(row["hermes_run_id"]))
+        for row in stale
+        if isinstance(row["hermes_run_id"], str) and row["hermes_run_id"]
     ]
-    return _fail_selected(db_path, stale, STALE_REASON)
+    if options is not None and options.agent is OptimizationAgent.HERMES and hermes_ids:
+        _stop_stored(options, hermes_ids)
+    return failed
 
 
 def wait_for_run(run_id: str, timeout: float = 30) -> None:
@@ -507,24 +554,32 @@ def wait_for_run(run_id: str, timeout: float = 30) -> None:
         raise TimeoutError(f"Run {run_id} is still running.")
 
 
+def stall_reason(stall_seconds: float) -> str:
+    """Failure text for a quiet run. The number is the configured window, in minutes."""
+    minutes = stall_seconds / 60
+    if minutes == int(minutes):
+        label = str(int(minutes))
+    else:
+        label = f"{minutes:g}"
+    return f"Stalled: no heartbeat for {label} minutes."
+
+
 def run_hermes_job(
     workspace: Path,
     run_id: str,
     *,
+    db_path: Path,
     dev_path: Path,
     options: OptimizationSettings,
+    coordinator: IndexCoordinator | None = None,
     holdout_queries: tuple[str, ...] = (),
     holdout_query_ids: tuple[str, ...] = (),
-) -> AgentRunResult:
-    """Stage the bundle, submit the run, and copy ``output/result.json`` locally.
+) -> None:
+    """Stage the bundle, submit one Hermes run, and follow it until the row settles.
 
-    The caller passes that file to ``finish_run``. This function does not score
-    holdout and does not promote. Hermes prose is discarded.
-
-    Cancel, the stall window, ``stop_run`` on timeout, event lines, and restart
-    recovery that asks Hermes before failing a row are later work. A poll that
-    passes ``timeout_seconds`` returns ``timed_out`` so the row can finish. It
-    does not call ``stop_run``.
+    ``Idempotency-Key`` is the DeepFix ``run_id``. This function does not score
+    holdout and does not promote. Hermes prose is discarded. ``completed`` copies
+    ``output/result.json`` and calls ``finish_run``.
     """
     env = options.source_env if options.source_env is not None else os.environ
     store = store_from_env(env)
@@ -538,59 +593,105 @@ def run_hermes_job(
         holdout_queries=holdout_queries,
         holdout_query_ids=holdout_query_ids,
     )
-    secret = options.hermes_api_key
-    with HermesClient(options.hermes_base_url, secret or "") as client:
+    if not _row_is_running(db_path, run_id):
+        return
+    secret = options.hermes_api_key or ""
+    started = _started_at(db_path, run_id)
+    with HermesClient(options.hermes_base_url, secret) as client:
         accepted = client.start_run(run_id)
-        deadline = time.monotonic() + options.timeout_seconds
-        current = _poll_hermes(client, accepted.hermes_run_id, deadline, options, run_id)
-        if current is None:
-            return AgentRunResult(final_response=None, error=None, timed_out=True, returncode=None)
-        download_result(
-            store,
-            bucket=bucket,
+        _set_hermes_run_id(db_path, run_id, accepted.hermes_run_id)
+        if not _row_is_running(db_path, run_id):
+            _stop_quietly(client, accepted.hermes_run_id, run_id)
+            return
+        _follow_hermes_run(
+            client,
+            db_path=db_path,
+            workspace=workspace,
             run_id=run_id,
-            destination=workspace / "runs" / run_id / "result.json",
-        )
-        if current.status == "completed":
-            return AgentRunResult(final_response=None, error=None, timed_out=False, returncode=0)
-        reason = current.error or f"The Hermes run ended with status {current.status}."
-        return AgentRunResult(
-            final_response=None,
-            error=_redact(reason, secret),
-            timed_out=False,
-            returncode=1,
+            hermes_run_id=accepted.hermes_run_id,
+            options=options,
+            store=store,
+            bucket=bucket,
+            coordinator=coordinator,
+            deadline=_deadline_from(started, options.timeout_seconds),
         )
 
 
-def _poll_hermes(
-    client: HermesClient,
-    hermes_run_id: str,
-    deadline: float,
+def recover_running_runs(
+    db_path: Path,
+    workspace: Path,
     options: OptimizationSettings,
+    coordinator: IndexCoordinator | None = None,
+) -> None:
+    """Settle rows left ``running`` by a restart.
+
+    OpenHands still fails those rows and signals the recorded pid. Hermes asks
+    about the stored id first. An unreachable Hermes leaves the row ``running``
+    until ``fail_stale_runs``.
+    """
+    if options.agent is not OptimizationAgent.HERMES:
+        fail_interrupted(db_path)
+        return
+    init_optimization(db_path)
+    prepare_workspace(workspace)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT run_id, pid, hermes_run_id, started_at FROM optimization_runs
+            WHERE status = 'running'
+            """
+        ).fetchall()
+    for row in rows:
+        run_id = str(row["run_id"])
+        hermes_run_id = row["hermes_run_id"] if isinstance(row["hermes_run_id"], str) else None
+        if hermes_run_id:
+            _recover_hermes_row(
+                db_path,
+                workspace,
+                run_id,
+                hermes_run_id,
+                started_at=row["started_at"],
+                options=options,
+                coordinator=coordinator,
+            )
+            continue
+        pid = _pid(row["pid"])
+        if pid is not None:
+            _fail_selected(db_path, [(run_id, pid)], INTERRUPTED_REASON)
+            _record_ledger(db_path, workspace, run_id)
+            continue
+        _adopt_unassigned_hermes_run(
+            db_path,
+            workspace,
+            run_id,
+            started_at=row["started_at"],
+            options=options,
+            coordinator=coordinator,
+        )
+
+
+def cancel_optimization_run(
+    db_path: Path,
+    workspace: Path,
     run_id: str,
-) -> HermesRun | None:
-    """Poll until the run leaves the in-progress statuses, or the deadline passes."""
-    while True:
-        if time.monotonic() >= deadline:
-            return None
-        try:
-            current = client.get_run(hermes_run_id)
-        except HermesClientError as exc:
-            LOGGER.warning("optimization run=%s hermes status poll failed: %s", run_id, exc)
-        else:
-            if current.status not in _HERMES_IN_PROGRESS:
-                return current
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return None
-        time.sleep(_poll_delay(options, remaining))
-
-
-def _poll_delay(options: OptimizationSettings, remaining: float) -> float:
-    interval = options.hermes_status_poll_seconds
-    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval <= 0:
-        interval = HERMES_STATUS_POLL_SECONDS
-    return min(float(interval), remaining)
+    options: OptimizationSettings,
+) -> OptimizationRun:
+    """Stop one running row. Hermes rows call ``stop_run``. OpenHands rows kill the child."""
+    init_optimization(db_path)
+    current = get_run(db_path, run_id)
+    if current.status != "running":
+        raise RunNotRunning()
+    _signal_cancel(run_id)
+    hermes_run_id = current.hermes_run_id
+    pid = _read_pid(db_path, run_id)
+    if not _finish(db_path, run_id, status="failed", reason=CANCELLED_REASON):
+        raise RunNotRunning()
+    _record_ledger(db_path, workspace, run_id)
+    LOGGER.warning("Optimization run %s marked failed: %s", run_id, CANCELLED_REASON)
+    if hermes_run_id:
+        _stop_stored(options, [(run_id, hermes_run_id)])
+    _kill_pid(pid)
+    return get_run(db_path, run_id)
 
 
 def _start_hermes_thread(
@@ -606,40 +707,20 @@ def _start_hermes_thread(
 ) -> None:
     def _target() -> None:
         try:
-            outcome = run_hermes_job(
+            run_hermes_job(
                 workspace,
                 run_id,
+                db_path=db_path,
                 dev_path=dev_path,
                 options=options,
+                coordinator=coordinator,
                 holdout_queries=holdout_queries,
                 holdout_query_ids=holdout_query_ids,
             )
         except Exception as exc:
-            _finish(db_path, run_id, status="failed", reason=_hermes_failure(exc, options))
-            return
-        try:
-            finish_run(
-                db_path,
-                workspace,
-                run_id,
-                runner_error=outcome.error,
-                timed_out=outcome.timed_out,
-                coordinator=coordinator,
-                min_primary_delta=options.min_primary_delta,
-                private_paths=options.private_paths,
-            )
-        except Exception as exc:
-            LOGGER.warning(
-                "Optimization run %s failed while finishing (%s)",
-                run_id,
-                type(exc).__name__,
-            )
-            _finish(db_path, run_id, status="failed", reason=_hermes_failure(exc, options))
+            _fail_running(db_path, workspace, run_id, _hermes_failure(exc, options))
 
-    thread = threading.Thread(target=_target, name=f"optimization-{run_id}", daemon=True)
-    with _threads_lock:
-        _threads[run_id] = thread
-    thread.start()
+    _start_registered_thread(run_id, _target)
 
 
 def _hermes_failure(exc: Exception, options: OptimizationSettings) -> str:
@@ -655,6 +736,690 @@ def _redact(text: str, secret: str | None) -> str:
     if secret:
         return text.replace(secret, "[redacted]")
     return text
+
+
+@dataclass
+class _EventProgress:
+    """Stall clock shared by the events reader and the status loop."""
+
+    last_progress: float
+    lock: threading.Lock
+    wake: threading.Event
+    closed: threading.Event
+    stream_done: threading.Event
+
+
+def _follow_hermes_run(
+    client: HermesClient,
+    *,
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    hermes_run_id: str,
+    options: OptimizationSettings,
+    store: ObjectStore,
+    bucket: str,
+    coordinator: IndexCoordinator | None,
+    deadline: float,
+) -> None:
+    """Read events and poll status until the DeepFix row leaves ``running``."""
+    progress = _EventProgress(
+        last_progress=time.monotonic(),
+        lock=threading.Lock(),
+        wake=threading.Event(),
+        closed=threading.Event(),
+        stream_done=threading.Event(),
+    )
+    _note_fresh_heartbeat(progress, store, bucket, run_id, options)
+    _register_wake(run_id, progress.wake)
+    reader = threading.Thread(
+        target=_read_hermes_events,
+        args=(client, progress, run_id, hermes_run_id, options),
+        name=f"optimization-events-{run_id}",
+        daemon=True,
+    )
+    reader.start()
+    try:
+        _watch_hermes_status(
+            client,
+            progress,
+            db_path=db_path,
+            workspace=workspace,
+            run_id=run_id,
+            hermes_run_id=hermes_run_id,
+            options=options,
+            store=store,
+            bucket=bucket,
+            coordinator=coordinator,
+            deadline=deadline,
+        )
+    finally:
+        progress.closed.set()
+        progress.wake.set()
+        client.close()
+        reader.join(timeout=5)
+        _clear_wake(run_id)
+
+
+def _watch_hermes_status(
+    client: HermesClient,
+    progress: _EventProgress,
+    *,
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    hermes_run_id: str,
+    options: OptimizationSettings,
+    store: ObjectStore,
+    bucket: str,
+    coordinator: IndexCoordinator | None,
+    deadline: float,
+) -> None:
+    next_poll = time.monotonic()
+    heartbeat_checked = 0.0
+    heartbeat_age: float | None = None
+    while True:
+        if not _row_is_running(db_path, run_id):
+            return
+        now = time.monotonic()
+        if now >= deadline:
+            _stop_and_wait(client, hermes_run_id, run_id, options, progress.wake)
+            if _row_is_running(db_path, run_id):
+                _fail_running(db_path, workspace, run_id, _TIMED_OUT)
+            return
+        stalled, heartbeat_age, heartbeat_checked = _stall_check(
+            progress,
+            options,
+            store,
+            bucket,
+            run_id,
+            now=now,
+            heartbeat_age=heartbeat_age,
+            heartbeat_checked=heartbeat_checked,
+        )
+        if stalled:
+            _stop_quietly(client, hermes_run_id, run_id)
+            if _row_is_running(db_path, run_id):
+                _fail_running(
+                    db_path,
+                    workspace,
+                    run_id,
+                    stall_reason(_stall_window(options)),
+                )
+            return
+        if progress.wake.is_set() or now >= next_poll:
+            progress.wake.clear()
+            if not _row_is_running(db_path, run_id):
+                return
+            if _poll_once(
+                client,
+                db_path=db_path,
+                workspace=workspace,
+                run_id=run_id,
+                hermes_run_id=hermes_run_id,
+                options=options,
+                store=store,
+                bucket=bucket,
+                coordinator=coordinator,
+            ):
+                progress.stream_done.wait(2)
+                return
+            next_poll = time.monotonic() + _poll_interval(options)
+        remaining = min(deadline, next_poll) - time.monotonic()
+        _wait_slice(remaining, progress)
+
+
+def _poll_once(
+    client: HermesClient,
+    *,
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    hermes_run_id: str,
+    options: OptimizationSettings,
+    store: ObjectStore,
+    bucket: str,
+    coordinator: IndexCoordinator | None,
+) -> bool:
+    """Poll once. Return True when the DeepFix row was settled from this poll."""
+    try:
+        current = client.get_run(hermes_run_id)
+    except HermesClientError as exc:
+        LOGGER.warning("optimization run=%s hermes status poll failed: %s", run_id, exc)
+        return False
+    if current.status in _HERMES_IN_PROGRESS:
+        return False
+    if not _row_is_running(db_path, run_id):
+        return True
+    if current.status == "completed":
+        _finish_completed(
+            db_path,
+            workspace,
+            run_id,
+            options,
+            store,
+            bucket,
+            coordinator,
+        )
+        return True
+    _fail_running(db_path, workspace, run_id, _hermes_terminal_reason(current, options))
+    return True
+
+
+def _finish_completed(
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    options: OptimizationSettings,
+    store: ObjectStore,
+    bucket: str,
+    coordinator: IndexCoordinator | None,
+) -> None:
+    download_result(
+        store,
+        bucket=bucket,
+        run_id=run_id,
+        destination=workspace / "runs" / run_id / "result.json",
+    )
+    try:
+        finish_run(
+            db_path,
+            workspace,
+            run_id,
+            runner_error=None,
+            timed_out=False,
+            coordinator=coordinator,
+            min_primary_delta=options.min_primary_delta,
+            private_paths=options.private_paths,
+        )
+    except Exception:
+        LOGGER.warning(
+            "Optimization run %s failed while finishing (%s)",
+            run_id,
+            "finish_run",
+        )
+        _fail_running(db_path, workspace, run_id, _INVALID_RESULT)
+
+
+def _read_hermes_events(
+    client: HermesClient,
+    progress: _EventProgress,
+    run_id: str,
+    hermes_run_id: str,
+    options: OptimizationSettings,
+) -> None:
+    try:
+        for event in client.iter_events(hermes_run_id):
+            if progress.closed.is_set():
+                return
+            if event.name == "keepalive":
+                continue
+            _write_step(options, run_id, hermes_run_id, event)
+            with progress.lock:
+                progress.last_progress = time.monotonic()
+            progress.wake.set()
+    except HermesStreamError:
+        LOGGER.warning(
+            "optimization run=%s hermes event stream dropped; the run was not marked failed",
+            run_id,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "optimization run=%s hermes event stream ended (%s)",
+            run_id,
+            type(exc).__name__,
+        )
+    finally:
+        progress.stream_done.set()
+        progress.wake.set()
+
+
+def _write_step(
+    options: OptimizationSettings,
+    run_id: str,
+    hermes_run_id: str,
+    event: HermesEvent,
+) -> None:
+    line = _step_line(run_id, hermes_run_id, event, options.hermes_api_key)
+    LOGGER.info("%s", line)
+    directory = options.step_log_dir
+    if directory is None:
+        return
+    try:
+        checked = validate_run_id(run_id)
+    except RunBundleError:
+        return
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / f"{checked}.log").open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        LOGGER.warning("optimization run=%s step log could not be written", run_id)
+
+
+def _step_line(
+    run_id: str,
+    hermes_run_id: str,
+    event: HermesEvent,
+    secret: str | None,
+) -> str:
+    tool = event.payload.get("tool")
+    tool_text = tool if isinstance(tool, str) else ""
+    preview = _event_preview(event.payload)
+    tool_text = _one_line(_redact(tool_text, secret))
+    preview = _one_line(_redact(preview, secret))[:STEP_PREVIEW_LIMIT]
+    name = _one_line(_redact(event.name, secret))
+    return (
+        f"optimization run={run_id} hermes_run={hermes_run_id} "
+        f"event={name} tool={tool_text} preview={preview}"
+    )
+
+
+def _event_preview(payload: Mapping[str, object]) -> str:
+    for key in ("preview", "text", "error", "output", "message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _one_line(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _stall_check(
+    progress: _EventProgress,
+    options: OptimizationSettings,
+    store: ObjectStore,
+    bucket: str,
+    run_id: str,
+    *,
+    now: float,
+    heartbeat_age: float | None,
+    heartbeat_checked: float,
+) -> tuple[bool, float | None, float]:
+    window = _stall_window(options)
+    with progress.lock:
+        event_age = now - progress.last_progress
+    if event_age < window:
+        return False, heartbeat_age, heartbeat_checked
+    if now - heartbeat_checked >= _poll_interval(options):
+        heartbeat_age = _heartbeat_age(store, bucket, run_id)
+        heartbeat_checked = now
+    if heartbeat_age is None or heartbeat_age >= window:
+        return True, heartbeat_age, heartbeat_checked
+    return False, heartbeat_age, heartbeat_checked
+
+
+def _heartbeat_age(store: ObjectStore, bucket: str, run_id: str) -> float | None:
+    try:
+        written = heartbeat_timestamp(store, bucket=bucket, run_id=run_id)
+    except Exception:
+        LOGGER.warning("optimization run=%s heartbeat read failed", run_id)
+        return None
+    if written is None:
+        return None
+    return (datetime.now(timezone.utc) - written).total_seconds()
+
+
+def _note_fresh_heartbeat(
+    progress: _EventProgress,
+    store: ObjectStore,
+    bucket: str,
+    run_id: str,
+    options: OptimizationSettings,
+) -> None:
+    age = _heartbeat_age(store, bucket, run_id)
+    window = _stall_window(options)
+    if age is None or age < 0 or age >= window:
+        return
+    with progress.lock:
+        progress.last_progress = time.monotonic() - age
+
+
+def _stop_and_wait(
+    client: HermesClient,
+    hermes_run_id: str,
+    run_id: str,
+    options: OptimizationSettings,
+    wake: threading.Event,
+) -> None:
+    """``stop_run``, then wait until Hermes is terminal or the stop wait elapses."""
+    _stop_quietly(client, hermes_run_id, run_id)
+    deadline = time.monotonic() + _stop_wait(options)
+    while time.monotonic() < deadline:
+        try:
+            current = client.get_run(hermes_run_id)
+        except HermesClientError as exc:
+            LOGGER.warning("optimization run=%s hermes status poll failed: %s", run_id, exc)
+        else:
+            if current.status not in _HERMES_IN_PROGRESS:
+                return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        wake.wait(min(_poll_interval(options), remaining))
+
+
+def _stop_quietly(client: HermesClient, hermes_run_id: str, run_id: str) -> None:
+    try:
+        client.stop_run(hermes_run_id)
+    except HermesClientError as exc:
+        LOGGER.warning("optimization run=%s hermes stop failed: %s", run_id, exc)
+
+
+def _stop_stored(options: OptimizationSettings, pairs: list[tuple[str, str]]) -> None:
+    if not pairs:
+        return
+    secret = options.hermes_api_key
+    if not secret:
+        LOGGER.warning("optimization hermes stop skipped: API_SERVER_KEY is not set")
+        return
+    try:
+        client_cm = HermesClient(options.hermes_base_url, secret)
+    except HermesClientError as exc:
+        LOGGER.warning("optimization hermes stop skipped: %s", exc)
+        return
+    with client_cm as client:
+        for run_id, hermes_run_id in pairs:
+            _stop_quietly(client, hermes_run_id, run_id)
+
+
+def _hermes_terminal_reason(current: HermesRun, options: OptimizationSettings) -> str:
+    if current.error:
+        return _redact(current.error, options.hermes_api_key)
+    if current.status == "cancelled":
+        return CANCELLED_REASON
+    if current.status == "interrupted":
+        return HERMES_INTERRUPTED_REASON
+    if current.status == "failed":
+        return "The Hermes run ended with status failed."
+    return f"The Hermes run ended with status {current.status}."
+
+
+def _recover_hermes_row(
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    hermes_run_id: str,
+    *,
+    started_at: object,
+    options: OptimizationSettings,
+    coordinator: IndexCoordinator | None,
+) -> None:
+    secret = options.hermes_api_key or ""
+    try:
+        client_cm = HermesClient(options.hermes_base_url, secret)
+    except HermesClientError as exc:
+        LOGGER.warning("optimization run=%s hermes lookup skipped: %s", run_id, exc)
+        return
+    with client_cm as client:
+        try:
+            current = client.get_run(hermes_run_id)
+        except HermesClientError as exc:
+            LOGGER.warning("optimization run=%s hermes lookup failed: %s", run_id, exc)
+            return
+        if current.status in _HERMES_IN_PROGRESS:
+            _start_registered_thread(
+                run_id,
+                lambda: _resume_hermes_thread(
+                    db_path,
+                    workspace,
+                    run_id,
+                    hermes_run_id,
+                    started_at=started_at,
+                    options=options,
+                    coordinator=coordinator,
+                ),
+            )
+            return
+        _settle_terminal_status(
+            client,
+            current,
+            db_path=db_path,
+            workspace=workspace,
+            run_id=run_id,
+            options=options,
+            coordinator=coordinator,
+        )
+
+
+def _resume_hermes_thread(
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    hermes_run_id: str,
+    *,
+    started_at: object,
+    options: OptimizationSettings,
+    coordinator: IndexCoordinator | None,
+) -> None:
+    env = options.source_env if options.source_env is not None else os.environ
+    try:
+        store = store_from_env(env)
+        bucket = bucket_from_env(env)
+    except RunBundleError as exc:
+        _fail_running(db_path, workspace, run_id, _hermes_failure(exc, options))
+        return
+    secret = options.hermes_api_key or ""
+    try:
+        with HermesClient(options.hermes_base_url, secret) as client:
+            _follow_hermes_run(
+                client,
+                db_path=db_path,
+                workspace=workspace,
+                run_id=run_id,
+                hermes_run_id=hermes_run_id,
+                options=options,
+                store=store,
+                bucket=bucket,
+                coordinator=coordinator,
+                deadline=_deadline_from(started_at, options.timeout_seconds),
+            )
+    except Exception as exc:
+        _fail_running(db_path, workspace, run_id, _hermes_failure(exc, options))
+
+
+def _adopt_unassigned_hermes_run(
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    *,
+    started_at: object,
+    options: OptimizationSettings,
+    coordinator: IndexCoordinator | None,
+) -> None:
+    """Ask Hermes for a run that never stored its id. The idempotency key is ``run_id``."""
+
+    def _target() -> None:
+        secret = options.hermes_api_key or ""
+        try:
+            with HermesClient(options.hermes_base_url, secret) as client:
+                if not _row_is_running(db_path, run_id):
+                    return
+                accepted = client.start_run(run_id)
+                _set_hermes_run_id(db_path, run_id, accepted.hermes_run_id)
+                if not _row_is_running(db_path, run_id):
+                    _stop_quietly(client, accepted.hermes_run_id, run_id)
+                    return
+                env = options.source_env if options.source_env is not None else os.environ
+                store = store_from_env(env)
+                bucket = bucket_from_env(env)
+                _follow_hermes_run(
+                    client,
+                    db_path=db_path,
+                    workspace=workspace,
+                    run_id=run_id,
+                    hermes_run_id=accepted.hermes_run_id,
+                    options=options,
+                    store=store,
+                    bucket=bucket,
+                    coordinator=coordinator,
+                    deadline=_deadline_from(started_at, options.timeout_seconds),
+                )
+        except HermesClientError as exc:
+            LOGGER.warning("optimization run=%s hermes lookup failed: %s", run_id, exc)
+        except RunBundleError as exc:
+            _fail_running(db_path, workspace, run_id, _hermes_failure(exc, options))
+        except Exception as exc:
+            _fail_running(db_path, workspace, run_id, _hermes_failure(exc, options))
+
+    _start_registered_thread(run_id, _target)
+
+
+def _settle_terminal_status(
+    client: HermesClient,
+    current: HermesRun,
+    *,
+    db_path: Path,
+    workspace: Path,
+    run_id: str,
+    options: OptimizationSettings,
+    coordinator: IndexCoordinator | None,
+) -> None:
+    del client
+    if current.status == "completed":
+        env = options.source_env if options.source_env is not None else os.environ
+        try:
+            store = store_from_env(env)
+            bucket = bucket_from_env(env)
+        except RunBundleError as exc:
+            _fail_running(db_path, workspace, run_id, _hermes_failure(exc, options))
+            return
+        _finish_completed(
+            db_path,
+            workspace,
+            run_id,
+            options,
+            store,
+            bucket,
+            coordinator,
+        )
+        return
+    _fail_running(db_path, workspace, run_id, _hermes_terminal_reason(current, options))
+
+
+def _fail_running(db_path: Path, workspace: Path, run_id: str, reason: str) -> None:
+    if not _finish(db_path, run_id, status="failed", reason=reason):
+        return
+    LOGGER.warning("Optimization run %s marked failed: %s", run_id, reason)
+    _record_ledger(db_path, workspace, run_id)
+
+
+def _start_registered_thread(run_id: str, target: Callable[[], None]) -> None:
+    thread = threading.Thread(target=target, name=f"optimization-{run_id}", daemon=True)
+    with _threads_lock:
+        _threads[run_id] = thread
+    thread.start()
+
+
+def _register_wake(run_id: str, wake: threading.Event) -> None:
+    with _threads_lock:
+        _wakes[run_id] = wake
+
+
+def _clear_wake(run_id: str) -> None:
+    with _threads_lock:
+        _wakes.pop(run_id, None)
+
+
+def _signal_cancel(run_id: str) -> None:
+    with _threads_lock:
+        wake = _wakes.get(run_id)
+    if wake is not None:
+        wake.set()
+
+
+def _wait_slice(seconds: float, progress: _EventProgress) -> None:
+    if seconds <= 0:
+        return
+    end = time.monotonic() + seconds
+    while not progress.closed.is_set():
+        if progress.wake.is_set():
+            return
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            return
+        progress.wake.wait(min(0.2, remaining))
+
+
+def _poll_interval(options: OptimizationSettings) -> float:
+    interval = options.hermes_status_poll_seconds
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval <= 0:
+        return HERMES_STATUS_POLL_SECONDS
+    return float(interval)
+
+
+def _stall_window(options: OptimizationSettings) -> float:
+    window = options.heartbeat_stall_seconds
+    if isinstance(window, bool) or not isinstance(window, (int, float)) or window <= 0:
+        return HEARTBEAT_STALL_MINUTES * 60
+    return float(window)
+
+
+def _stop_wait(options: OptimizationSettings) -> float:
+    wait = options.hermes_stop_wait_seconds
+    if isinstance(wait, bool) or not isinstance(wait, (int, float)) or wait < 0:
+        return HERMES_STOP_WAIT_SECONDS
+    return float(wait)
+
+
+def _stall_seconds(minutes: float) -> float:
+    if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or minutes <= 0:
+        return HEARTBEAT_STALL_MINUTES * 60
+    return float(minutes) * 60
+
+
+def _deadline_from(started_at: object, timeout_seconds: float) -> float:
+    if not isinstance(started_at, str):
+        return time.monotonic() + timeout_seconds
+    started = _parse_time(started_at)
+    if started is None:
+        return time.monotonic() + timeout_seconds
+    remaining = timeout_seconds - (datetime.now(timezone.utc) - started).total_seconds()
+    if remaining < 0:
+        remaining = 0
+    return time.monotonic() + remaining
+
+
+def _started_at(db_path: Path, run_id: str) -> str | None:
+    try:
+        return get_run(db_path, run_id).started_at
+    except KeyError:
+        return None
+
+
+def _row_is_running(db_path: Path, run_id: str) -> bool:
+    try:
+        return get_run(db_path, run_id).status == "running"
+    except KeyError:
+        return False
+
+
+def _set_hermes_run_id(db_path: Path, run_id: str, hermes_run_id: str) -> None:
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE optimization_runs
+            SET hermes_run_id = ?
+            WHERE run_id = ? AND status = 'running' AND hermes_run_id IS NULL
+            """,
+            (hermes_run_id, run_id),
+        )
+
+
+def _read_pid(db_path: Path, run_id: str) -> int | None:
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT pid FROM optimization_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return _pid(row["pid"])
+
+
+_wakes: dict[str, threading.Event] = {}
 
 
 def _launch_blocked_message(options: OptimizationSettings) -> str:
@@ -879,6 +1644,9 @@ def _record_ledger(db_path: Path, workspace: Path, run_id: str) -> None:
     }
     path = workspace / "runs" / "ledger.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
+    marker = f'"run_id": "{run_id}"'
+    if path.is_file() and marker in path.read_text(encoding="utf-8"):
+        return
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, default=str) + "\n")
 
@@ -1024,6 +1792,7 @@ def _run_from_row(row: sqlite3.Row) -> OptimizationRun:
         mlflow_run_id=row["mlflow_run_id"],
         started_at=row["started_at"],
         ended_at=row["ended_at"],
+        hermes_run_id=row["hermes_run_id"] if isinstance(row["hermes_run_id"], str) else None,
         dev_delta=_load_delta(row["dev_delta"]),
         holdout_delta=_load_delta(row["holdout_delta"]),
         holdout_wins=row["holdout_wins"],
@@ -1038,6 +1807,7 @@ def _ensure_score_columns(conn: sqlite3.Connection) -> None:
         ("holdout_delta", "TEXT"),
         ("holdout_wins", "INTEGER"),
         ("holdout_losses", "INTEGER"),
+        ("hermes_run_id", "TEXT"),
     ):
         if name not in existing:
             conn.execute(f"ALTER TABLE optimization_runs ADD COLUMN {name} {column_type}")

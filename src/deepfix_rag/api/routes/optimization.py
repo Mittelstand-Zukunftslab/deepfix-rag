@@ -11,6 +11,7 @@ from deepfix_rag.api.errors import (
     BAD_REQUEST,
     CONFLICT,
     FORBIDDEN,
+    NOT_FOUND,
     SERVICE_UNAVAILABLE,
     UNAUTHORIZED,
     error_responses,
@@ -26,6 +27,8 @@ from deepfix_rag.api.schemas import (
 from deepfix_rag.optimization import (
     OptimizationRun,
     RunInProgress,
+    RunNotRunning,
+    cancel_optimization_run,
     fail_stale_runs,
     mlflow_run_url,
     recent_runs,
@@ -100,11 +103,40 @@ def start_optimization_run_route(
     return _response(run)
 
 
+@router.post(
+    "/admin/optimization/runs/{run_id}/cancel",
+    operation_id="cancel_optimization_run",
+    response_model=OptimizationRunResponse,
+    responses=error_responses(UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT),
+    summary="Cancel the optimization run that is in progress",
+)
+def cancel_optimization_run_route(run_id: str, request: Request) -> OptimizationRunResponse:
+    """Stop a running optimization. A row that is not running is left unchanged."""
+    require_admin(request, "Only admins can cancel an optimization run.")
+    settings = get_settings(request)
+    try:
+        run = cancel_optimization_run(
+            settings.product_db_path,
+            settings.workspace_dir,
+            run_id,
+            settings_from(settings),
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=NOT_FOUND,
+            detail="No optimization run with that id.",
+        ) from exc
+    except RunNotRunning as exc:
+        raise HTTPException(status_code=CONFLICT, detail=str(exc)) from exc
+    return _response(run)
+
+
 def _status(request: Request) -> OptimizationStatusResponse:
     settings = get_settings(request)
     fail_stale_runs(
         settings.product_db_path,
         timeout_seconds=settings.OPTIMIZATION_RUN_TIMEOUT_HOURS * 60 * 60,
+        options=settings_from(settings),
     )
     schedule = request.app.state.optimization.view()
     workspace = settings.workspace_dir

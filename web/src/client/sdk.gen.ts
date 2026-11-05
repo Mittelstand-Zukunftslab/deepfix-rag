@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
+import type { AskQuestionData, AskQuestionErrors, AskQuestionResponses, CancelOptimizationRunData, CancelOptimizationRunErrors, CancelOptimizationRunResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -80,6 +80,13 @@ export const startOptimizationRun = <ThrowOnError extends boolean = false>(optio
         ...options.headers
     }
 });
+
+/**
+ * Cancel the optimization run that is in progress
+ *
+ * Stop a running optimization. A row that is not running is left unchanged.
+ */
+export const cancelOptimizationRun = <ThrowOnError extends boolean = false>(options: Options<CancelOptimizationRunData, ThrowOnError>): RequestResult<CancelOptimizationRunResponses, CancelOptimizationRunErrors, ThrowOnError> => (options.client ?? client).post<CancelOptimizationRunResponses, CancelOptimizationRunErrors, ThrowOnError>({ url: '/admin/optimization/runs/{run_id}/cancel', ...options });
 
 /**
  * Ask a question

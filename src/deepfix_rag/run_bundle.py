@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 from typing import Protocol
@@ -25,6 +26,7 @@ import urllib.parse
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from deepfix_rag.config.schema import DataSourceType, RAGConfig
 
@@ -84,6 +86,8 @@ class ObjectStore(Protocol):
 
     def list(self, bucket: str, prefix: str) -> list[str]: ...
 
+    def modified_at(self, bucket: str, key: str) -> datetime | None: ...
+
 
 class DirectoryObjectStore:
     """Object keys laid out as files under ``root/bucket/key``.
@@ -126,6 +130,12 @@ class DirectoryObjectStore:
             if rel.startswith(prefix):
                 keys.append(rel)
         return sorted(keys)
+
+    def modified_at(self, bucket: str, key: str) -> datetime | None:
+        path = _object_path(self.root, bucket, key)
+        if not path.is_file():
+            return None
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
 
 
 class S3ObjectStore:
@@ -172,6 +182,21 @@ class S3ObjectStore:
                     keys.append(key)
         return keys
 
+    def modified_at(self, bucket: str, key: str) -> datetime | None:
+        try:
+            response = self._client.head_object(Bucket=bucket, Key=key)
+        except ClientError as exc:
+            error = exc.response.get("Error", {}) if isinstance(exc.response, dict) else {}
+            if error.get("Code") in {"NoSuchKey", "404", "NotFound"}:
+                return None
+            raise
+        modified = response.get("LastModified")
+        if not isinstance(modified, datetime):
+            return None
+        if modified.tzinfo is None:
+            return modified.replace(tzinfo=timezone.utc)
+        return modified.astimezone(timezone.utc)
+
 
 class RecordingObjectStore:
     """Forward calls and keep the request plan. Bodies are not stored."""
@@ -195,6 +220,9 @@ class RecordingObjectStore:
     def list(self, bucket: str, prefix: str) -> list[str]:
         self.requests.append(StoreRequest("list", bucket, prefix))
         return self.inner.list(bucket, prefix)
+
+    def modified_at(self, bucket: str, key: str) -> datetime | None:
+        return self.inner.modified_at(bucket, key)
 
 
 def validate_run_id(run_id: str) -> str:

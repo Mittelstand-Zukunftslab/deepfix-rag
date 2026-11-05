@@ -1,6 +1,8 @@
 """The admin route starts the shared optimization job."""
 
 from datetime import datetime, timedelta, timezone
+import os
+import subprocess
 
 from fastapi.testclient import TestClient
 import mlflow
@@ -8,7 +10,12 @@ import pytest
 
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.settings import Settings
-from deepfix_rag.optimization import INTERRUPTED_REASON, STALE_REASON, init_optimization
+from deepfix_rag.optimization import (
+    CANCELLED_REASON,
+    INTERRUPTED_REASON,
+    STALE_REASON,
+    init_optimization,
+)
 from deepfix_rag.storage import connect
 from tests.identity import IdentityIssuer
 
@@ -169,3 +176,36 @@ def test_missing_openhands_returns_service_unavailable(
         unavailable = client.post("/admin/optimization/run", json={})
         assert unavailable.status_code == 503
         assert "not set up" in unavailable.json()["detail"]
+
+
+def test_cancel_kills_only_the_openhands_process_group(
+    settings: Settings, identity: IdentityIssuer
+) -> None:
+    process = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    other = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        with _client(settings, identity) as client:
+            identity.sign_in(client, "admin@example.com", "admin")
+            _insert_running(
+                settings,
+                "active",
+                datetime.now(timezone.utc).isoformat(),
+                pid=process.pid,
+            )
+            cancelled = client.post("/admin/optimization/runs/active/cancel")
+            assert cancelled.status_code == 200, cancelled.text
+            body = cancelled.json()
+            assert body["status"] == "failed"
+            assert body["reason"] == CANCELLED_REASON
+            process.wait(timeout=2)
+            assert process.returncode is not None
+            os.kill(other.pid, 0)
+            again = client.post("/admin/optimization/runs/active/cancel")
+            assert again.status_code == 409
+            started = client.post("/admin/optimization/run", json={})
+            assert started.status_code == 200, started.text
+    finally:
+        for proc in (process, other):
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=2)

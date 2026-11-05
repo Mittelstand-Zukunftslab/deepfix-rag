@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
+from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import sys
@@ -41,6 +43,7 @@ EXIT_RUNTIME = 2
 _INPUT_DIR = "input"
 _OUTPUT_RESULT = "output/result.json"
 _OUTPUT_CANDIDATE = "output/candidate.yaml"
+_OUTPUT_HEARTBEAT = "output/heartbeat.json"
 
 
 def download_input(
@@ -114,6 +117,61 @@ def download_result(
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(body)
     return True
+
+
+def heartbeat_timestamp(
+    store: ObjectStore,
+    *,
+    bucket: str,
+    run_id: str,
+) -> datetime | None:
+    """When ``output/heartbeat.json`` was last written, or None if it is absent.
+
+    The newer of the object's modified time and a ``written_at`` field wins.
+    A missing object is None. Other store failures propagate.
+    """
+    key = f"{run_prefix(run_id)}/{_OUTPUT_HEARTBEAT}"
+    try:
+        modified = store.modified_at(bucket, key)
+    except KeyError:
+        modified = None
+    except ClientError as exc:
+        if not _missing_object(exc):
+            raise
+        modified = None
+    written = _heartbeat_written_at(store, bucket, key)
+    if modified is None:
+        return written
+    if written is None:
+        return modified
+    return max(modified, written)
+
+
+def _heartbeat_written_at(store: ObjectStore, bucket: str, key: str) -> datetime | None:
+    try:
+        body = store.get(bucket, key)
+    except KeyError:
+        return None
+    except ClientError as exc:
+        if not _missing_object(exc):
+            raise
+        return None
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("written_at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _missing_object(exc: ClientError) -> bool:
