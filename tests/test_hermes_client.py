@@ -16,6 +16,7 @@ import pytest
 
 from deepfix_rag.hermes_client import (
     HERMES_EVENT_NAMES,
+    HERMES_MAX_TURNS,
     HERMES_MODEL,
     HERMES_PROVIDER,
     HERMES_RUN_STATUSES,
@@ -463,6 +464,11 @@ def test_start_run_sends_the_fixed_instructions_and_replays_the_original_id() ->
     assert "deepfix-sync download" in instructions
     assert "deepfix-sync upload" in instructions
     assert "optimization-loop" in instructions
+    assert "dense, hybrid, and bm25" in instructions
+    assert f"{HERMES_MAX_TURNS} agent turns" in instructions
+    assert "not a cancel" in instructions
+    assert "deepfix hpo" in instructions
+    assert "run-diagnostic" in instructions
     for call in api.calls:
         assert call.authorized
         assert call.method == "POST"
@@ -740,6 +746,7 @@ def test_bearer_token_stays_out_of_logs_prompt_and_errors() -> None:
                 "status": "failed",
                 "error": api.api_key,
                 "output": f"prefix {api.api_key} suffix",
+                "turn_exit_reason": f"max_iterations_reached({api.api_key}/40)",
             }
             api.script(echo)
             with _client(api) as client:
@@ -756,8 +763,10 @@ def test_bearer_token_stays_out_of_logs_prompt_and_errors() -> None:
     assert caught.value.__cause__ is None
     assert run.error == "[redacted]"
     assert run.output == "prefix [redacted] suffix"
+    assert run.turn_exit_reason == "max_iterations_reached([redacted]/40)"
     assert API_KEY not in (run.output or "")
     assert API_KEY not in (run.error or "")
+    assert API_KEY not in (run.turn_exit_reason or "")
     for message in grab.messages:
         _assert_secret_absent(message)
     for call in api.calls:

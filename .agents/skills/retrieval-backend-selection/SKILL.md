@@ -20,7 +20,7 @@ cli_actions:
   - "deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
 ---
 
-Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 15-step budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt.
+Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt.
 
 This skill selects a retrieval backend. It does not select an embedding model. `EMBEDDING_MODEL` is an environment setting, not a `RAGConfig` field, and `mutate-config` rejects `embedding.model`.
 

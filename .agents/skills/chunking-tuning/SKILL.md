@@ -16,7 +16,7 @@ cli_actions:
   - "deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
 ---
 
-Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 15-step budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Chunking is index-time: a config edit without `index --force` scores the previous index.
+Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Chunking is index-time: a config edit without `index --force` scores the previous index.
 
 ## When not to use
 
@@ -46,7 +46,7 @@ Use `recall` as the primary metric when the goal is fewer misses, `ndcg` when ra
 
 ## Outside a round (manual use only)
 
-`deepfix hpo` searches chunking and retrieval settings with Optuna. Never run it in an API-driven round: it takes far longer than the 15-step budget. The search space and the base config come from the HPO YAML, not from the champion, so copy `configs/hpo.yaml`, set `base_config` to the champion, and pass your own dataset:
+`deepfix hpo` searches chunking and retrieval settings with Optuna. Never run it in an API-driven round: it takes far longer than the 40-turn budget. The search space and the base config come from the HPO YAML, not from the champion, so copy `configs/hpo.yaml`, set `base_config` to the champion, and pass your own dataset:
 
 ```
 deepfix hpo --config <hpo_yaml> --dataset <dataset_path> --retrieval-only --limit 30 --n-trials 10 --tune-chunking --output <out_yaml> --json

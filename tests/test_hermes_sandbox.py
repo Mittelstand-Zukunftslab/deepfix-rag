@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from deepfix_rag.hermes_client import HERMES_MAX_TURNS
+
 _SPEC = importlib.util.spec_from_file_location(
     "hermes_sandbox_boot",
     Path(__file__).resolve().parents[1] / "docker" / "hermes" / "sandbox_boot.py",
@@ -61,6 +63,22 @@ def test_apply_sandbox_writes_optimization_config_and_stopped_chat(tmp_path: Pat
     assert "git push --force*" in config["approvals"]["deny"]
     assert "*curl*|*sh*" in config["approvals"]["deny"]
     assert config["skills"]["external_dirs"] == [str(skills)]
+    assert config["agent"]["max_turns"] == boot.AGENT_MAX_TURNS == HERMES_MAX_TURNS == 40
+    exposed = config["platform_toolsets"]["api_server"]
+    assert exposed[:3] == ["terminal", "file", "skills"]
+    assert exposed == ["terminal", "file", "skills", "no_mcp"]
+    for name in (
+        "web",
+        "browser",
+        "delegation",
+        "cronjob",
+        "cron",
+        "messaging",
+        "discord",
+        "discord_admin",
+        "code_execution",
+    ):
+        assert name not in exposed
     assert config["timeouts"]["tools"]["sequential_call"] == boot.TOOL_DEADLINE_SECONDS
     assert boot.TOOL_DEADLINE_SECONDS > boot.TERMINAL_TIMEOUT_SECONDS
     config_text = (home / "config.yaml").read_text(encoding="utf-8")
@@ -84,8 +102,12 @@ def test_apply_sandbox_writes_optimization_config_and_stopped_chat(tmp_path: Pat
     toolsets = chat["platform_toolsets"]["api_server"]
     assert "terminal" not in toolsets
     assert "file" not in toolsets
+    assert "code_execution" not in toolsets
     assert "skills" in toolsets
+    assert "max_turns" not in chat.get("agent", {})
     assert "external_dirs" not in chat.get("skills", {})
+    chat_text = (home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8")
+    assert "deepfix" not in chat_text
     chat_env = (home / "profiles" / "chat" / ".env").read_text(encoding="utf-8")
     assert "API_SERVER_PORT=8643" in chat_env
     assert f"API_SERVER_KEY={CHAT_KEY}" in chat_env
@@ -96,6 +118,29 @@ def test_apply_sandbox_writes_optimization_config_and_stopped_chat(tmp_path: Pat
     assert "HERMES_S3_" not in chat_env
     state = (home / "profiles" / "chat" / "gateway_state.json").read_text(encoding="utf-8")
     assert '"stopped"' in state
+
+
+def test_apply_sandbox_rejects_a_skill_the_agent_could_edit(tmp_path: Path) -> None:
+    home = tmp_path / "data"
+    skills = _skills(tmp_path)
+    skill = next(skills.rglob("SKILL.md"))
+    skill.chmod(0o666)
+    with pytest.raises(boot.SandboxBootError, match="writable"):
+        boot.apply_sandbox(home, _env(), skills)
+    assert not (home / ".env").exists()
+
+
+def test_image_locks_skills_and_records_the_toolset_names() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "hermes" / "Dockerfile").read_text(encoding="utf-8")
+    assert "chmod 0444" in dockerfile
+    assert "chown -R root:root /opt/deepfix/skills" in dockerfile
+    assert "terminal, file, skills" in dockerfile
+    assert "cronjob" in dockerfile
+    assert "agent.max_turns is 40" in dockerfile
+    assert "heartbeat.json" in dockerfile
+    boot_text = (REPO_ROOT / "docker" / "hermes" / "sandbox_boot.py").read_text(encoding="utf-8")
+    assert "skill_manage" in boot_text
+    assert "external_dirs" in boot_text
 
 
 def test_apply_sandbox_rejects_short_placeholder_and_product_key(tmp_path: Path) -> None:

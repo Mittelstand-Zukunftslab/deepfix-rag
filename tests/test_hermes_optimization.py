@@ -393,6 +393,95 @@ def test_hermes_null_candidate_succeeds_from_the_downloaded_file(
     assert API_KEY not in (finished.reason or "")
 
 
+def test_an_iteration_budget_wrapup_still_requires_result_json(tmp_path: Path) -> None:
+    """max_iterations_reached is a wrap-up, not a cancel. The file still decides the row."""
+    _tracking(tmp_path)
+    workspace, db_path = _workspace(tmp_path, "public statute\n")
+    _label(db_path, _holdout_query())
+    payload = json.dumps(_NULL_RESULT).encode()
+    with HermesApi() as api:
+
+        def publish(hermes_id: str, deepfix_id: str) -> None:
+            api.runs[hermes_id]["status"] = "failed"
+            api.runs[hermes_id]["completed"] = False
+            api.runs[hermes_id]["turn_exit_reason"] = "max_iterations_reached(40/40)"
+            api.runs[hermes_id]["output"] = "Iteration budget exhausted"
+            _store(tmp_path).put(
+                BUCKET,
+                f"optimization/runs/{deepfix_id}/output/result.json",
+                payload,
+            )
+
+        api.on_accept = publish
+        run = start_optimization_run(
+            db_path,
+            workspace,
+            trigger="manual",
+            options=_hermes_options(tmp_path, api),
+        )
+        wait_for_run(run.run_id)
+    finished = get_run(db_path, run.run_id)
+    assert finished.status == "succeeded"
+    assert finished.reason == "No change."
+    assert finished.reason != "Cancelled"
+    assert (workspace / "runs" / run.run_id / "result.json").read_bytes() == payload
+
+
+def test_an_iteration_budget_wrapup_without_result_json_fails(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace, db_path = _workspace(tmp_path, "public statute\n")
+    _label(db_path, _holdout_query())
+    champion = (workspace / "configs" / "champion.yaml").read_text(encoding="utf-8")
+    with HermesApi() as api:
+
+        def publish(hermes_id: str, deepfix_id: str) -> None:
+            del deepfix_id
+            api.runs[hermes_id]["status"] = "failed"
+            api.runs[hermes_id]["turn_exit_reason"] = "max_iterations_reached(40/40)"
+
+        api.on_accept = publish
+        run = start_optimization_run(
+            db_path,
+            workspace,
+            trigger="manual",
+            options=_hermes_options(tmp_path, api),
+        )
+        wait_for_run(run.run_id)
+    finished = get_run(db_path, run.run_id)
+    assert finished.status == "failed"
+    assert finished.reason == "The run did not write a valid result."
+    assert finished.reason != "Cancelled"
+    assert (workspace / "configs" / "champion.yaml").read_text(encoding="utf-8") == champion
+
+
+def test_a_failed_hermes_run_does_not_read_result_json(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace, db_path = _workspace(tmp_path, "public statute\n")
+    _label(db_path, _holdout_query())
+    with HermesApi() as api:
+
+        def publish(hermes_id: str, deepfix_id: str) -> None:
+            api.runs[hermes_id]["status"] = "failed"
+            api.runs[hermes_id]["error"] = "agent run failed"
+            _store(tmp_path).put(
+                BUCKET,
+                f"optimization/runs/{deepfix_id}/output/result.json",
+                json.dumps(_NULL_RESULT).encode(),
+            )
+
+        api.on_accept = publish
+        run = start_optimization_run(
+            db_path,
+            workspace,
+            trigger="manual",
+            options=_hermes_options(tmp_path, api),
+        )
+        wait_for_run(run.run_id)
+    finished = get_run(db_path, run.run_id)
+    assert finished.status == "failed"
+    assert finished.reason == "agent run failed"
+
+
 @pytest.mark.parametrize("payload", [b"{", None])
 def test_invalid_or_missing_result_fails_without_promoting(
     tmp_path: Path, payload: bytes | None

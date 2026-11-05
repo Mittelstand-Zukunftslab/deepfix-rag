@@ -20,7 +20,7 @@ cli_actions:
 
 BENCHMARK / MANUAL USE ONLY, NEVER IN API-DRIVEN RUNS: graph and mixed backends are rejected by the promotion gate and need graph hosts the agent does not have. The loop's routing table does not route here.
 
-For a developer on a benchmark: `<dataset_path>` is the benchmark QA dataset (for example `HF:isaacus/legal-rag-bench`) and `<run_dir>` is any scratch directory for the candidate and index. Follow `optimization-loop` for the shape of the gate and the exit codes. Graph extraction runs at index time and calls an LLM, so it needs a reachable graph database and an LLM key; do not use it inside a 15-step round.
+For a developer on a benchmark: `<dataset_path>` is the benchmark QA dataset (for example `HF:isaacus/legal-rag-bench`) and `<run_dir>` is any scratch directory for the candidate and index. Follow `optimization-loop` for the shape of the gate and the exit codes. Graph extraction runs at index time and calls an LLM, so it needs a reachable graph database and an LLM key; do not use it inside a 40-turn round.
 
 ## When not to use
 

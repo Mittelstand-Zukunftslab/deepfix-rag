@@ -14,7 +14,7 @@ cli_actions:
   - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
 ---
 
-Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 15-step budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Re-ranking is query-time: do not re-index for `rerank.*` or `retrieval.top_k`, and do not pass `--index-dir` (the candidate reuses the champion's index).
+Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Re-ranking is query-time: do not re-index for `rerank.*` or `retrieval.top_k`, and do not pass `--index-dir` (the candidate reuses the champion's index).
 
 The agent environment passes the Cohere settings (`COHERE_BASE_URL`, `COHERE_API_KEY`, `COHERE_MODEL`) through, so rerank works. If an eval exits 2 with `COHERE_API_KEY` in the message, every case errored: rerank is unavailable. STOP, write `result.json` with a null candidate, report the cause in `summary`, and finish.
 

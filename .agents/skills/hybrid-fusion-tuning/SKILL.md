@@ -17,7 +17,7 @@ cli_actions:
   - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
 ---
 
-Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 15-step budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Everything here is query-time: do not re-index and do not pass `--index-dir`.
+Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Everything here is query-time: do not re-index and do not pass `--index-dir`.
 
 Do not set `retrieval.query_expansion_num` above 1 in agent runs: it calls an LLM the agent does not have, so every case would error. The field is capped at 8 and the agent must leave it at 1. Do not edit `retrieval.query_gen_prompt` either. Hypothetical document embeddings (HyDE) are not implemented. This skill does not rewrite the query text.
 

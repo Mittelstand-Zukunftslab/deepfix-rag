@@ -59,9 +59,42 @@ DENY_PATTERNS: tuple[str, ...] = (
     "*wget*|*bash*",
 )
 
-# Chat may not run commands or write files. These are the v0.22.7 toolset
-# names from cli-config.yaml.example. code_execution is omitted because it
-# is not in that list; terminal and file are the command and write toolsets.
+# Starting point from the PRD. ``skill_view`` calls consume turns, so 40
+# covers one skill load plus one hypothesis. The example config on this pin
+# ships ``agent.max_turns: 500`` (``HERMES_MAX_ITERATIONS``). The gateway
+# bridges this key into that env var for the launch profile.
+AGENT_MAX_TURNS = 40
+# GET /v1/toolsets on nousresearch/hermes-agent v0.22.7 lists
+# hermes_cli/tools_config.py CONFIGURABLE_TOOLSETS and sets ``enabled`` from
+# platform_toolsets.api_server. Names below are that tag's configurable
+# toolsets, recorded beside this config:
+#   terminal        terminal, process
+#   file            read_file, write_file, patch, search_files
+#   skills          skills_list, skill_view, skill_manage
+#   web             web_search, web_extract
+#   browser         browser_exec, browser_cdp, browser_dialog, browser_vault
+#   delegation      delegate_task
+#   cronjob         cronjob_manage
+#   code_execution  execute_code
+#   discord         discord
+#   discord_admin   discord_admin
+# There is no toolset named ``cron`` or ``messaging``. Cron is ``cronjob``.
+# The messaging toolsets are ``discord`` and ``discord_admin``.
+# ``skills`` includes ``skill_manage``. On this pin its description says
+# existing skills are modified wherever they live, and ``is_external_skill_path``
+# says user-directed tool calls may still edit an external dir. The
+# configuration example's "external dirs are read-only" sentence is about
+# where a new skill is created (~/.hermes/skills/), not a write refusal.
+# Mode 0444 and root ownership are what stop the edit. A same-name skill
+# under the profile skills dir would still shadow ``external_dirs``.
+OPTIMIZATION_API_TOOLSETS: tuple[str, ...] = ("terminal", "file", "skills")
+# ``no_mcp`` is a sentinel, not a toolset GET /v1/toolsets lists. It stops
+# a configured MCP server from joining this platform beside ``terminal``.
+_API_SERVER_TOOLSET_CONFIG: tuple[str, ...] = (*OPTIMIZATION_API_TOOLSETS, "no_mcp")
+# Chat may not run commands or write files, and it cannot run ``deepfix``.
+# ``terminal``, ``file``, and ``code_execution`` stay off. These names are
+# the v0.22.7 configurable toolsets. The optimization skill directory is
+# not attached, so chat has no ``deepfix`` procedure either.
 CHAT_API_TOOLSETS: tuple[str, ...] = ("skills", "web", "vision", "todo", "memory")
 
 _PLACEHOLDER_KEYS = frozenset(
@@ -175,6 +208,12 @@ def optimization_config_patch(skills_dir: Path) -> dict[str, Any]:
         "skills": {
             "external_dirs": [str(skills_dir)],
         },
+        "agent": {
+            "max_turns": AGENT_MAX_TURNS,
+        },
+        "platform_toolsets": {
+            "api_server": list(_API_SERVER_TOOLSET_CONFIG),
+        },
         "timeouts": {
             "tools": {
                 "sequential_call": TOOL_DEADLINE_SECONDS,
@@ -187,8 +226,9 @@ def optimization_config_patch(skills_dir: Path) -> dict[str, Any]:
 def chat_profile_config(config_version: object) -> dict[str, Any]:
     """A second profile that is not the optimization agent.
 
-    Approval mode stays ``smart``. Terminal and file toolsets are absent.
-    The optimization skill directory is not attached.
+    Approval mode stays ``smart``. Terminal, file, and code execution are
+    absent, so this profile cannot run ``deepfix``. The optimization skill
+    directory is not attached.
     """
     config: dict[str, Any] = {
         "model": {

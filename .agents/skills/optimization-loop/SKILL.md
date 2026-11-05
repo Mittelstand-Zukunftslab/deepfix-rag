@@ -29,7 +29,7 @@ This skill is the whole contract for a round. Pathology skills are sibling folde
 - Backends: `dense`, `hybrid`, `bm25` only. The API rejects `graph` and `mixed`.
 - Never promote. You recommend a candidate in `result.json`; the API re-scores it and decides.
 - One hypothesis per run. If it fails the gate, write `result.json` with a null candidate and finish. Do not try a second one.
-- Budget: 15 agent steps per round (about 10-12 are needed). No `deepfix hpo`, no `run-diagnostic`, no diagnostic-server install or launch.
+- Budget: 40 agent turns per round (`agent.max_turns` on this image). `skill_view` calls consume turns. Exhausting the budget is a wrap-up, not a cancel: still write `result.json`. On chat that ending is `finish_reason` `length` and `hermes.error_code` `iteration_budget_exhausted`. The API still requires `result.json`. No `deepfix hpo`, no `run-diagnostic`, no diagnostic-server install or launch.
 - You have no generation LLM and no query expansion. Keep `retrieval.query_expansion_num` at 1 (expansion calls an LLM). Changes to `generation.*` cannot be scored by the gate; do not make them.
 - Never print or log API keys.
 

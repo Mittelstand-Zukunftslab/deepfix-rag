@@ -41,6 +41,9 @@ DEFAULT_WRITE_TIMEOUT = 30.0
 DEFAULT_POOL_TIMEOUT = 5.0
 HERMES_PROVIDER = "openrouter"
 HERMES_MODEL = "anthropic/claude-haiku-5.5"
+# Same cap the sandbox writes as ``agent.max_turns``. ``skill_view`` consumes
+# turns, so the budget is the image value, not the old 15-step OpenHands line.
+HERMES_MAX_TURNS = 40
 HERMES_RUN_STATUSES = frozenset(
     {
         "started",
@@ -136,6 +139,7 @@ class HermesRun:
     error: str | None
     admission_id: str | None = None
     execution_generation: int | None = None
+    turn_exit_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -165,7 +169,11 @@ def optimization_instructions(run_id: str) -> str:
     candidate = f"{work}/output/candidate.yaml"
     return (
         "Follow the optimization-loop skill by running deepfix with --json. "
-        "Use only the dense, hybrid, or bm25 retrieval backends. "
+        "Use only the dense, hybrid, and bm25 retrieval backends. "
+        f"The turn budget is {HERMES_MAX_TURNS} agent turns (agent.max_turns). "
+        "Loading a skill counts as a turn. "
+        "Exhausting that budget is a wrap-up, not a cancel: still write result.json. "
+        "Do not run `deepfix hpo` or `deepfix run-diagnostic`. "
         "Do not promote a config and do not replace the champion config. "
         "Do not print secrets or environment variables. "
         f"The run directory is {work}. "
@@ -444,6 +452,7 @@ class HermesClient:
             error=error,
             admission_id=run.admission_id,
             execution_generation=run.execution_generation,
+            turn_exit_reason=run.turn_exit_reason,
         )
 
     def _iter_once(
@@ -521,6 +530,7 @@ class HermesClient:
             returned = hermes_run_id
         output = payload.get("output")
         error = payload.get("error")
+        turn_exit_reason = payload.get("turn_exit_reason")
         return HermesRun(
             run_id=returned,
             status=status,
@@ -528,6 +538,9 @@ class HermesClient:
             error=self._public(error) if isinstance(error, str) else None,
             admission_id=_admission_id(payload.get("admission_id")),
             execution_generation=_generation(payload.get("execution_generation")),
+            turn_exit_reason=(
+                self._public(turn_exit_reason) if isinstance(turn_exit_reason, str) else None
+            ),
         )
 
     def _send(

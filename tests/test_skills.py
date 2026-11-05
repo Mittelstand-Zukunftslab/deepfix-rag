@@ -16,6 +16,7 @@ import yaml
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.evaluation.runner import RAGFailureMode
+from deepfix_rag.hermes_client import HERMES_MAX_TURNS
 from deepfix_rag.indexing import index_time_signature
 from deepfix_rag.main import app
 from deepfix_rag.promotion import _ALLOWED_BACKENDS, _HIGHER_IS_BETTER
@@ -326,6 +327,54 @@ def test_eval_cutoff_is_documented_with_its_real_default() -> None:
     assert "`eval.cutoff_k` (default " + str(default) in text
     description = RAGConfig.model_fields["eval"].annotation.model_fields["cutoff_k"].description
     assert "Defaults to retrieval.top_k" not in description
+
+
+def test_loop_budget_matches_the_hermes_turn_cap_and_keeps_extra_frontmatter() -> None:
+    """The loop budget is agent.max_turns. Hermes v0.22.7 keeps unknown frontmatter.
+
+    ``parse_frontmatter`` loads the YAML mapping and does not reject extra keys.
+    ``GET /v1/skills`` indexes ``name`` and ``description``. ``failure_mode``,
+    ``trigger_conditions``, and ``cli_actions`` stay in the file.
+    """
+    text = _read(LOOP_SKILL)
+    assert f"{HERMES_MAX_TURNS} agent turns" in text
+    assert "agent.max_turns" in text
+    assert "not a cancel" in text
+    assert "result.json" in text
+    assert "No `deepfix hpo`" in text
+    assert "no `run-diagnostic`" in text
+    assert "15 agent" not in text
+    assert "15-step" not in text
+    for path in _skill_paths():
+        body = path.read_text(encoding="utf-8")
+        assert "15-step" not in body
+        assert "15 agent" not in body
+    meta = _load_frontmatter(SKILLS_ROOT / LOOP_SKILL / "SKILL.md")
+    assert meta["name"] == "optimization-loop"
+    for key in ("failure_mode", "trigger_conditions", "cli_actions"):
+        assert key in meta
+
+
+def test_deepfix_help_lists_the_sandbox_commands(cli_runner: CliRunner) -> None:
+    """The CLI the image installs advertises every command, including the ones a round must not call."""
+    result = cli_runner.invoke(app, ["--help"])
+    assert result.exit_code == 0, result.output
+    for name in (
+        "dataset",
+        "index",
+        "eval",
+        "mutate-config",
+        "diff-config",
+        "hpo",
+        "run-diagnostic",
+        "export",
+        "gate",
+        "schema",
+    ):
+        assert name in result.stdout, name
+    for command in ("hpo", "run-diagnostic"):
+        shown = cli_runner.invoke(app, [command, "--help"])
+        assert shown.exit_code == 0, shown.output
 
 
 def test_loop_says_top_k_alone_does_not_move_scores() -> None:

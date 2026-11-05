@@ -891,7 +891,7 @@ def _poll_once(
         return False
     if not _row_is_running(db_path, run_id):
         return True
-    if current.status == "completed":
+    if _accepts_result_file(current):
         _finish_completed(
             db_path,
             workspace,
@@ -1125,6 +1125,24 @@ def _stop_stored(options: OptimizationSettings, pairs: list[tuple[str, str]]) ->
             _stop_quietly(client, hermes_run_id, run_id)
 
 
+def _accepts_result_file(current: HermesRun) -> bool:
+    """True when the row is settled from ``result.json``.
+
+    ``completed`` is that path. Exhausting ``agent.max_turns`` is too, and it
+    is not a cancel. On Hermes v0.22.7 the runs API stores that wrap-up as
+    status ``failed`` with ``turn_exit_reason`` ``max_iterations_reached(N/N)``
+    and ``completed: false`` (chat instead reports ``finish_reason`` ``length``
+    and ``hermes.error_code`` ``iteration_budget_exhausted``). A generic
+    ``failed`` status, a cancel, and an interrupt do not read the file.
+    """
+    if current.status == "completed":
+        return True
+    if current.status != "failed":
+        return False
+    reason = current.turn_exit_reason or ""
+    return reason.startswith("max_iterations_reached(")
+
+
 def _hermes_terminal_reason(current: HermesRun, options: OptimizationSettings) -> str:
     if current.error:
         return _redact(current.error, options.hermes_api_key)
@@ -1278,7 +1296,7 @@ def _settle_terminal_status(
     coordinator: IndexCoordinator | None,
 ) -> None:
     del client
-    if current.status == "completed":
+    if _accepts_result_file(current):
         env = options.source_env if options.source_env is not None else os.environ
         try:
             store = store_from_env(env)

@@ -25,12 +25,25 @@
 # deepfix index or deepfix eval would be backgrounded at 600s or abandoned
 # at 420s.
 #
-# US-006 still confirms the live api_server toolset names and narrows the
-# optimization profile to terminal, file, and skills. This image does not
-# do that narrowing. The chat profile (port 8643, not started) already
-# omits terminal and file.
+# The optimization profile's api_server toolsets are terminal, file, and
+# skills (docker/hermes/sandbox_boot.py). Recorded from nousresearch/hermes-agent
+# v0.22.7 hermes_cli/tools_config.py CONFIGURABLE_TOOLSETS, which is what
+# GET /v1/toolsets lists with an enabled flag:
+#   on:  terminal, file, skills
+#   off: web, browser, delegation, cronjob (this pin has no toolset named
+#        cron), discord, discord_admin (this pin has no toolset named
+#        messaging), code_execution, vision, image_gen, todo, memory,
+#        session_search, clarify, kanban, computer_use, connections
+# agent.max_turns is 40. The chat profile (port 8643, not started) has no
+# terminal, file, or code_execution toolset, so it cannot run deepfix.
+# Skills are root 0444 under /opt/deepfix/skills. skill_manage on this pin
+# edits a skill wherever it lives, including a writable external_dirs entry;
+# the mode is what blocks that. A same-name skill in the profile skills
+# dir would shadow this tree (local precedence).
 #
-# US-007's deepfix shim and the hermes-otel plugin are not installed here.
+# US-007's deepfix shim (heartbeat.json every 30s) and the hermes-otel
+# plugin are not installed here. A long silent deepfix index still has
+# nothing writing output/heartbeat.json.
 # deepfix-sync is the fixed bundle command (download input/, upload output/).
 # It is not a script the model writes. The optimization profile's S3 key is
 # the hermes-optimizer prefix key, injected at boot, not baked in.
