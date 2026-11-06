@@ -1,26 +1,22 @@
-# Local services for DeepFix.
-# Credentials are read from .env (see example.env):
-#   MEMGRAPH_USERNAME, MEMGRAPH_PASSWORD
-#   FALKORDB_PASSWORD
-#   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
-#   OH_SESSION_API_KEY, OH_SECRET_KEY, OPENHANDS_PORT
-#   HERMES_DASHBOARD, HERMES_DASHBOARD_BASIC_AUTH_*, API_SERVER_*
-#   MLFLOW_BACKEND_STORE_URI,
-#   MLFLOW_SERVER_ALLOWED_HOSTS, MLFLOW_SERVER_CORS_ALLOWED_ORIGINS
-#   OPENHANDS_PYTHON, MLFLOW_EXPERIMENT_ID, MLFLOW_DEV_RAG_EXPERIMENT
-#   DEEPFIX_LLM_API_KEY, DEEPFIX_LLM_BASE_URL, DEEPFIX_LLM_MODEL_NAME, DEEPFIX_LLM_DROP_PARAMS, etc.
-#   DEEPFIX_SERVER_DATABASE_URL
-#   BETTER_AUTH_SECRET, WEB_ORIGIN, API_INTERNAL_URL, AUTH_JWKS_URL, ALLOWED_EMAIL_DOMAINS
-#   LLM_API_KEY, EMBEDDING_API_KEY, COHERE_API_KEY
-#
-#   docker compose up -d
-
 include:
-  #  - compose.hermes.yml
-  - compose.graphdb.yml
-  #- compose.openhands.yml
+  - compose.hermes.yml
 
 services:
+
+  falkordb:
+    image: falkordb/falkordb:v4.20.3-alpine
+    container_name: falkordb
+    mem_limit: 1G
+    ports:
+      - "6379:6379"
+    environment:
+      # Empty FALKORDB_PASSWORD leaves the server open, matching the app default.
+      # A non-empty value enables Redis AUTH with that same password.
+      REDIS_ARGS: ${FALKORDB_PASSWORD:+--requirepass ${FALKORDB_PASSWORD}}
+      FALKORDB_ARGS: THREAD_COUNT 4
+    volumes:
+      - falkordb_data:/var/lib/falkordb/data
+    restart: unless-stopped
 
   rustfs:
     image: rustfs/rustfs:latest
@@ -211,3 +207,4 @@ volumes:
   deepfix_server_data:
   web_auth:
   api_data:
+  falkordb_data:
