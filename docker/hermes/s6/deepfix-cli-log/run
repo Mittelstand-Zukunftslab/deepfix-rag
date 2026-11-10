@@ -1,0 +1,12 @@
+#!/bin/sh
+# Copy deepfix stdout and stderr onto the container log.
+# The local terminal tool pipes both streams, so s6 does not see them
+# on the child's stderr. The shim appends a redacted copy to this file.
+mkdir -p /opt/data/logs
+touch /opt/data/logs/deepfix-cli.log
+if id hermes >/dev/null 2>&1; then
+    chown hermes:hermes /opt/data/logs /opt/data/logs/deepfix-cli.log
+fi
+chmod 0755 /opt/data/logs
+chmod 0644 /opt/data/logs/deepfix-cli.log
+exec /usr/bin/tail -n +1 -F /opt/data/logs/deepfix-cli.log

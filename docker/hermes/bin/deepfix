@@ -1,0 +1,9 @@
+#!/opt/deepfix/.venv/bin/python
+"""PATH entry for deepfix. The real CLI stays in the virtualenv."""
+
+from __future__ import annotations
+
+from deepfix_rag.deepfix_shim import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

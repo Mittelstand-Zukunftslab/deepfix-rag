@@ -41,9 +41,26 @@
 # the mode is what blocks that. A same-name skill in the profile skills
 # dir would shadow this tree (local precedence).
 #
-# US-007's deepfix shim (heartbeat.json every 30s) and the hermes-otel
-# plugin are not installed here. A long silent deepfix index still has
-# nothing writing output/heartbeat.json.
+# The command `deepfix` on PATH is /opt/deepfix/bin/deepfix, a shim in front
+# of /opt/deepfix/.venv/bin/deepfix. `which deepfix` resolves to the shim
+# because /opt/deepfix/bin is first on PATH, and /usr/local/bin/deepfix
+# points at the same shim. The virtualenv binary stays the real CLI.
+# While the real CLI runs, the shim rewrites output/heartbeat.json every
+# 30 seconds and writes one deepfix-heartbeat line to its own stderr.
+#
+# On this pin the local terminal captures a command with stdout=PIPE and
+# stderr=STDOUT (tools/environments/local.py). Those bytes are not written
+# to agent.log and are not the stream s6 forwards. The shim appends a
+# redacted copy to /opt/data/logs/deepfix-cli.log. The s6 longrun
+# deepfix-cli-log tails that file onto the container stderr, which is
+# what `docker logs` shows.
+#
+# Native OTLP on this pin is content-free gateway monitoring. It reads
+# monitoring.export.otlp.endpoint and does not emit an agent span or an
+# LLM span, and it does not honor OTEL_EXPORTER_OTLP_ENDPOINT for those
+# spans. Those variables are not set. briancaffey/hermes-otel is not
+# installed. The deepfix-traces plugin records the spans through the
+# deepfix virtualenv into the MLflow experiment deepfix_hermes.
 # deepfix-sync is the fixed bundle command (download input/, upload output/).
 # It is not a script the model writes. The optimization profile's S3 key is
 # the hermes-optimizer prefix key, injected at boot, not baked in.
@@ -70,6 +87,9 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/deepfix/python \
     HERMES_DASHBOARD=0 \
     API_SERVER_ENABLED=true \
     API_SERVER_HOST=0.0.0.0 \
+    DEEPFIX_REAL_BIN=/opt/deepfix/.venv/bin/deepfix \
+    DEEPFIX_PYTHON=/opt/deepfix/.venv/bin/python \
+    DEEPFIX_CONTAINER_LOG=/opt/data/logs/deepfix-cli.log \
     PYTHONDONTWRITEBYTECODE=1
 
 # Secrets are not set here. API_SERVER_KEY and OPENROUTER_API_KEY come from
@@ -95,24 +115,29 @@ RUN uv pip install --python /opt/deepfix/.venv/bin/python --no-deps -e .
 
 COPY .agents/skills /opt/deepfix/skills
 COPY docker/hermes/sandbox_boot.py /opt/deepfix/sandbox_boot.py
+COPY docker/hermes/bin/deepfix /opt/deepfix/bin/deepfix
+COPY docker/hermes/deepfix_traces /opt/deepfix/plugins/deepfix-traces
+COPY docker/hermes/s6/deepfix-cli-log /etc/s6-overlay/s6-rc.d/deepfix-cli-log
 COPY docker/hermes/01b-deepfix-sandbox /etc/cont-init.d/01b-deepfix-sandbox
 
 # Skills are root-owned. Files are 0444. Directories stay traversable and
 # not writable by group or other, so the hermes user cannot edit them.
 # The venv is already root-owned and world-executable; do not chmod it.
-RUN find /opt/deepfix/skills -type d -exec chmod 0755 {} + \
-    && find /opt/deepfix/skills -type f -exec chmod 0444 {} + \
-    && chown -R root:root /opt/deepfix/skills /opt/deepfix/sandbox_boot.py \
+RUN find /opt/deepfix/skills /opt/deepfix/plugins -type d -exec chmod 0755 {} + \
+    && find /opt/deepfix/skills /opt/deepfix/plugins -type f -exec chmod 0444 {} + \
+    && chown -R root:root /opt/deepfix/skills /opt/deepfix/plugins /opt/deepfix/sandbox_boot.py /opt/deepfix/bin \
     && chmod 0444 /opt/deepfix/sandbox_boot.py \
-    && chmod 0555 /etc/cont-init.d/01b-deepfix-sandbox \
-    && ln -sfn /opt/deepfix/.venv/bin/deepfix /usr/local/bin/deepfix \
+    && chmod 0555 /opt/deepfix/bin/deepfix /etc/cont-init.d/01b-deepfix-sandbox \
+    && chmod 0555 /etc/s6-overlay/s6-rc.d/deepfix-cli-log/run \
+    && touch /etc/s6-overlay/s6-rc.d/user/contents.d/deepfix-cli-log \
+    && ln -sfn /opt/deepfix/bin/deepfix /usr/local/bin/deepfix \
     && ln -sfn /opt/deepfix/.venv/bin/deepfix-rag /usr/local/bin/deepfix-rag \
     && ln -sfn /opt/deepfix/.venv/bin/deepfix-sync /usr/local/bin/deepfix-sync \
     && chmod -R a+rX /opt/deepfix/app
 
-# Hermes' own interpreter stays first. deepfix resolves via the venv bin
-# and the /usr/local/bin symlink.
-ENV PATH="/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/deepfix/.venv/bin:/usr/local/bin:${PATH}"
+# The shim directory is first, so `which deepfix` is the shim. The virtualenv
+# binary remains the real CLI. Hermes' own interpreter stays ahead of it.
+ENV PATH="/opt/deepfix/bin:/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/deepfix/.venv/bin:/usr/local/bin:${PATH}"
 
 # s6 continues after a failing cont-init script unless this is 2. The sandbox
 # boot script exits 1 when API_SERVER_KEY is missing or LLM_API_KEY is set,

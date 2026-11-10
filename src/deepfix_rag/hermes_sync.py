@@ -20,6 +20,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from typing import Any
 
 from botocore.exceptions import ClientError
 
@@ -35,6 +36,7 @@ from deepfix_rag.run_bundle import (
     candidate_index_uri,
     container_work_dir,
     run_prefix,
+    validate_run_id,
 )
 
 EXIT_OK = 0
@@ -147,6 +149,35 @@ def heartbeat_timestamp(
     return max(modified, written)
 
 
+def read_heartbeat(
+    store: ObjectStore,
+    *,
+    bucket: str,
+    run_id: str,
+) -> dict[str, Any] | None:
+    """The JSON object in ``output/heartbeat.json``, or None when it is absent.
+
+    A missing object and a body that is not a JSON object are None. Other
+    store failures propagate.
+    """
+    key = f"{run_prefix(run_id)}/{_OUTPUT_HEARTBEAT}"
+    try:
+        body = store.get(bucket, key)
+    except KeyError:
+        return None
+    except ClientError as exc:
+        if not _missing_object(exc):
+            raise
+        return None
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
 def _heartbeat_written_at(store: ObjectStore, bucket: str, key: str) -> datetime | None:
     try:
         body = store.get(bucket, key)
@@ -242,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "download":
             work_dir = container_work_dir(args.run_id, args.work_root)
             download_input(store, bucket=bucket, run_id=args.run_id, work_dir=work_dir)
+            _write_run_marker(args.work_root, args.run_id)
             sys.stdout.write(describe_download(bucket, args.run_id, work_dir))
             return EXIT_OK
         upload_output(
@@ -274,6 +306,13 @@ def _parser() -> argparse.ArgumentParser:
     upload.add_argument("--result", type=Path, required=True)
     upload.add_argument("--candidate", type=Path, default=None)
     return parser
+
+
+def _write_run_marker(work_root: Path, run_id: str) -> None:
+    """Remember the run id where the shim can read it without parsing argv."""
+    checked = validate_run_id(run_id)
+    work_root.mkdir(parents=True, exist_ok=True)
+    (work_root / ".deepfix-run-id").write_text(checked + "\n", encoding="utf-8")
 
 
 def _safe_target(work_dir: Path, relative: str) -> Path:

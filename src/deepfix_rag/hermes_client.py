@@ -169,6 +169,10 @@ def optimization_instructions(run_id: str) -> str:
     candidate = f"{work}/output/candidate.yaml"
     return (
         "Follow the optimization-loop skill by running deepfix with --json. "
+        "Run the `deepfix` command on PATH. "
+        "A direct call to the virtualenv interpreter does not write output/heartbeat.json. "
+        "While a deepfix command runs, that file is rewritten every 30 seconds. "
+        f"The DeepFix run id is {checked}. "
         "Use only the dense, hybrid, and bm25 retrieval backends. "
         f"The turn budget is {HERMES_MAX_TURNS} agent turns (agent.max_turns). "
         "Loading a skill counts as a turn. "

@@ -1,0 +1,11 @@
+name: deepfix-traces
+version: 0.1.0
+description: >
+  Write one MLflow trace per Hermes turn in the deepfix_hermes experiment.
+  An agent span covers the turn. Each provider call is an LLM span. The
+  DeepFix run id is a trace tag. Credentials are not span attributes.
+provides_hooks:
+  - pre_api_request
+  - post_api_request
+  - post_llm_call
+  - on_session_end

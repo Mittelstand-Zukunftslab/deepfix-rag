@@ -36,6 +36,7 @@ This skill is the whole contract for a round. Pathology skills are sibling folde
 ## Setup facts
 
 - The working directory is the product workspace: `configs/champion.yaml`, `corpus/`, `indexes/current`, `runs/<run_id>/`. Run plain `deepfix ...` from there. Never `cd` elsewhere, never `uv run`, never pass `--env-file`.
+- The `deepfix` command on PATH is the sandbox shim. While a command runs it rewrites `output/heartbeat.json` every 30 seconds and copies stdout and stderr to the container log. A direct call to the virtualenv interpreter does not write that file.
 - `<dev_path>` is the dev dataset named in the prompt. Pass it as `--dataset <dev_path>` to every `eval`. Do not pass it to `index`: indexing reads the corpus from the config.
 - Dev rows have only `query_id`, `query`, `doc_ids` and `negative_doc_ids`. There are no answers and no unanswerable rows. `ndcg` and `precision` are computed over judged documents only.
 - Always use `--retrieval-only`. Metrics are `ndcg`, `recall`, `precision` at the cutoff `eval.cutoff_k` (default 5, set in the config). Only the first `eval.cutoff_k` retrieved documents are scored; `retrieval.top_k` does not set the cutoff.

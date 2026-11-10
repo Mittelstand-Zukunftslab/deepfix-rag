@@ -46,6 +46,7 @@ from deepfix_rag.hermes_sync import (
     bucket_from_env,
     download_result,
     heartbeat_timestamp,
+    read_heartbeat,
     store_from_env,
 )
 from deepfix_rag.indexing import IndexCoordinator
@@ -75,7 +76,16 @@ HERMES_STATUS_POLL_SECONDS = 15.0
 HERMES_STOP_WAIT_SECONDS = 120.0
 HEARTBEAT_STALL_MINUTES = 5.0
 STEP_PREVIEW_LIMIT = 500
+OUTPUT_LOG_LIMIT = 64 * 1024
 _STEP_LOG_DIRNAME = "optimization-logs"
+_HEARTBEAT_FIELDS = ("run_id", "pid", "elapsed_s", "argv0", "written_at")
+_SECRET_ENVS = (
+    "API_SERVER_KEY",
+    "OPENROUTER_API_KEY",
+    "S3_SECRET_ACCESS_KEY",
+    "HERMES_S3_SECRET_ACCESS_KEY",
+    "LLM_API_KEY",
+)
 HERMES_UNAVAILABLE_MESSAGE = "Hermes is not set up on this server, so a run cannot start."
 OPENHANDS_STATUS_MESSAGE = (
     "OpenHands is not set up on this server, so a run cannot start. "
@@ -729,12 +739,36 @@ def _hermes_failure(exc: Exception, options: OptimizationSettings) -> str:
         text = str(exc).strip() or "The Hermes run could not be started."
     else:
         text = "The Hermes run could not be started."
-    return _redact(text, options.hermes_api_key)
+    return _redact(text, _secrets(options))
 
 
-def _redact(text: str, secret: str | None) -> str:
-    if secret:
-        return text.replace(secret, "[redacted]")
+def _secrets(options: OptimizationSettings) -> tuple[str, ...]:
+    """Credential values and private paths that must not reach a log or a reason."""
+    env = options.source_env if options.source_env is not None else os.environ
+    found: list[str] = []
+    key = options.hermes_api_key
+    if isinstance(key, str) and len(key.strip()) >= 8:
+        found.append(key.strip())
+    for name in _SECRET_ENVS:
+        value = env.get(name)
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if len(value) >= 8 and value not in found:
+            found.append(value)
+    for path in options.private_paths:
+        if len(path) >= 8 and path not in found:
+            found.append(path)
+    found.sort(key=len, reverse=True)
+    return tuple(found)
+
+
+def _redact(text: str, secret: str | None | tuple[str, ...] = None) -> str:
+    if not secret:
+        return text
+    values = (secret,) if isinstance(secret, str) else secret
+    for item in sorted((value for value in values if value), key=len, reverse=True):
+        text = text.replace(item, "[redacted]")
     return text
 
 
@@ -747,6 +781,7 @@ class _EventProgress:
     wake: threading.Event
     closed: threading.Event
     stream_done: threading.Event
+    last_heartbeat_token: str | None = None
 
 
 def _follow_hermes_run(
@@ -818,12 +853,24 @@ def _watch_hermes_status(
     next_poll = time.monotonic()
     heartbeat_checked = 0.0
     heartbeat_age: float | None = None
+    last_observe = 0.0
     while True:
         if not _row_is_running(db_path, run_id):
             return
         now = time.monotonic()
+        if now - last_observe >= _poll_interval(options):
+            _observe_heartbeat(
+                progress,
+                options,
+                store,
+                bucket,
+                run_id,
+                hermes_run_id,
+            )
+            last_observe = now
         if now >= deadline:
             _stop_and_wait(client, hermes_run_id, run_id, options, progress.wake)
+            _capture_output(client, options, run_id, hermes_run_id)
             if _row_is_running(db_path, run_id):
                 _fail_running(db_path, workspace, run_id, _TIMED_OUT)
             return
@@ -839,6 +886,7 @@ def _watch_hermes_status(
         )
         if stalled:
             _stop_quietly(client, hermes_run_id, run_id)
+            _capture_output(client, options, run_id, hermes_run_id)
             if _row_is_running(db_path, run_id):
                 _fail_running(
                     db_path,
@@ -892,6 +940,7 @@ def _poll_once(
     if not _row_is_running(db_path, run_id):
         return True
     if _accepts_result_file(current):
+        _append_terminal_output(options, run_id, hermes_run_id, current.output)
         _finish_completed(
             db_path,
             workspace,
@@ -902,6 +951,7 @@ def _poll_once(
             coordinator,
         )
         return True
+    _append_terminal_output(options, run_id, hermes_run_id, current.output)
     _fail_running(db_path, workspace, run_id, _hermes_terminal_reason(current, options))
     return True
 
@@ -980,10 +1030,33 @@ def _write_step(
     hermes_run_id: str,
     event: HermesEvent,
 ) -> None:
-    line = _step_line(run_id, hermes_run_id, event, options.hermes_api_key)
+    line = _step_line(run_id, hermes_run_id, event, options)
     LOGGER.info("%s", line)
+    _append_log(options, run_id, line + "\n")
+
+
+def _step_line(
+    run_id: str,
+    hermes_run_id: str,
+    event: HermesEvent,
+    options: OptimizationSettings,
+) -> str:
+    secrets = _secrets(options)
+    tool = event.payload.get("tool")
+    tool_text = tool if isinstance(tool, str) else ""
+    preview = _event_preview(event.payload)
+    tool_text = _one_line(_redact(tool_text, secrets))
+    preview = _one_line(_redact(preview, secrets))[:STEP_PREVIEW_LIMIT]
+    name = _one_line(_redact(event.name, secrets))
+    return (
+        f"optimization run={run_id} hermes_run={hermes_run_id} "
+        f"event={name} tool={tool_text} preview={preview}"
+    )
+
+
+def _append_log(options: OptimizationSettings, run_id: str, text: str) -> None:
     directory = options.step_log_dir
-    if directory is None:
+    if directory is None or not text:
         return
     try:
         checked = validate_run_id(run_id)
@@ -992,26 +1065,113 @@ def _write_step(
     try:
         directory.mkdir(parents=True, exist_ok=True)
         with (directory / f"{checked}.log").open("a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
+            handle.write(text)
+            if not text.endswith("\n"):
+                handle.write("\n")
     except OSError:
         LOGGER.warning("optimization run=%s step log could not be written", run_id)
 
 
-def _step_line(
+def _append_terminal_output(
+    options: OptimizationSettings,
     run_id: str,
     hermes_run_id: str,
-    event: HermesEvent,
-    secret: str | None,
+    output: str | None,
+) -> None:
+    """Append the final Hermes output, truncated to 64 KiB, to the private log."""
+    if not isinstance(output, str) or not output:
+        return
+    secrets = _secrets(options)
+    text = _redact(output, secrets)
+    raw = text.encode("utf-8")
+    if len(raw) > OUTPUT_LOG_LIMIT:
+        text = raw[:OUTPUT_LOG_LIMIT].decode("utf-8", errors="ignore")
+    preview = _one_line(text)[:STEP_PREVIEW_LIMIT]
+    line = (
+        f"optimization run={run_id} hermes_run={hermes_run_id} "
+        f"event=output tool= preview={preview}"
+    )
+    LOGGER.info("%s", line)
+    _append_log(options, run_id, line + "\n----- output -----\n" + text + "\n")
+
+
+def _capture_output(
+    client: HermesClient,
+    options: OptimizationSettings,
+    run_id: str,
+    hermes_run_id: str,
+) -> None:
+    try:
+        current = client.get_run(hermes_run_id)
+    except HermesClientError:
+        return
+    _append_terminal_output(options, run_id, hermes_run_id, current.output)
+
+
+def _observe_heartbeat(
+    progress: _EventProgress,
+    options: OptimizationSettings,
+    store: ObjectStore,
+    bucket: str,
+    run_id: str,
+    hermes_run_id: str,
+) -> None:
+    """Log one heartbeat line when ``output/heartbeat.json`` moves.
+
+    A healthy long command can be silent on the events stream. The line is
+    what an operator sees on the API stderr log between tool events.
+    """
+    try:
+        written = heartbeat_timestamp(store, bucket=bucket, run_id=run_id)
+    except Exception:
+        LOGGER.warning("optimization run=%s heartbeat read failed", run_id)
+        return
+    if written is None:
+        return
+    age = (datetime.now(timezone.utc) - written).total_seconds()
+    window = _stall_window(options)
+    if age < 0 or age >= window:
+        return
+    token = written.isoformat()
+    with progress.lock:
+        if progress.last_heartbeat_token == token:
+            return
+        progress.last_heartbeat_token = token
+    try:
+        payload = read_heartbeat(store, bucket=bucket, run_id=run_id) or {}
+    except Exception:
+        LOGGER.warning("optimization run=%s heartbeat read failed", run_id)
+        payload = {}
+    line = _heartbeat_line(run_id, hermes_run_id, payload, options)
+    LOGGER.info("%s", line)
+    _append_log(options, run_id, line + "\n")
+
+
+def _heartbeat_line(
+    run_id: str,
+    hermes_run_id: str,
+    payload: Mapping[str, object],
+    options: OptimizationSettings,
 ) -> str:
-    tool = event.payload.get("tool")
-    tool_text = tool if isinstance(tool, str) else ""
-    preview = _event_preview(event.payload)
-    tool_text = _one_line(_redact(tool_text, secret))
-    preview = _one_line(_redact(preview, secret))[:STEP_PREVIEW_LIMIT]
-    name = _one_line(_redact(event.name, secret))
+    secrets = _secrets(options)
+    parts: list[str] = []
+    for key in _HEARTBEAT_FIELDS:
+        if key not in payload:
+            continue
+        value = payload[key]
+        if isinstance(value, bool) or value is None:
+            continue
+        if isinstance(value, (int, float)):
+            text = str(value)
+        elif isinstance(value, str):
+            text = value
+        else:
+            continue
+        parts.append(f"{key}={_one_line(_redact(text, secrets))}")
+    preview = " ".join(parts)[:STEP_PREVIEW_LIMIT]
     return (
         f"optimization run={run_id} hermes_run={hermes_run_id} "
-        f"event={name} tool={tool_text} preview={preview}"
+        f"event=heartbeat tool=deepfix preview={preview}"
     )
 
 
@@ -1145,7 +1305,7 @@ def _accepts_result_file(current: HermesRun) -> bool:
 
 def _hermes_terminal_reason(current: HermesRun, options: OptimizationSettings) -> str:
     if current.error:
-        return _redact(current.error, options.hermes_api_key)
+        return _redact(current.error, _secrets(options))
     if current.status == "cancelled":
         return CANCELLED_REASON
     if current.status == "interrupted":

@@ -30,6 +30,8 @@ import yaml
 HERMES_HOME_ENV = "HERMES_HOME"
 DEFAULT_HERMES_HOME = Path("/opt/data")
 DEFAULT_SKILLS_DIR = Path("/opt/deepfix/skills")
+DEFAULT_TRACE_PLUGIN = Path("/opt/deepfix/plugins/deepfix-traces")
+TRACE_PLUGIN_NAME = "deepfix-traces"
 MODEL_PROVIDER = "openrouter"
 MODEL_DEFAULT = "anthropic/claude-haiku-5.5"
 MODEL_BASE_URL = "https://openrouter.ai/api/v1"
@@ -394,6 +396,83 @@ def scoped_s3_env(env: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def mlflow_env(env: Mapping[str, str]) -> dict[str, str]:
+    """Tracking settings for ``deepfix eval``. They are not copied to the chat profile.
+
+    The container already receives ``MLFLOW_TRACKING_URI``. Writing the same
+    values into the optimization profile ``.env`` keeps them when the gateway
+    loads that file. A credential must not be embedded in either value.
+    """
+    tracking = env.get("MLFLOW_TRACKING_URI", "").strip() or "http://mlflow:5000"
+    experiment = env.get("MLFLOW_DEV_RAG_EXPERIMENT", "").strip() or "dev_rag_experiment"
+    for label, value in (
+        ("MLFLOW_TRACKING_URI", tracking),
+        ("MLFLOW_DEV_RAG_EXPERIMENT", experiment),
+    ):
+        if any(char in value for char in "\n\r\x00"):
+            raise SandboxBootError(f"{label} contains a newline or NUL")
+        for name in (
+            "API_SERVER_KEY",
+            "OPENROUTER_API_KEY",
+            "S3_SECRET_ACCESS_KEY",
+            "HERMES_S3_SECRET_ACCESS_KEY",
+            "LLM_API_KEY",
+        ):
+            secret = env.get(name, "").strip()
+            if len(secret) >= 8 and secret in value:
+                raise SandboxBootError(f"{label} must not contain a credential")
+    return {
+        "MLFLOW_TRACKING_URI": tracking,
+        "MLFLOW_DEV_RAG_EXPERIMENT": experiment,
+    }
+
+
+def _prepare_cli_log(home: Path) -> None:
+    """The file the shim appends to and the s6 tail service follows."""
+    log_dir = home / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "deepfix-cli.log"
+    log_file.touch(exist_ok=True)
+    _chown_hermes(log_dir)
+    _chown_hermes(log_file)
+    log_dir.chmod(0o755)
+    log_file.chmod(0o644)
+
+
+def _install_trace_plugin(home: Path, config: dict[str, Any], env: Mapping[str, str]) -> None:
+    """Enable deepfix-traces on the optimization profile when the image shipped it.
+
+    The chat profile has its own home and does not receive this plugin.
+    """
+    raw = env.get("DEEPFIX_TRACE_PLUGIN", "").strip()
+    source = Path(raw) if raw else DEFAULT_TRACE_PLUGIN
+    if not (source / "plugin.yaml").is_file() or not (source / "__init__.py").is_file():
+        return
+    plugins = config.get("plugins")
+    if not isinstance(plugins, dict):
+        plugins = {}
+        config["plugins"] = plugins
+    enabled = plugins.get("enabled")
+    if not isinstance(enabled, list):
+        enabled = []
+    if TRACE_PLUGIN_NAME not in enabled:
+        enabled.append(TRACE_PLUGIN_NAME)
+    plugins["enabled"] = enabled
+    _dump_yaml(home / "config.yaml", config)
+    _chown_hermes(home / "config.yaml")
+
+    dest_root = home / "plugins"
+    dest_root.mkdir(parents=True, exist_ok=True)
+    dest = dest_root / TRACE_PLUGIN_NAME
+    if dest.is_symlink():
+        if dest.resolve() == source.resolve():
+            return
+        dest.unlink()
+    elif dest.exists():
+        return
+    dest.symlink_to(source)
+
+
 def apply_sandbox(
     home: Path,
     env: Mapping[str, str],
@@ -430,7 +509,10 @@ def apply_sandbox(
             raise SandboxBootError("OPENROUTER_API_KEY contains a newline or NUL")
         updates["OPENROUTER_API_KEY"] = openrouter_key
     updates.update(scoped_s3_env(env))
+    updates.update(mlflow_env(env))
     _upsert_env(home / ".env", updates, _STRIPPED_ENV_KEYS)
+    _prepare_cli_log(home)
+    _install_trace_plugin(home, config, env)
 
     chat_dir = home / "profiles" / CHAT_PROFILE
     chat_dir.mkdir(parents=True, exist_ok=True)

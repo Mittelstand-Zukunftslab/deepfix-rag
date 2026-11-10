@@ -94,7 +94,10 @@ def test_apply_sandbox_writes_optimization_config_and_stopped_chat(tmp_path: Pat
     assert "S3_ACCESS_KEY_ID=hermes-optimizer" in dotenv
     assert "S3_SECRET_ACCESS_KEY=scoped-secret-value" in dotenv
     assert "S3_URI=s3://deepfix-index/dev" in dotenv
+    assert "MLFLOW_TRACKING_URI=http://mlflow:5000" in dotenv
+    assert "MLFLOW_DEV_RAG_EXPERIMENT=dev_rag_experiment" in dotenv
     assert "RUSTFS_ACCESS_KEY" not in dotenv
+    assert (home / "logs" / "deepfix-cli.log").is_file()
     assert (home / ".env").stat().st_mode & 0o077 == 0
 
     chat = yaml.safe_load((home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8"))
@@ -115,9 +118,27 @@ def test_apply_sandbox_writes_optimization_config_and_stopped_chat(tmp_path: Pat
     assert API_KEY not in chat_env
     assert "S3_ACCESS_KEY_ID" not in chat_env
     assert "scoped-secret-value" not in chat_env
+    assert "MLFLOW_TRACKING_URI" not in chat_env
+    assert "deepfix-traces" not in chat_text
     assert "HERMES_S3_" not in chat_env
     state = (home / "profiles" / "chat" / "gateway_state.json").read_text(encoding="utf-8")
     assert '"stopped"' in state
+
+
+def test_trace_plugin_is_enabled_on_the_optimization_profile_only(tmp_path: Path) -> None:
+    home = tmp_path / "data"
+    source = tmp_path / "deepfix-traces"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("name: deepfix-traces\n", encoding="utf-8")
+    (source / "__init__.py").write_text("def register(ctx):\n    return None\n", encoding="utf-8")
+    boot.apply_sandbox(home, _env(DEEPFIX_TRACE_PLUGIN=str(source)), _skills(tmp_path))
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert config["plugins"]["enabled"] == ["deepfix-traces"]
+    link = home / "plugins" / "deepfix-traces"
+    assert link.is_symlink()
+    assert link.resolve() == source.resolve()
+    chat = (home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8")
+    assert "deepfix-traces" not in chat
 
 
 def test_apply_sandbox_rejects_a_skill_the_agent_could_edit(tmp_path: Path) -> None:
@@ -138,6 +159,19 @@ def test_image_locks_skills_and_records_the_toolset_names() -> None:
     assert "cronjob" in dockerfile
     assert "agent.max_turns is 40" in dockerfile
     assert "heartbeat.json" in dockerfile
+    assert "/opt/deepfix/bin" in dockerfile
+    assert "ln -sfn /opt/deepfix/bin/deepfix /usr/local/bin/deepfix" in dockerfile
+    assert "deepfix-traces" in dockerfile
+    assert "deepfix-cli-log" in dockerfile
+    assert "briancaffey/hermes-otel is not" in dockerfile
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" in dockerfile
+    compose = (REPO_ROOT / "compose.hermes.yml").read_text(encoding="utf-8")
+    assert "MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}" in compose
+    assert "MLFLOW_DEV_RAG_EXPERIMENT:" in compose
+    stack = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert '"5000:5000"' in stack
+    assert "MLFLOW_TRACKING_USERNAME" not in stack
+    assert "MLFLOW_TRACKING_PASSWORD" not in stack
     boot_text = (REPO_ROOT / "docker" / "hermes" / "sandbox_boot.py").read_text(encoding="utf-8")
     assert "skill_manage" in boot_text
     assert "external_dirs" in boot_text

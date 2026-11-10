@@ -1114,3 +1114,140 @@ def test_status_stops_a_stale_hermes_run(tmp_path: Path, identity: IdentityIssue
             assert run["status"] == "failed"
             assert run["reason"] == STALE_REASON
         assert any(call.path == f"/v1/runs/{hermes_id}/stop" for call in api.calls)
+
+
+def test_a_fresh_heartbeat_is_a_stderr_line_and_the_log_stays_private(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, identity: IdentityIssuer
+) -> None:
+    _tracking(tmp_path)
+    caplog.set_level(logging.INFO, logger="DeepFix RAG Eval Runner")
+    workspace, db_path = _workspace(tmp_path, "public statute\n")
+    begin = "BEGIN-OUTPUT-" + ("a" * 100)
+    end = "END-OF-OUTPUT-MARKER"
+    output = begin + ("b" * (70 * 1024)) + end
+    secret = "scoped-secret-value"
+    with HermesApi() as api:
+
+        def publish(hermes_id: str, deepfix_id: str) -> None:
+            api.runs[hermes_id]["status"] = "running"
+
+        api.on_accept = publish
+        api.events_body = b": keepalive\n\n"
+        options = _hermes_options(tmp_path, api)
+        options = OptimizationSettings(
+            **{
+                **options.__dict__,
+                "heartbeat_stall_seconds": 30,
+                "timeout_seconds": 30,
+                "source_env": {
+                    **options.source_env,
+                    "S3_SECRET_ACCESS_KEY": secret,
+                },
+            }
+        )
+        run = start_optimization_run(db_path, workspace, trigger="manual", options=options)
+
+        def stored() -> bool:
+            return bool(get_run(db_path, run.run_id).hermes_run_id)
+
+        _wait_until(stored)
+        store = _store(tmp_path)
+        store.put(
+            BUCKET,
+            f"optimization/runs/{run.run_id}/output/heartbeat.json",
+            json.dumps(
+                {
+                    "run_id": run.run_id,
+                    "pid": 42,
+                    "elapsed_s": 1,
+                    "argv0": "deepfix",
+                    "written_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ).encode(),
+        )
+        log_path = tmp_path / "private" / "optimization-logs" / f"{run.run_id}.log"
+
+        def logged_heartbeat() -> bool:
+            if not log_path.is_file():
+                return False
+            return "event=heartbeat" in log_path.read_text(encoding="utf-8")
+
+        _wait_until(logged_heartbeat)
+        hermes_id = get_run(db_path, run.run_id).hermes_run_id
+        assert hermes_id is not None
+        api.runs[hermes_id]["status"] = "completed"
+        api.runs[hermes_id]["output"] = output + secret
+        api.runs[hermes_id]["error"] = None
+        store.put(
+            BUCKET,
+            f"optimization/runs/{run.run_id}/output/result.json",
+            json.dumps({**_NULL_RESULT, "mlflow_run_id": "mlflow-eval-run-1"}).encode(),
+        )
+        wait_for_run(run.run_id, timeout=10)
+    logged = log_path.read_text(encoding="utf-8")
+    assert "event=heartbeat" in logged
+    assert "event=heartbeat" in caplog.text
+    assert any(
+        isinstance(handler, logging.StreamHandler) and handler.stream is sys.stderr
+        for handler in logging.getLogger("DeepFix RAG Eval Runner").handlers
+    )
+    assert begin in logged
+    assert end not in logged
+    assert secret not in logged
+    assert "----- output -----" in logged
+    assert not log_path.is_relative_to(workspace)
+    bodies = b"\n".join(_bodies(_store(tmp_path), run.run_id))
+    assert begin.encode() not in bodies
+    assert b"optimization-logs" not in bodies
+    finished = get_run(db_path, run.run_id)
+    assert finished.mlflow_run_id == "mlflow-eval-run-1"
+    settings = _hermes_settings(tmp_path, api)
+    with TestClient(create_app(settings, token_verifier=identity.verifier())) as client:
+        identity.sign_in(client, "ada@example.com")
+        forbidden = client.get("/admin/optimization")
+        assert forbidden.status_code == 403
+        assert begin not in forbidden.text
+        identity.sign_in(client, "admin@example.com", "admin")
+        status = client.get("/admin/optimization")
+        assert status.status_code == 200, status.text
+        row = next(item for item in status.json()["runs"] if item["run_id"] == run.run_id)
+        assert row["mlflow_run_id"] == "mlflow-eval-run-1"
+        assert begin not in status.text
+
+
+def test_a_hermes_error_keeps_the_text_and_drops_secrets(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace, db_path = _workspace(tmp_path, "public statute\n")
+    secret = "scoped-secret-value"
+    openrouter = "sk-or-" + ("k" * 16)
+    private = str(tmp_path / "private")
+    with HermesApi() as api:
+
+        def publish(hermes_id: str, deepfix_id: str) -> None:
+            api.runs[hermes_id]["status"] = "failed"
+            api.runs[hermes_id]["error"] = f"provider failed {secret} {openrouter} at {private}"
+
+        api.on_accept = publish
+        api.events_body = _frame(1, "run.failed", error=f"provider failed {secret} {openrouter}")
+        options = _hermes_options(tmp_path, api)
+        options = OptimizationSettings(
+            **{
+                **options.__dict__,
+                "source_env": {
+                    **options.source_env,
+                    "S3_SECRET_ACCESS_KEY": secret,
+                    "OPENROUTER_API_KEY": openrouter,
+                },
+                "private_paths": (private,),
+            }
+        )
+        run = start_optimization_run(db_path, workspace, trigger="manual", options=options)
+        wait_for_run(run.run_id)
+    finished = get_run(db_path, run.run_id)
+    assert finished.status == "failed"
+    assert finished.reason is not None
+    assert "provider failed" in finished.reason
+    assert "[redacted]" in finished.reason
+    assert secret not in finished.reason
+    assert private not in finished.reason
+    assert openrouter not in finished.reason
