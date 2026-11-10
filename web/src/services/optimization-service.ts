@@ -1,5 +1,6 @@
 import type { OptimizationRunResponse, OptimizationStatusResponse } from "@/client";
 import {
+  cancelOptimizationNow,
   fetchOptimizationStatus,
   runOptimizationNow,
   saveOptimizationSchedule,
@@ -38,5 +39,9 @@ export const optimizationService = {
 
   runNow(): Promise<OptimizationRunResponse> {
     return call(() => runOptimizationNow());
+  },
+
+  cancel(runId: string): Promise<OptimizationRunResponse> {
+    return call(() => cancelOptimizationNow({ data: { runId } }));
   },
 };

@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import {
+  cancelOptimizationRun,
   getOptimizationStatus,
   startOptimizationRun,
   updateOptimizationSchedule,
@@ -32,4 +33,18 @@ export const runOptimizationNow = createServerFn({ method: "POST" })
   .middleware([adminOnly("start an optimization run")])
   .handler(async ({ context }): Promise<OptimizationRunResponse> => {
     return unwrap(await startOptimizationRun({ body: {}, headers: context.apiHeaders }));
+  });
+
+const cancelInput = z.object({ runId: z.string().min(1) });
+
+export const cancelOptimizationNow = createServerFn({ method: "POST" })
+  .middleware([adminOnly("cancel an optimization run")])
+  .validator(cancelInput)
+  .handler(async ({ context, data }): Promise<OptimizationRunResponse> => {
+    return unwrap(
+      await cancelOptimizationRun({
+        path: { run_id: data.runId },
+        headers: context.apiHeaders,
+      }),
+    );
   });

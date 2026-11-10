@@ -191,7 +191,8 @@ export function AskPage({
     }
   }, [sessions, activeSessionId, storageKeys?.sessions, storageKeys?.active]);
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? sessions[0];
+  const activeSession =
+    sessions.find((s) => s.id === activeSessionId) ?? sessions[0] ?? createNewSession();
   const turns = activeSession?.turns ?? [];
 
   const currentTurn =
@@ -224,8 +225,9 @@ export function AskPage({
         setActiveSessionId(fresh.id);
         return [fresh];
       }
-      if (activeSessionId === sessionId) {
-        setActiveSessionId(remaining[0].id);
+      const next = remaining[0];
+      if (activeSessionId === sessionId && next) {
+        setActiveSessionId(next.id);
       }
       return remaining;
     });

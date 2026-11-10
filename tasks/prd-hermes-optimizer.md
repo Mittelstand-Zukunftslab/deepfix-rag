@@ -248,12 +248,20 @@ Verification note (2026-11-10), for the criteria above:
 **Description:** As an admin, I want a cancel button while a run is in progress, so I do not have to wait for the 3-hour timeout.
 
 **Acceptance Criteria:**
-- [ ] The Optimization screen shows "Cancel run" only while a run is `running`. The button calls `cancel_optimization_run`.
-- [ ] After a successful cancel, the next poll shows the run `failed` with reason "Cancelled".
-- [ ] Members who open the URL still see "This page is only available to admins." and no cancel button.
-- [ ] The generated client is regenerated from `web/openapi.json`. No hand-written `fetch` to the new route.
-- [ ] Typecheck passes.
-- [ ] Verify in browser using dev-browser skill.
+- [x] The Optimization screen shows "Cancel run" only while a run is `running`. The button calls `cancel_optimization_run`.
+- [x] After a successful cancel, the next poll shows the run `failed` with reason "Cancelled".
+- [x] Members who open the URL still see "This page is only available to admins." and no cancel button.
+- [x] The generated client is regenerated from `web/openapi.json`. No hand-written `fetch` to the new route.
+- [x] Typecheck passes.
+- [x] Verify in browser using dev-browser skill.
+
+- "Cancel run" is in the Optimization header, and only while `status.runs` contains a `running` row. It cancels that row. A skipped, failed, or empty history does not render the button. Members still render `OptimizationDenied`: the heading, "This page is only available to admins.", and no buttons.
+- The click goes through `optimizationService.cancel`, then the admin server function `cancelOptimizationNow`. That function calls the generated client `cancelOptimizationRun` (`operationId` `cancel_optimization_run`) with `path.run_id`. There is no hand-written `fetch`. After the call returns, the route invalidates the optimization query, so the next `GET /admin/optimization` is what replaces the row. The cancel response is not written into the table by itself.
+- `openapi-ts` 0.99.0 was run against `web/openapi.json`. The generated client was already current, so `web/src/client` did not change.
+- `bun run typecheck` passes. `chat-page.tsx` already failed `tsc` under `noUncheckedIndexedAccess` (`sessions[0]` and the session resolved from it). The empty case now falls back to `createNewSession()`, and deleting the active session only switches when the next row exists. That is a typecheck guard, not a chat feature.
+- The dev-browser skill is not in this environment. The check used the local API and the Vite app in Chrome. An admin with a `running` row saw "Cancel run". The click posted `POST /admin/optimization/runs/browser-cancel-run/cancel` (200). The following `GET /admin/optimization` showed Failed and reason Cancelled, and the button was gone. A member opening `/admin` saw "This page is only available to admins." and no cancel button. The stored row is `failed` / `Cancelled`.
+- Web: `bun run test src/test/optimization-page.test.tsx` was 12 passed. `uv run ruff check` and `uv run ruff format --check` passed. `uv run --env-file .env pytest -m "not network and not e2e"` was 305 passed, 23 deselected, and one failure: the known `tests/test_incremental_index.py::test_startup_resumes_indexing_and_deleting`. An earlier pass of that command, while the API, web, and MLflow were busy, also timed out `tests/test_deepfix_shim.py::test_shim_heartbeats_forwards_stdio_and_redacts_the_container_log` at 10 seconds. That test passed in the rerun and, alone, in 9.70 seconds. No Python product code changed in this story.
+- Not started: US-009 and US-010. No Dokploy run, and the default agent is still `openhands`.
 
 ### US-009: Dokploy end-to-end test
 **Description:** As an operator, I want one real run on the Dokploy deployment before the default agent changes.
