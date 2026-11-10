@@ -49,6 +49,10 @@ from deepfix_rag.hermes_sync import (
     read_heartbeat,
     store_from_env,
 )
+from deepfix_rag.hermes_trace_experiment import (
+    HERMES_TRACE_EXPERIMENT,
+    ensure_hermes_trace_experiment,
+)
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.promotion import PromotionDecision, apply_candidate
 from deepfix_rag.run_bundle import (
@@ -605,6 +609,11 @@ def run_hermes_job(
     )
     if not _row_is_running(db_path, run_id):
         return
+    # The gateway reads the id baked at boot. Creating the experiment here
+    # covers a boot that ran before MLflow was up, so the next gateway start
+    # and any search for deepfix_hermes find the same experiment.
+    if ensure_hermes_trace_experiment() is None:
+        LOGGER.warning("hermes trace experiment %s was not created", HERMES_TRACE_EXPERIMENT)
     secret = options.hermes_api_key or ""
     started = _started_at(db_path, run_id)
     with HermesClient(options.hermes_base_url, secret) as client:

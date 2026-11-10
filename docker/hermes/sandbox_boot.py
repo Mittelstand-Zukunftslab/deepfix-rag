@@ -23,6 +23,8 @@ from collections.abc import Mapping
 import os
 from pathlib import Path
 import pwd
+import sys
+import time
 from typing import Any
 
 import yaml
@@ -30,8 +32,10 @@ import yaml
 HERMES_HOME_ENV = "HERMES_HOME"
 DEFAULT_HERMES_HOME = Path("/opt/data")
 DEFAULT_SKILLS_DIR = Path("/opt/deepfix/skills")
-DEFAULT_TRACE_PLUGIN = Path("/opt/deepfix/plugins/deepfix-traces")
-TRACE_PLUGIN_NAME = "deepfix-traces"
+DEFAULT_HERMES_OTEL_PACKAGE = Path("/opt/hermes/.venv/lib/python3.14/site-packages/hermes_otel")
+DEFAULT_RUN_TAG_PLUGIN = Path("/opt/deepfix/plugins/deepfix-run-tag")
+HERMES_OTEL_PLUGIN = "hermes_otel"
+RUN_TAG_PLUGIN = "deepfix-run-tag"
 MODEL_PROVIDER = "openrouter"
 MODEL_DEFAULT = "anthropic/claude-haiku-5.5"
 MODEL_BASE_URL = "https://openrouter.ai/api/v1"
@@ -439,31 +443,72 @@ def _prepare_cli_log(home: Path) -> None:
     log_file.chmod(0o644)
 
 
-def _install_trace_plugin(home: Path, config: dict[str, Any], env: Mapping[str, str]) -> None:
-    """Enable deepfix-traces on the optimization profile when the image shipped it.
+def hermes_otel_document(env: Mapping[str, str], experiment_id: str | None) -> dict[str, Any]:
+    """``$HERMES_HOME/hermes_otel.yaml`` for the optimization profile.
 
-    The chat profile has its own home and does not receive this plugin.
+    ``type: mlflow`` sends traces only and sets ``x-mlflow-experiment-id``.
+    ``content_capture`` is ``off``, so prompts, responses, and tool bodies
+    are not span attributes. The chat profile does not get this file.
     """
-    raw = env.get("DEEPFIX_TRACE_PLUGIN", "").strip()
-    source = Path(raw) if raw else DEFAULT_TRACE_PLUGIN
+    tracking = mlflow_env(env)["MLFLOW_TRACKING_URI"].rstrip("/")
+    backend: dict[str, Any] = {
+        "type": "mlflow",
+        "endpoint": tracking,
+        "metrics": False,
+        "logs": False,
+    }
+    if experiment_id:
+        backend["experiment_id"] = str(experiment_id)
+    else:
+        backend["experiment_id_env"] = "DEEPFIX_HERMES_EXPERIMENT_ID"
+    return {
+        "enabled": True,
+        "content_capture": "off",
+        "capture_conversation_history": False,
+        "capture_sender_id": False,
+        "force_flush_on_session_end": True,
+        "backends": [backend],
+    }
+
+
+def _trace_experiment_id(env: Mapping[str, str]) -> str | None:
+    """Create ``deepfix_hermes`` when MLflow answers. A miss does not stop boot."""
+    if env.get("DEEPFIX_SKIP_TRACE_EXPERIMENT", "").strip() == "1":
+        preset = env.get("DEEPFIX_HERMES_EXPERIMENT_ID", "").strip()
+        return preset or None
+    raw_attempts = env.get("DEEPFIX_TRACE_EXPERIMENT_ATTEMPTS", "").strip() or "1"
+    raw_delay = env.get("DEEPFIX_TRACE_EXPERIMENT_DELAY_SECONDS", "").strip() or "0"
+    try:
+        attempts = max(1, int(raw_attempts))
+    except ValueError:
+        attempts = 1
+    try:
+        delay = float(raw_delay)
+    except ValueError:
+        delay = 0.0
+    tracking = mlflow_env(env)["MLFLOW_TRACKING_URI"]
+    from deepfix_rag.hermes_trace_experiment import ensure_hermes_trace_experiment
+
+    for attempt in range(attempts):
+        experiment_id = ensure_hermes_trace_experiment(tracking)
+        if experiment_id:
+            return experiment_id
+        if attempt + 1 < attempts and delay > 0:
+            time.sleep(delay)
+    print(
+        "hermes trace experiment deepfix_hermes was not created; "
+        "restart the container once MLflow is reachable",
+        file=sys.stderr,
+    )
+    return None
+
+
+def _link_plugin(home: Path, name: str, source: Path) -> None:
     if not (source / "plugin.yaml").is_file() or not (source / "__init__.py").is_file():
         return
-    plugins = config.get("plugins")
-    if not isinstance(plugins, dict):
-        plugins = {}
-        config["plugins"] = plugins
-    enabled = plugins.get("enabled")
-    if not isinstance(enabled, list):
-        enabled = []
-    if TRACE_PLUGIN_NAME not in enabled:
-        enabled.append(TRACE_PLUGIN_NAME)
-    plugins["enabled"] = enabled
-    _dump_yaml(home / "config.yaml", config)
-    _chown_hermes(home / "config.yaml")
-
     dest_root = home / "plugins"
     dest_root.mkdir(parents=True, exist_ok=True)
-    dest = dest_root / TRACE_PLUGIN_NAME
+    dest = dest_root / name
     if dest.is_symlink():
         if dest.resolve() == source.resolve():
             return
@@ -471,6 +516,56 @@ def _install_trace_plugin(home: Path, config: dict[str, Any], env: Mapping[str, 
     elif dest.exists():
         return
     dest.symlink_to(source)
+
+
+def _plugin_source(env: Mapping[str, str], env_name: str, default: Path) -> Path:
+    raw = env.get(env_name, "").strip()
+    if raw:
+        return Path(raw)
+    recorded = Path("/opt/deepfix/hermes-otel-package")
+    if env_name == "HERMES_OTEL_PACKAGE" and recorded.is_file():
+        text = recorded.read_text(encoding="utf-8").strip()
+        if text:
+            return Path(text)
+    return default
+
+
+def _install_trace_plugins(
+    home: Path, config: dict[str, Any], env: Mapping[str, str]
+) -> str | None:
+    """Enable hermes-otel and the run-id stamp on the optimization profile only.
+
+    The chat profile has its own config and does not receive either plugin
+    or ``hermes_otel.yaml``.
+    """
+    experiment_id = _trace_experiment_id(env)
+    document = hermes_otel_document(env, experiment_id)
+    _dump_yaml(home / "hermes_otel.yaml", document)
+    otel_source = _plugin_source(env, "HERMES_OTEL_PACKAGE", DEFAULT_HERMES_OTEL_PACKAGE)
+    tag_source = _plugin_source(env, "DEEPFIX_RUN_TAG_PLUGIN", DEFAULT_RUN_TAG_PLUGIN)
+    enabled_names: list[str] = []
+    if (otel_source / "plugin.yaml").is_file():
+        _link_plugin(home, HERMES_OTEL_PLUGIN, otel_source)
+        enabled_names.append(HERMES_OTEL_PLUGIN)
+    if (tag_source / "plugin.yaml").is_file():
+        _link_plugin(home, RUN_TAG_PLUGIN, tag_source)
+        enabled_names.append(RUN_TAG_PLUGIN)
+    if not enabled_names:
+        return experiment_id
+    plugins = config.get("plugins")
+    if not isinstance(plugins, dict):
+        plugins = {}
+        config["plugins"] = plugins
+    enabled = plugins.get("enabled")
+    if not isinstance(enabled, list):
+        enabled = []
+    for name in enabled_names:
+        if name not in enabled:
+            enabled.append(name)
+    plugins["enabled"] = enabled
+    _dump_yaml(home / "config.yaml", config)
+    _chown_hermes(home / "config.yaml")
+    return experiment_id
 
 
 def apply_sandbox(
@@ -512,7 +607,11 @@ def apply_sandbox(
     updates.update(mlflow_env(env))
     _upsert_env(home / ".env", updates, _STRIPPED_ENV_KEYS)
     _prepare_cli_log(home)
-    _install_trace_plugin(home, config, env)
+    experiment_id = _install_trace_plugins(home, config, env)
+    if experiment_id:
+        # The yaml already contains the id. The env name is what
+        # experiment_id_env reads if a later edit points at it.
+        _upsert_env(home / ".env", {"DEEPFIX_HERMES_EXPERIMENT_ID": experiment_id}, frozenset())
 
     chat_dir = home / "profiles" / CHAT_PROFILE
     chat_dir.mkdir(parents=True, exist_ok=True)

@@ -44,6 +44,7 @@ def _env(**overrides: str) -> dict[str, str]:
         "S3_REGION": "us-east-1",
         "S3_ACCESS_KEY_ID": "hermes-optimizer",
         "S3_SECRET_ACCESS_KEY": "scoped-secret-value",
+        "DEEPFIX_SKIP_TRACE_EXPERIMENT": "1",
     }
     env.update(overrides)
     return env
@@ -125,20 +126,55 @@ def test_apply_sandbox_writes_optimization_config_and_stopped_chat(tmp_path: Pat
     assert '"stopped"' in state
 
 
-def test_trace_plugin_is_enabled_on_the_optimization_profile_only(tmp_path: Path) -> None:
+def test_hermes_otel_is_enabled_on_the_optimization_profile_only(tmp_path: Path) -> None:
     home = tmp_path / "data"
-    source = tmp_path / "deepfix-traces"
-    source.mkdir()
-    (source / "plugin.yaml").write_text("name: deepfix-traces\n", encoding="utf-8")
-    (source / "__init__.py").write_text("def register(ctx):\n    return None\n", encoding="utf-8")
-    boot.apply_sandbox(home, _env(DEEPFIX_TRACE_PLUGIN=str(source)), _skills(tmp_path))
+    otel = tmp_path / "hermes_otel"
+    tag = tmp_path / "deepfix-run-tag"
+    for directory, body in (
+        (otel, "name: hermes_otel\n"),
+        (tag, "name: deepfix-run-tag\n"),
+    ):
+        directory.mkdir()
+        (directory / "plugin.yaml").write_text(body, encoding="utf-8")
+        (directory / "__init__.py").write_text(
+            "def register(ctx):\n    return None\n", encoding="utf-8"
+        )
+    tracking = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    boot.apply_sandbox(
+        home,
+        _env(
+            HERMES_OTEL_PACKAGE=str(otel),
+            DEEPFIX_RUN_TAG_PLUGIN=str(tag),
+            MLFLOW_TRACKING_URI=tracking,
+            DEEPFIX_SKIP_TRACE_EXPERIMENT="0",
+            DEEPFIX_TRACE_EXPERIMENT_ATTEMPTS="1",
+        ),
+        _skills(tmp_path),
+    )
     config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
-    assert config["plugins"]["enabled"] == ["deepfix-traces"]
-    link = home / "plugins" / "deepfix-traces"
-    assert link.is_symlink()
-    assert link.resolve() == source.resolve()
+    assert config["plugins"]["enabled"] == ["hermes_otel", "deepfix-run-tag"]
+    assert (home / "plugins" / "hermes_otel").resolve() == otel.resolve()
+    assert (home / "plugins" / "deepfix-run-tag").resolve() == tag.resolve()
+    document = yaml.safe_load((home / "hermes_otel.yaml").read_text(encoding="utf-8"))
+    assert document["content_capture"] == "off"
+    assert document["capture_conversation_history"] is False
+    assert document["backends"][0]["type"] == "mlflow"
+    assert document["backends"][0]["endpoint"] == tracking
+    assert document["backends"][0]["metrics"] is False
+    assert document["backends"][0]["logs"] is False
+    assert document["backends"][0]["experiment_id"]
+    text = (home / "hermes_otel.yaml").read_text(encoding="utf-8")
+    assert "scoped-secret-value" not in text
+    assert API_KEY not in text
     chat = (home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8")
-    assert "deepfix-traces" not in chat
+    assert "hermes_otel" not in chat
+    assert "deepfix-run-tag" not in chat
+    assert not (home / "profiles" / "chat" / "hermes_otel.yaml").exists()
+    dotenv = (home / ".env").read_text(encoding="utf-8")
+    assert f"DEEPFIX_HERMES_EXPERIMENT_ID={document['backends'][0]['experiment_id']}" in dotenv
+    chat_env = (home / "profiles" / "chat" / ".env").read_text(encoding="utf-8")
+    assert "DEEPFIX_HERMES_EXPERIMENT_ID" not in chat_env
+    assert "MLFLOW_TRACKING_URI" not in chat_env
 
 
 def test_apply_sandbox_rejects_a_skill_the_agent_could_edit(tmp_path: Path) -> None:
@@ -161,10 +197,11 @@ def test_image_locks_skills_and_records_the_toolset_names() -> None:
     assert "heartbeat.json" in dockerfile
     assert "/opt/deepfix/bin" in dockerfile
     assert "ln -sfn /opt/deepfix/bin/deepfix /usr/local/bin/deepfix" in dockerfile
-    assert "deepfix-traces" in dockerfile
+    assert "deepfix-run-tag" in dockerfile
     assert "deepfix-cli-log" in dockerfile
-    assert "briancaffey/hermes-otel is not" in dockerfile
-    assert "OTEL_EXPORTER_OTLP_ENDPOINT" in dockerfile
+    assert "ef0c925a145b6d6455beb70cce5c611a2b316440" in dockerfile
+    assert "hermes-otel @" in dockerfile
+    assert "content_capture" in dockerfile
     compose = (REPO_ROOT / "compose.hermes.yml").read_text(encoding="utf-8")
     assert "MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}" in compose
     assert "MLFLOW_DEV_RAG_EXPERIMENT:" in compose

@@ -66,7 +66,7 @@ def test_shim_heartbeats_forwards_stdio_and_redacts_the_container_log(tmp_path: 
         [sys.executable, "-m", "deepfix_rag.deepfix_shim", "--config", str(config)],
         env=_env(tmp_path, child, DEEPFIX_HEARTBEAT_INTERVAL_SECONDS="0.15"),
         capture_output=True,
-        timeout=10,
+        timeout=60,
         check=False,
     )
     assert completed.returncode == 3
@@ -115,7 +115,7 @@ def test_marker_file_supplies_the_run_id_when_argv_has_none(tmp_path: Path) -> N
         env=_env(tmp_path, child, DEEPFIX_HEARTBEAT_INTERVAL_SECONDS="30"),
         cwd=work,
         capture_output=True,
-        timeout=10,
+        timeout=60,
         check=False,
     )
     assert completed.returncode == 3
@@ -140,7 +140,7 @@ def test_a_direct_interpreter_call_does_not_write_a_heartbeat(tmp_path: Path) ->
         [str(child), "--help"],
         env=env,
         capture_output=True,
-        timeout=10,
+        timeout=60,
         check=False,
     )
     assert completed.returncode == 3

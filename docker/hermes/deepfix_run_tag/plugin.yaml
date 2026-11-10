@@ -1,0 +1,10 @@
+name: deepfix-run-tag
+version: 0.1.0
+description: >
+  Stamp deepfix.run_id on Hermes spans. hermes-otel exports the spans.
+  This plugin does not record prompts, tool arguments, or responses.
+provides_hooks:
+  - pre_llm_call
+  - pre_api_request
+  - pre_tool_call
+  - on_session_start

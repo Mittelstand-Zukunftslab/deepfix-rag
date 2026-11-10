@@ -55,12 +55,14 @@
 # deepfix-cli-log tails that file onto the container stderr, which is
 # what `docker logs` shows.
 #
-# Native OTLP on this pin is content-free gateway monitoring. It reads
-# monitoring.export.otlp.endpoint and does not emit an agent span or an
-# LLM span, and it does not honor OTEL_EXPORTER_OTLP_ENDPOINT for those
-# spans. Those variables are not set. briancaffey/hermes-otel is not
-# installed. The deepfix-traces plugin records the spans through the
-# deepfix virtualenv into the MLflow experiment deepfix_hermes.
+# Native OTLP on this pin is content-free gateway monitoring. It does not
+# emit an agent span or an LLM span. Traces come from briancaffey/hermes-otel
+# v1.32.6, commit ef0c925a145b6d6455beb70cce5c611a2b316440, installed into
+# the Hermes virtualenv. Boot writes $HERMES_HOME/hermes_otel.yaml with
+# type: mlflow, content_capture off, and the deepfix_hermes experiment id.
+# The chat profile does not get that file or the plugin. A small
+# deepfix-run-tag plugin stamps deepfix.run_id on the spans. The OTEL
+# exporter env vars are not set; hermes-otel owns the MLflow header.
 # deepfix-sync is the fixed bundle command (download input/, upload output/).
 # It is not a script the model writes. The optimization profile's S3 key is
 # the hermes-optimizer prefix key, injected at boot, not baked in.
@@ -90,6 +92,8 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/deepfix/python \
     DEEPFIX_REAL_BIN=/opt/deepfix/.venv/bin/deepfix \
     DEEPFIX_PYTHON=/opt/deepfix/.venv/bin/python \
     DEEPFIX_CONTAINER_LOG=/opt/data/logs/deepfix-cli.log \
+    DEEPFIX_TRACE_EXPERIMENT_ATTEMPTS=5 \
+    DEEPFIX_TRACE_EXPERIMENT_DELAY_SECONDS=2 \
     PYTHONDONTWRITEBYTECODE=1
 
 # Secrets are not set here. API_SERVER_KEY and OPENROUTER_API_KEY come from
@@ -113,10 +117,16 @@ RUN uv venv --python 3.12 /opt/deepfix/.venv \
 COPY src ./src
 RUN uv pip install --python /opt/deepfix/.venv/bin/python --no-deps -e .
 
+# hermes-otel v1.32.6. Installed into the Hermes interpreter, which is the
+# process that loads plugins. The deepfix virtualenv does not import it.
+RUN uv pip install --python /opt/hermes/.venv/bin/python \
+        "hermes-otel @ git+https://github.com/briancaffey/hermes-otel.git@ef0c925a145b6d6455beb70cce5c611a2b316440" \
+    && /opt/hermes/.venv/bin/python -c "import hermes_otel, pathlib; pathlib.Path('/opt/deepfix/hermes-otel-package').write_text(str(pathlib.Path(hermes_otel.__file__).resolve().parent) + '\n', encoding='utf-8')"
+
 COPY .agents/skills /opt/deepfix/skills
 COPY docker/hermes/sandbox_boot.py /opt/deepfix/sandbox_boot.py
 COPY docker/hermes/bin/deepfix /opt/deepfix/bin/deepfix
-COPY docker/hermes/deepfix_traces /opt/deepfix/plugins/deepfix-traces
+COPY docker/hermes/deepfix_run_tag /opt/deepfix/plugins/deepfix-run-tag
 COPY docker/hermes/s6/deepfix-cli-log /etc/s6-overlay/s6-rc.d/deepfix-cli-log
 COPY docker/hermes/01b-deepfix-sandbox /etc/cont-init.d/01b-deepfix-sandbox
 

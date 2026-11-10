@@ -78,7 +78,7 @@ include = [
     "scripts/openhands_runner.py",
     "docker/hermes/sandbox_boot.py",
     "docker/hermes/bin/deepfix",
-    "docker/hermes/deepfix_traces/__init__.py",
+    "docker/hermes/deepfix_run_tag/__init__.py",
 ]
 
 
