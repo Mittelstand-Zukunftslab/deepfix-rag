@@ -18,6 +18,7 @@ import re
 from typing import Any
 
 _LABELED = re.compile(r"The DeepFix run id is ([A-Za-z0-9][A-Za-z0-9._-]{0,127})\b")
+_RUN_FLAG = re.compile(r"--run-id(?:=|\s+)([A-Za-z0-9][A-Za-z0-9._-]{0,127})\b")
 _RUN_IN_PATH = re.compile(r"(?:^|[\\/])runs[\\/]([A-Za-z0-9][A-Za-z0-9._-]{0,127})(?=[\\/]|$)")
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SECRET_ENVS = (
@@ -46,11 +47,14 @@ def _scrub_span(span: Any, run_id: str = "") -> None:
     hermes-otel records ``hermes.tool.command`` even when content capture is
     off. A command that contains a secret must not leave the process.
     """
-    chosen = run_id or _run_id
+    global _run_id
     try:
         present = dict(span.attributes or {})
     except Exception:
         present = {}
+    chosen = run_id or _run_id or _run_id_from_attributes(present)
+    if chosen:
+        _run_id = chosen
     if chosen and _ATTRIBUTE not in present:
         try:
             span.set_attribute(_ATTRIBUTE, chosen)
@@ -133,15 +137,35 @@ def _stamp_open_spans(session_id: str, run_id: str, tracer: Any = None) -> None:
         _scrub_span(span, run_id)
 
 
+def _providers() -> list[Any]:
+    """Tracer providers that can take a processor.
+
+    hermes-otel keeps its provider on the pipeline. The global provider is
+    the fallback when that pipeline is not the one the process exports.
+    """
+    found: list[Any] = []
+    tracer = _tracer()
+    pipeline = getattr(tracer, "pipeline", None) if tracer is not None else None
+    provider = getattr(pipeline, "tracer_provider", None) if pipeline is not None else None
+    if provider is not None:
+        found.append(provider)
+    try:
+        from opentelemetry import trace
+
+        current = trace.get_tracer_provider()
+    except Exception:
+        current = None
+    if current is not None and current not in found and hasattr(current, "add_span_processor"):
+        found.append(current)
+    return found
+
+
 def _attach_processor() -> None:
     global _attached
     if _attached:
         return
-    tracer = _tracer()
-    pipeline = getattr(tracer, "pipeline", None)
-    provider = getattr(pipeline, "tracer_provider", None)
-    add = getattr(provider, "add_span_processor", None)
-    if add is None:
+    providers = _providers()
+    if not providers:
         return
     try:
         from opentelemetry.sdk.trace import SpanProcessor
@@ -155,11 +179,17 @@ def _attach_processor() -> None:
         def on_end(self, span: Any) -> None:
             return
 
-    try:
-        add(_SdkProcessor())
-    except Exception:
-        return
-    _attached = True
+    attached = False
+    for provider in providers:
+        add = getattr(provider, "add_span_processor", None)
+        if add is None:
+            continue
+        try:
+            add(_SdkProcessor())
+        except Exception:
+            continue
+        attached = True
+    _attached = attached
 
 
 def _tracer() -> Any:
@@ -204,9 +234,23 @@ def _run_id_in_text(text: str) -> str | None:
     labeled = _LABELED.search(text)
     if labeled and _acceptable(labeled.group(1)):
         return labeled.group(1)
+    flagged = _RUN_FLAG.search(text)
+    if flagged and _acceptable(flagged.group(1)):
+        return flagged.group(1)
     match = _RUN_IN_PATH.search(text)
     if match and _acceptable(match.group(1)):
         return match.group(1)
+    return None
+
+
+def _run_id_from_attributes(attributes: dict[str, Any]) -> str | None:
+    """The run id already present on a span, usually in the terminal command."""
+    for value in attributes.values():
+        if not isinstance(value, str):
+            continue
+        found = _run_id_in_text(value)
+        if found:
+            return found
     return None
 
 

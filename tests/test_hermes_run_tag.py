@@ -51,6 +51,19 @@ class _Spans:
         return self.parent
 
 
+def test_a_terminal_command_carries_the_run_id() -> None:
+    plugin = _load()
+    plugin.reset_state()
+    span = _Span()
+    span.attributes["hermes.tool.command"] = (
+        "deepfix-sync download --run-id run-77 && "
+        "deepfix index --index-dir s3://deepfix-index/optimization/runs/run-77/candidate-index"
+    )
+    plugin._scrub_span(span)
+    assert span.attributes["deepfix.run_id"] == "run-77"
+    assert plugin._run_id == "run-77"
+
+
 def test_the_turn_message_sets_only_the_run_id(monkeypatch: pytest.MonkeyPatch) -> None:
     plugin = _load()
     monkeypatch.setenv("S3_SECRET_ACCESS_KEY", SECRET)
