@@ -327,6 +327,9 @@ def test_image_locks_skills_and_records_the_toolset_names() -> None:
     compose = (REPO_ROOT / "compose.hermes.yml").read_text(encoding="utf-8")
     assert "MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}" in compose
     assert "HERMES_MODEL_BASE_URL: ${HERMES_MODEL_BASE_URL:-}" in compose
+    assert "EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}" in compose
+    assert "EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}" in compose
+    assert "EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}" in compose
     assert "MLFLOW_DEV_RAG_EXPERIMENT:" in compose
     stack = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert '"5000:5000"' in stack
