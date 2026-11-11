@@ -140,6 +140,35 @@ class CustomLiteLLM(LiteLLM):
         return await asyncio.to_thread(self.chat, messages, **kwargs)
 
 
+def lancedb_storage_options(
+    uri: str,
+    *,
+    endpoint: str | None,
+    access_key: str | None,
+    secret_key: str | None,
+    region: str | None,
+) -> dict[str, str]:
+    """LanceDB object-store options for an ``s3://`` index. Empty for a local path.
+
+    An ``http://`` endpoint (the in-network RustFS URL) is refused unless
+    ``allow_http`` is set. ``https://`` endpoints are left unchanged.
+    """
+    if not str(uri).startswith("s3://"):
+        return {}
+    options: dict[str, str] = {}
+    if access_key:
+        options["aws_access_key_id"] = str(access_key)
+    if secret_key:
+        options["aws_secret_access_key"] = str(secret_key)
+    if region:
+        options["region"] = str(region)
+    if endpoint:
+        options["endpoint"] = str(endpoint)
+        if str(endpoint).startswith("http://"):
+            options["allow_http"] = "true"
+    return options
+
+
 class RAGWorkflow(Workflow):
     """Event-driven RAG Workflow supporting Ingestion, Retrieval, Reranking, and Synthesis."""
 
@@ -198,17 +227,13 @@ class RAGWorkflow(Workflow):
 
         if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
             uri = self.config.retrieval.lancedb_index_dir
-            storage_options: dict[str, str] = {}
-
-            if uri.startswith("s3://"):
-                if settings.S3_ACCESS_KEY_ID:
-                    storage_options["aws_access_key_id"] = str(settings.S3_ACCESS_KEY_ID)
-                if settings.S3_SECRET_ACCESS_KEY:
-                    storage_options["aws_secret_access_key"] = str(settings.S3_SECRET_ACCESS_KEY)
-                if settings.S3_REGION:
-                    storage_options["region"] = str(settings.S3_REGION)
-                if settings.S3_ENDPOINT_URL:
-                    storage_options["endpoint"] = str(settings.S3_ENDPOINT_URL)
+            storage_options = lancedb_storage_options(
+                uri,
+                endpoint=settings.S3_ENDPOINT_URL,
+                access_key=settings.S3_ACCESS_KEY_ID,
+                secret_key=settings.S3_SECRET_ACCESS_KEY,
+                region=settings.S3_REGION,
+            )
 
             conn = lancedb.connect(
                 uri=uri,
