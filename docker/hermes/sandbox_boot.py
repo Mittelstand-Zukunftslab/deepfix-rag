@@ -32,7 +32,10 @@ import yaml
 HERMES_HOME_ENV = "HERMES_HOME"
 DEFAULT_HERMES_HOME = Path("/opt/data")
 DEFAULT_SKILLS_DIR = Path("/opt/deepfix/skills")
-DEFAULT_HERMES_OTEL_PACKAGE = Path("/opt/hermes/.venv/lib/python3.14/site-packages/hermes_otel")
+# Outside the sealed Hermes venv. A plugin with python_dependencies becomes a
+# uv workspace member and the image then reports the venv out of sync with
+# uv.lock. The package is installed under this directory instead.
+DEFAULT_HERMES_OTEL_PACKAGE = Path("/opt/deepfix/otel/hermes_otel")
 DEFAULT_RUN_TAG_PLUGIN = Path("/opt/deepfix/plugins/deepfix-run-tag")
 HERMES_OTEL_PLUGIN = "hermes_otel"
 RUN_TAG_PLUGIN = "deepfix-run-tag"
@@ -282,6 +285,76 @@ def _chown_hermes(path: Path) -> None:
     if identity is None:
         return
     os.chown(path, identity[0], identity[1])
+
+
+def _chown_tree(root: Path, uid: int, gid: int) -> None:
+    """Give ``uid``/``gid`` the tree without following links out of the home.
+
+    Plugin entries under the home are symlinks into root-owned image paths.
+    ``lchown`` changes the link itself and does not hand the agent the target.
+    """
+    os.lchown(root, uid, gid)
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        for entry in current.iterdir():
+            os.lchown(entry, uid, gid)
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            pending.append(entry)
+
+
+def _ensure_owner_writable(path: Path, *, directory: bool) -> None:
+    """Add the owner write bit the hermes user needs. Symlinks are left alone.
+
+    ``chmod`` follows a symlink, so a link to a read-only skill or plugin
+    file must not be passed here. Directories also need owner search and
+    write or creating ``SOUL.md`` still fails with ``EACCES``.
+    """
+    if path.is_symlink():
+        return
+    mode = path.stat().st_mode & 0o777
+    required = 0o700 if directory else 0o200
+    if mode & required == required:
+        return
+    path.chmod(mode | required)
+
+
+def repair_home_ownership(home: Path) -> None:
+    """Make an existing or fresh Hermes home writable by the runtime user.
+
+    The image's stage2 hook chowns ``/opt/data`` itself only when that
+    directory is not already owned by ``hermes``, and it never chowns
+    ``SOUL.md``. A named volume is root-owned on first use. A volume that
+    already holds a root-owned or mode ``0444`` ``SOUL.md`` stays that way.
+    Gateway startup rewrites a legacy template in place and raises
+    ``HomeInitializationError`` when that write is ``EACCES``. This runs as
+    root after the files this boot creates, so neither case needs a manual
+    ``chown`` on the server.
+    """
+    if not home.exists() or home.is_symlink():
+        return
+    identity = _hermes_uid()
+    if identity is not None and os.geteuid() == 0:
+        try:
+            _chown_tree(home, identity[0], identity[1])
+        except OSError as exc:
+            raise SandboxBootError(
+                f"cannot give the hermes user ownership of {home}: {exc}"
+            ) from exc
+    _ensure_owner_writable(home, directory=True)
+    for directory, dirnames, filenames in os.walk(home, followlinks=False):
+        current = Path(directory)
+        for name in list(dirnames):
+            path = current / name
+            if path.is_symlink():
+                dirnames.remove(name)
+                continue
+            _ensure_owner_writable(path, directory=True)
+        for name in filenames:
+            path = current / name
+            if name == "SOUL.md" and path.is_file():
+                _ensure_owner_writable(path, directory=False)
 
 
 def _assert_skills_locked(skills_dir: Path) -> None:
@@ -642,6 +715,7 @@ def apply_sandbox(
     state.chmod(0o644)
     _chown_hermes(state)
     _chown_hermes(chat_dir)
+    repair_home_ownership(home)
 
 
 def main() -> None:

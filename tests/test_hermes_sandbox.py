@@ -187,6 +187,55 @@ def test_apply_sandbox_rejects_a_skill_the_agent_could_edit(tmp_path: Path) -> N
     assert not (home / ".env").exists()
 
 
+def test_repair_home_ownership_fixes_soul_without_following_symlinks(tmp_path: Path) -> None:
+    home = tmp_path / "data"
+    nested = home / "profiles" / "chat"
+    nested.mkdir(parents=True)
+    soul = home / "SOUL.md"
+    soul.write_text("legacy template\n", encoding="utf-8")
+    soul.chmod(0o444)
+    chat_soul = nested / "SOUL.md"
+    chat_soul.write_text("chat\n", encoding="utf-8")
+    chat_soul.chmod(0o444)
+    locked = home / "sealed"
+    locked.mkdir()
+    locked.chmod(0o555)
+    dotenv = home / ".env"
+    dotenv.write_text("API_SERVER_KEY=secret\n", encoding="utf-8")
+    dotenv.chmod(0o600)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "SOUL.md"
+    outside_file.write_text("do not touch\n", encoding="utf-8")
+    outside_file.chmod(0o444)
+    outside.chmod(0o555)
+    (home / "linked-soul.md").symlink_to(outside_file)
+    (home / "linked-dir").symlink_to(outside, target_is_directory=True)
+
+    boot.repair_home_ownership(home)
+
+    assert soul.stat().st_mode & 0o200
+    assert soul.read_text(encoding="utf-8") == "legacy template\n"
+    assert chat_soul.stat().st_mode & 0o200
+    assert (locked.stat().st_mode & 0o700) == 0o700
+    assert (dotenv.stat().st_mode & 0o777) == 0o600
+    assert (outside_file.stat().st_mode & 0o777) == 0o444
+    assert (outside.stat().st_mode & 0o777) == 0o555
+
+
+def test_apply_sandbox_repairs_an_existing_unwritable_soul(tmp_path: Path) -> None:
+    home = tmp_path / "data"
+    home.mkdir()
+    soul = home / "SOUL.md"
+    soul.write_text("legacy template\n", encoding="utf-8")
+    soul.chmod(0o444)
+    boot.apply_sandbox(home, _env(), _skills(tmp_path))
+    assert soul.stat().st_mode & 0o200
+    assert soul.read_text(encoding="utf-8") == "legacy template\n"
+    assert (home / "profiles" / "chat" / "SOUL.md").stat().st_mode & 0o200
+
+
 def test_image_locks_skills_and_records_the_toolset_names() -> None:
     dockerfile = (REPO_ROOT / "docker" / "hermes" / "Dockerfile").read_text(encoding="utf-8")
     assert "chmod 0444" in dockerfile
@@ -201,6 +250,13 @@ def test_image_locks_skills_and_records_the_toolset_names() -> None:
     assert "deepfix-cli-log" in dockerfile
     assert "ef0c925a145b6d6455beb70cce5c611a2b316440" in dockerfile
     assert "hermes-otel @" in dockerfile
+    assert "--target /opt/deepfix/otel" in dockerfile
+    assert "python_runtime: external" in dockerfile
+    assert "deepfix-otel.pth" in dockerfile
+    assert (
+        'uv pip install --python /opt/hermes/.venv/bin/python \\\n        "hermes-otel'
+        not in dockerfile
+    )
     assert "content_capture" in dockerfile
     compose = (REPO_ROOT / "compose.hermes.yml").read_text(encoding="utf-8")
     assert "MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}" in compose

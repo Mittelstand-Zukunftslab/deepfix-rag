@@ -57,12 +57,18 @@
 #
 # Native OTLP on this pin is content-free gateway monitoring. It does not
 # emit an agent span or an LLM span. Traces come from briancaffey/hermes-otel
-# v1.32.6, commit ef0c925a145b6d6455beb70cce5c611a2b316440, installed into
-# the Hermes virtualenv. Boot writes $HERMES_HOME/hermes_otel.yaml with
-# type: mlflow, content_capture off, and the deepfix_hermes experiment id.
-# The chat profile does not get that file or the plugin. A small
-# deepfix-run-tag plugin stamps deepfix.run_id on the spans. The OTEL
-# exporter env vars are not set; hermes-otel owns the MLflow header.
+# v1.32.6, commit ef0c925a145b6d6455beb70cce5c611a2b316440. The package is
+# installed under /opt/deepfix/otel, not into /opt/hermes/.venv. That venv is
+# sealed to uv.lock; pip-installing the plugin there, or enabling a plugin
+# whose manifest declares python_dependencies, makes startup report
+# "venv: out of sync with uv.lock". The installed plugin.yaml is marked
+# python_runtime: external so it is not a workspace member, and a .pth file
+# adds /opt/deepfix/otel to the Hermes interpreter only. Boot writes
+# $HERMES_HOME/hermes_otel.yaml with type: mlflow, content_capture off, and
+# the deepfix_hermes experiment id. The chat profile does not get that file
+# or the plugin. A small deepfix-run-tag plugin stamps deepfix.run_id on the
+# spans. The OTEL exporter env vars are not set; hermes-otel owns the MLflow
+# header.
 # deepfix-sync is the fixed bundle command (download input/, upload output/).
 # It is not a script the model writes. The optimization profile's S3 key is
 # the hermes-optimizer prefix key, injected at boot, not baked in.
@@ -117,11 +123,21 @@ RUN uv venv --python 3.12 /opt/deepfix/.venv \
 COPY src ./src
 RUN uv pip install --python /opt/deepfix/.venv/bin/python --no-deps -e .
 
-# hermes-otel v1.32.6. Installed into the Hermes interpreter, which is the
-# process that loads plugins. The deepfix virtualenv does not import it.
-RUN uv pip install --python /opt/hermes/.venv/bin/python \
-        "hermes-otel @ git+https://github.com/briancaffey/hermes-otel.git@ef0c925a145b6d6455beb70cce5c611a2b316440" \
-    && /opt/hermes/.venv/bin/python -c "import hermes_otel, pathlib; pathlib.Path('/opt/deepfix/hermes-otel-package').write_text(str(pathlib.Path(hermes_otel.__file__).resolve().parent) + '\n', encoding='utf-8')"
+# hermes-otel v1.32.6, outside the sealed Hermes venv. --target does not
+# change that environment's installed distributions, so the uv.lock stamp
+# stays the one the base image recorded. python_runtime: external keeps the
+# enabled plugin out of the workspace-member stamp. The .pth is read only by
+# the Hermes interpreter; the deepfix 3.12 venv does not see it.
+RUN set -eu; \
+    uv pip install --python /opt/hermes/.venv/bin/python \
+        --target /opt/deepfix/otel \
+        "hermes-otel @ git+https://github.com/briancaffey/hermes-otel.git@ef0c925a145b6d6455beb70cce5c611a2b316440"; \
+    PYTHONPATH=/opt/deepfix/otel /opt/hermes/.venv/bin/python -c "from pathlib import Path; plugin = Path('/opt/deepfix/otel/hermes_otel/plugin.yaml'); text = plugin.read_text(encoding='utf-8'); plugin.write_text(text if 'python_runtime:' in text else 'python_runtime: external\n' + text, encoding='utf-8'); Path('/opt/deepfix/hermes-otel-package').write_text('/opt/deepfix/otel/hermes_otel\n', encoding='utf-8')"; \
+    site="$(/opt/hermes/.venv/bin/python -c 'import site; print(site.getsitepackages()[0])')"; \
+    printf '%s\n' /opt/deepfix/otel > "$site/deepfix-otel.pth"; \
+    find /opt/deepfix/otel -type d -exec chmod 0755 {} +; \
+    find /opt/deepfix/otel -type f -exec chmod 0644 {} +; \
+    chown -R root:root /opt/deepfix/otel /opt/deepfix/hermes-otel-package "$site/deepfix-otel.pth"
 
 COPY .agents/skills /opt/deepfix/skills
 COPY docker/hermes/sandbox_boot.py /opt/deepfix/sandbox_boot.py
