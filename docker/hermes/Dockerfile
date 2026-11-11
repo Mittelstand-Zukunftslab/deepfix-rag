@@ -144,6 +144,8 @@ COPY docker/hermes/sandbox_boot.py /opt/deepfix/sandbox_boot.py
 COPY docker/hermes/bin/deepfix /opt/deepfix/bin/deepfix
 COPY docker/hermes/deepfix_run_tag /opt/deepfix/plugins/deepfix-run-tag
 COPY docker/hermes/s6/deepfix-cli-log /etc/s6-overlay/s6-rc.d/deepfix-cli-log
+COPY docker/hermes/seal_volume.py /opt/deepfix/seal_volume.py
+COPY docker/hermes/00-deepfix-volume /etc/cont-init.d/00-deepfix-volume
 COPY docker/hermes/01b-deepfix-sandbox /etc/cont-init.d/01b-deepfix-sandbox
 
 # Skills are root-owned. Files are 0444. Directories stay traversable and
@@ -151,9 +153,9 @@ COPY docker/hermes/01b-deepfix-sandbox /etc/cont-init.d/01b-deepfix-sandbox
 # The venv is already root-owned and world-executable; do not chmod it.
 RUN find /opt/deepfix/skills /opt/deepfix/plugins -type d -exec chmod 0755 {} + \
     && find /opt/deepfix/skills /opt/deepfix/plugins -type f -exec chmod 0444 {} + \
-    && chown -R root:root /opt/deepfix/skills /opt/deepfix/plugins /opt/deepfix/sandbox_boot.py /opt/deepfix/bin \
-    && chmod 0444 /opt/deepfix/sandbox_boot.py \
-    && chmod 0555 /opt/deepfix/bin/deepfix /etc/cont-init.d/01b-deepfix-sandbox \
+    && chown -R root:root /opt/deepfix/skills /opt/deepfix/plugins /opt/deepfix/sandbox_boot.py /opt/deepfix/seal_volume.py /opt/deepfix/bin \
+    && chmod 0444 /opt/deepfix/sandbox_boot.py /opt/deepfix/seal_volume.py \
+    && chmod 0555 /opt/deepfix/bin/deepfix /etc/cont-init.d/00-deepfix-volume /etc/cont-init.d/01b-deepfix-sandbox \
     && chmod 0555 /etc/s6-overlay/s6-rc.d/deepfix-cli-log/run \
     && touch /etc/s6-overlay/s6-rc.d/user/contents.d/deepfix-cli-log \
     && ln -sfn /opt/deepfix/bin/deepfix /usr/local/bin/deepfix \

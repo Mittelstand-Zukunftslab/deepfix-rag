@@ -224,6 +224,59 @@ def test_repair_home_ownership_fixes_soul_without_following_symlinks(tmp_path: P
     assert (outside.stat().st_mode & 0o777) == 0o555
 
 
+def test_seal_replaces_a_pip_installed_plugin_and_drops_a_stale_stamp(tmp_path: Path) -> None:
+    home = tmp_path / "data"
+    old = home / "plugins" / "hermes_otel"
+    old.mkdir(parents=True)
+    (old / "plugin.yaml").write_text(
+        "name: hermes_otel\npython_dependencies:\n  - opentelemetry-api\n",
+        encoding="utf-8",
+    )
+    (old / "__init__.py").write_text("def register(ctx):\n    return None\n", encoding="utf-8")
+    other = home / "plugins" / "notes"
+    other.mkdir()
+    (other / "keep.txt").write_text("leave me\n", encoding="utf-8")
+    source = tmp_path / "otel"
+    source.mkdir()
+    (source / "plugin.yaml").write_text(
+        "name: hermes_otel\npython_runtime: external\n",
+        encoding="utf-8",
+    )
+    (source / "__init__.py").write_text("def register(ctx):\n    return None\n", encoding="utf-8")
+    tag = tmp_path / "tag"
+    tag.mkdir()
+    (tag / "plugin.yaml").write_text("name: deepfix-run-tag\n", encoding="utf-8")
+    (tag / "__init__.py").write_text("def register(ctx):\n    return None\n", encoding="utf-8")
+    stamp = tmp_path / "facts.json"
+    stamp.write_text(
+        '{"schema":1,"packages":{"venv":{"stamp":"stale","extras":[]}}}\n', encoding="utf-8"
+    )
+
+    boot_seal = _load_seal()
+    boot_seal.force_plugin_link(home, "hermes_otel", source)
+    boot_seal.force_plugin_link(home, "deepfix-run-tag", tag)
+    assert (home / "plugins" / "hermes_otel").resolve() == source.resolve()
+    assert "python_runtime: external" in (source / "plugin.yaml").read_text(encoding="utf-8")
+    assert (other / "keep.txt").read_text(encoding="utf-8") == "leave me\n"
+    assert boot_seal.forget_venv_stamp(stamp, current=False)
+    assert not stamp.exists()
+    kept = tmp_path / "current.json"
+    kept.write_text("{}\n", encoding="utf-8")
+    assert not boot_seal.forget_venv_stamp(kept, current=True)
+    assert kept.is_file()
+
+
+def _load_seal():
+    spec = importlib.util.spec_from_file_location(
+        "hermes_seal_volume",
+        Path(__file__).resolve().parents[1] / "docker" / "hermes" / "seal_volume.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_apply_sandbox_repairs_an_existing_unwritable_soul(tmp_path: Path) -> None:
     home = tmp_path / "data"
     home.mkdir()
@@ -253,6 +306,8 @@ def test_image_locks_skills_and_records_the_toolset_names() -> None:
     assert "--target /opt/deepfix/otel" in dockerfile
     assert "python_runtime: external" in dockerfile
     assert "deepfix-otel.pth" in dockerfile
+    assert "00-deepfix-volume" in dockerfile
+    assert "seal_volume.py" in dockerfile
     assert (
         'uv pip install --python /opt/hermes/.venv/bin/python \\\n        "hermes-otel'
         not in dockerfile
