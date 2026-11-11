@@ -42,6 +42,7 @@ RUN_TAG_PLUGIN = "deepfix-run-tag"
 MODEL_PROVIDER = "openrouter"
 MODEL_DEFAULT = "anthropic/claude-haiku-5.5"
 MODEL_BASE_URL = "https://openrouter.ai/api/v1"
+MODEL_BASE_URL_ENV = "HERMES_MODEL_BASE_URL"
 # Starting point from the PRD. Confirmed on v0.22.7: the platform clamp is
 # 365 days on Linux, so 7200 is accepted. The foreground cap and the
 # sequential tool deadline must be raised separately (see below).
@@ -197,13 +198,26 @@ def _merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return base
 
 
-def optimization_config_patch(skills_dir: Path) -> dict[str, Any]:
+def model_base_url(env: Mapping[str, str]) -> str:
+    """OpenRouter by default. ``HERMES_MODEL_BASE_URL`` points at another endpoint.
+
+    A local stand-in uses this. Production leaves the variable unset.
+    """
+    value = env.get(MODEL_BASE_URL_ENV, "").strip() or MODEL_BASE_URL
+    if any(char in value for char in "\n\r\x00"):
+        raise SandboxBootError(f"{MODEL_BASE_URL_ENV} contains a newline or NUL")
+    return value
+
+
+def optimization_config_patch(
+    skills_dir: Path, *, base_url: str = MODEL_BASE_URL
+) -> dict[str, Any]:
     """Config keys this sandbox owns. Other seeded keys are left in place."""
     return {
         "model": {
             "provider": MODEL_PROVIDER,
             "default": MODEL_DEFAULT,
-            "base_url": MODEL_BASE_URL,
+            "base_url": base_url,
         },
         "terminal": {
             "backend": "local",
@@ -232,7 +246,9 @@ def optimization_config_patch(skills_dir: Path) -> dict[str, Any]:
     }
 
 
-def chat_profile_config(config_version: object) -> dict[str, Any]:
+def chat_profile_config(
+    config_version: object, *, base_url: str = MODEL_BASE_URL
+) -> dict[str, Any]:
     """A second profile that is not the optimization agent.
 
     Approval mode stays ``smart``. Terminal, file, and code execution are
@@ -243,7 +259,7 @@ def chat_profile_config(config_version: object) -> dict[str, Any]:
         "model": {
             "provider": MODEL_PROVIDER,
             "default": MODEL_DEFAULT,
-            "base_url": MODEL_BASE_URL,
+            "base_url": base_url,
         },
         "approvals": {"mode": "smart"},
         "terminal": {"backend": "local", "timeout": 180},
@@ -654,6 +670,7 @@ def apply_sandbox(
     chat_key_raw = env.get(CHAT_API_KEY_ENV, "").strip()
     chat_key = validate_api_key(chat_key_raw, name=CHAT_API_KEY_ENV) if chat_key_raw else ""
 
+    base_url = model_base_url(env)
     home.mkdir(parents=True, exist_ok=True)
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -661,7 +678,7 @@ def apply_sandbox(
 
     config_path = home / "config.yaml"
     config = _load_yaml(config_path)
-    _merge(config, optimization_config_patch(skills_dir))
+    _merge(config, optimization_config_patch(skills_dir, base_url=base_url))
     _dump_yaml(config_path, config)
     _chown_hermes(config_path)
 
@@ -688,7 +705,7 @@ def apply_sandbox(
 
     chat_dir = home / "profiles" / CHAT_PROFILE
     chat_dir.mkdir(parents=True, exist_ok=True)
-    chat_config = chat_profile_config(config.get("_config_version"))
+    chat_config = chat_profile_config(config.get("_config_version"), base_url=base_url)
     _dump_yaml(chat_dir / "config.yaml", chat_config)
     _chown_hermes(chat_dir / "config.yaml")
     soul = chat_dir / "SOUL.md"

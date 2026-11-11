@@ -58,6 +58,7 @@ def test_apply_sandbox_writes_optimization_config_and_stopped_chat(tmp_path: Pat
     config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
     assert config["model"]["provider"] == "openrouter"
     assert config["model"]["default"] == "anthropic/claude-haiku-5.5"
+    assert config["model"]["base_url"] == boot.MODEL_BASE_URL
     assert config["terminal"]["backend"] == "local"
     assert config["terminal"]["timeout"] == boot.TERMINAL_TIMEOUT_SECONDS
     assert config["approvals"]["mode"] == "off"
@@ -124,6 +125,16 @@ def test_apply_sandbox_writes_optimization_config_and_stopped_chat(tmp_path: Pat
     assert "HERMES_S3_" not in chat_env
     state = (home / "profiles" / "chat" / "gateway_state.json").read_text(encoding="utf-8")
     assert '"stopped"' in state
+
+
+def test_model_base_url_override_is_written_to_both_profiles(tmp_path: Path) -> None:
+    home = tmp_path / "data"
+    endpoint = "http://llm.test:8080/v1"
+    boot.apply_sandbox(home, _env(**{boot.MODEL_BASE_URL_ENV: endpoint}), _skills(tmp_path))
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    chat = yaml.safe_load((home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8"))
+    assert config["model"]["base_url"] == endpoint
+    assert chat["model"]["base_url"] == endpoint
 
 
 def test_hermes_otel_is_enabled_on_the_optimization_profile_only(tmp_path: Path) -> None:
@@ -315,6 +326,7 @@ def test_image_locks_skills_and_records_the_toolset_names() -> None:
     assert "content_capture" in dockerfile
     compose = (REPO_ROOT / "compose.hermes.yml").read_text(encoding="utf-8")
     assert "MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}" in compose
+    assert "HERMES_MODEL_BASE_URL: ${HERMES_MODEL_BASE_URL:-}" in compose
     assert "MLFLOW_DEV_RAG_EXPERIMENT:" in compose
     stack = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert '"5000:5000"' in stack
