@@ -357,3 +357,13 @@ def test_cli_index_graph_config_json_and_retrieve(
 
     nodes = asyncio.run(_query_existing())
     assert nodes is not None
+
+
+def test_index_dir_option_keeps_s3_uris_as_strings() -> None:
+    """pathlib.Path collapses s3://bucket/key to s3:/bucket/key."""
+    from typing import get_type_hints
+
+    from deepfix_rag.cli.index import index_cmd
+
+    assert get_type_hints(index_cmd)["index_dir"] == str | None
+    assert str(Path("s3://deepfix-index/dev")) == "s3:/deepfix-index/dev"

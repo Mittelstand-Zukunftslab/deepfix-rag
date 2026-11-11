@@ -31,11 +31,14 @@ def index_cmd(
         "-d",
         help="Path to corpus documents or dataset preset (overrides config.data.path_or_repo).",
     ),
-    index_dir: Path | None = typer.Option(
+    index_dir: str | None = typer.Option(
         None,
         "--index-dir",
         "-o",
-        help="Target directory for generated index (overrides config.retrieval.lancedb_index_dir).",
+        help=(
+            "Target directory or s3:// URI for the generated index "
+            "(overrides config.retrieval.lancedb_index_dir)."
+        ),
     ),
     force: bool = typer.Option(
         False, "--force", "-f", help="Overwrite existing index directory if present."
@@ -71,8 +74,9 @@ def index_cmd(
             json_output=json_output,
         )
 
+    # Keep this a string. pathlib.Path collapses s3://bucket/key to s3:/bucket/key.
     target_index_dir = (
-        str(index_dir)
+        index_dir
         if index_dir is not None
         else (rag_config.retrieval.lancedb_index_dir if rag_config.retrieval else None)
     )
