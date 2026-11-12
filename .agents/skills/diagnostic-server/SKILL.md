@@ -66,7 +66,7 @@ MLFLOW_TRACKING_URI=
 MLFLOW_EXP_NAME=Deepfix-server
 ```
 
-`DEEPFIX_LLM_MODEL_NAME` is any model id your `DEEPFIX_LLM_BASE_URL` serves. `openai/gpt-6-luna-pro` is the value in `example.env` and the `Settings` default; use the same one unless you have a reason to differ.
+`DEEPFIX_LLM_MODEL_NAME` is any model id your `DEEPFIX_LLM_BASE_URL` serves. There is no `Settings` default: `example.env` sets `openai/gpt-6-luna-pro` for the diagnostic agent; use whatever your deployment sets unless you have a reason to differ.
 
 Do not commit API keys. Do not assume the RAG `.env` in the repo root satisfies these names.
 

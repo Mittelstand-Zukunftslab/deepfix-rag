@@ -31,7 +31,7 @@ Compose passes `OPENHANDS_PYTHON` into `backend-api`, defaulting to that interpr
 
 ## OpenRouter credentials
 
-The API writes the OpenRouter key from `DEEPFIX_LLM_API_KEY` into the run's `job.json`. The base URL is `DEEPFIX_LLM_BASE_URL` (default `https://openrouter.ai/api/v1`) and the model is `DEEPFIX_LLM_MODEL_NAME`. The runner adds the `openrouter/` prefix that LiteLLM needs to route an OpenRouter model, so `openai/gpt-6-luna-pro` becomes `openrouter/openai/gpt-6-luna-pro`. The product `LLM_API_KEY` is not copied into the child.
+The API writes the OpenRouter key from `DEEPFIX_LLM_API_KEY` into the run's `job.json`. The base URL is `DEEPFIX_LLM_BASE_URL` (default `https://openrouter.ai/api/v1`) and the model is `DEEPFIX_LLM_MODEL_NAME`, which has no code default (set it in `.env`). The runner adds the `openrouter/` prefix that LiteLLM needs to route an OpenRouter model, so a bare `vendor/model-name` becomes `openrouter/vendor/model-name`. The product `LLM_API_KEY` is not copied into the child.
 
 The rest of the child environment is `DEEPFIX_LLM_*`, `MLFLOW_TRACKING_URI`, `DEEPFIX_SERVER_URL`, the embedding and rerank settings (`EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `COHERE_BASE_URL`, `COHERE_API_KEY`, `COHERE_MODEL`), `MLFLOW_DEV_RAG_EXPERIMENT`, `NO_COLOR=1`, `MLFLOW_DISABLE_AGENT_HINT=1`, and a `PATH` whose first entry is the API virtualenv `bin/`, so `deepfix` is the same revision as the API. The product database path, the API-private directory, and session secrets are not in the environment or the prompt. Each passthrough variable is copied only when it is set in the API's environment.
 

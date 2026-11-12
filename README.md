@@ -188,7 +188,10 @@ DEEPFIX_API_KEY=
 # ------------------------------------------------------------------------------
 LLM_BASE_URL=https://api.aisc.hpi.de/v1
 LLM_API_KEY=
+# Answer generation model, served by LLM_BASE_URL.
 LLM_MODEL=qwen3-8-27b
+# DeepEval judge. It may differ from LLM_MODEL. This deployment points
+# LLM_JUDGE_MODEL at the same endpoint as the answers.
 LLM_JUDGE_MODEL=gpt-oss-120b
 # Drop sampling params the provider rejects (Claude Haiku 5.5 allows only temperature=1).
 DEEPFIX_LLM_DROP_PARAMS=1
@@ -239,6 +242,10 @@ FALKORDB_DATABASE=my_knowledge_graph
 API_SERVER_KEY=
 # Distinct from LLM_API_KEY. Not sent to the Hermes container as LLM_API_KEY.
 OPENROUTER_API_KEY=
+# Model the Hermes sandbox optimization agent runs. Required: the sandbox
+# writes it into /opt/data/config.yaml and the API posts it on POST /v1/runs.
+# Both services read the same value, so they cannot drift.
+HERMES_MODEL=deepseek/deepseek-v4.1-flash-1017
 # Optional chat-profile key. The chat profile is not started.
 HERMES_CHAT_API_SERVER_KEY=
 
@@ -394,7 +401,7 @@ eval:
   cutoff_k: 5               # nDCG@k, R@k, and P@k. Independent of retrieval.top_k
 ```
 
-`embedding.model`, `rerank.model`, and `generation.model` are not config keys. `deepfix mutate-config` rejects them. The embedding model, reranker, and generation model come from `EMBEDDING_MODEL`, `COHERE_MODEL`, and `LLM_MODEL`. Run `deepfix schema --json` for the live field list and `index_time_keys`.
+`embedding.model`, `rerank.model`, and `generation.model` are not config keys. `deepfix mutate-config` rejects them. The embedding model, reranker, and generation model come from `EMBEDDING_MODEL`, `COHERE_MODEL`, and `LLM_MODEL`. The judge comes from `LLM_JUDGE_MODEL` and the Hermes sandbox model from `HERMES_MODEL`; the sandbox also accepts `HERMES_MODEL_PROVIDER` and `HERMES_MODEL_BASE_URL`. No model id has a default in code: an empty value fails naming the variable, so set every model in `.env` (the template values in `example.env` are the deployment defaults). Run `deepfix schema --json` for the live field list and `index_time_keys`.
 ---
 ## Autonomous Optimization Workflow (Hermes Agent)
 In autonomous mode, an LLM agent executes multi-cycle optimization loops guided by the DeepFix skill plugin:
