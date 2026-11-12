@@ -20,7 +20,7 @@ import signal
 import sqlite3
 import threading
 import time
-from typing import Literal
+from typing import Any, Literal
 import uuid
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -134,6 +134,8 @@ class AgentResultFile(BaseModel):
     primary_metric: str
     summary: str
     mlflow_run_id: str | None
+    metrics: dict[str, Any] | None = None
+    status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -304,7 +306,8 @@ def init_optimization(db_path: Path) -> None:
                 dev_delta TEXT,
                 holdout_delta TEXT,
                 holdout_wins INTEGER,
-                holdout_losses INTEGER
+                holdout_losses INTEGER,
+                baseline_metrics TEXT
             )
             """
         )
@@ -472,9 +475,14 @@ def _finish_run_impl(
     if timed_out:
         _finish(db_path, run_id, status="failed", reason=_TIMED_OUT)
         return
-    result = _read_result(workspace / "runs" / run_id / "result.json")
+    run_dir = workspace / "runs" / run_id
+    result = _read_result(run_dir / "result.json")
     if result is None:
         _finish(db_path, run_id, status="failed", reason=runner_error or _INVALID_RESULT)
+        return
+    blocked = _baseline_failure_reason(run_dir, result)
+    if blocked is not None:
+        _finish(db_path, run_id, status="failed", reason=blocked)
         return
     if result.candidate_config_path is None:
         _finish(
@@ -486,6 +494,7 @@ def _finish_run_impl(
             candidate_config_path=None,
             mlflow_run_id=result.mlflow_run_id,
             summary=result.summary,
+            baseline_metrics=_champion_metrics(run_dir, result),
         )
         return
     if not _row_is_running(db_path, run_id):
@@ -1772,34 +1781,172 @@ def _running_id(conn: sqlite3.Connection) -> str | None:
     return str(row["run_id"])
 
 
-# A round counts as the baseline only after it finishes. ``failed`` includes a
-# cancel, a stall, a holdout-guard refusal, a crash, and an invalid result.
-# Those runs, and ``skipped`` ones, must not spend the new-question budget.
-_BASELINE_STATUSES = ("succeeded", "rejected", "promoted")
+# A round counts as the baseline only after it finishes a real evaluation.
+# ``rejected`` and ``promoted`` scored a candidate. ``succeeded`` counts only
+# when it recorded champion metrics, an MLflow run, or a candidate path.
+# A ``succeeded`` row with none of those is a blocked baseline that was stored
+# before this check existed, and it must not spend the new-question budget.
+# ``failed`` and ``skipped`` never count.
 
 
 def _previous_dev_ids(conn: sqlite3.Connection) -> set[str] | None:
     """Dev question ids from the newest round that actually finished.
 
-    The baseline is the latest ``succeeded``, ``rejected``, or ``promoted``
-    run. A newer ``failed`` or ``skipped`` row is ignored, so a run that died
-    before it produced a result — including one refused at the holdout upload
-    guard — does not make those questions look already used.
+    ``rejected`` and ``promoted`` always count. ``succeeded`` counts only when
+    the row stored champion metrics, an MLflow run id, a delta, or a candidate
+    path. A ``succeeded`` row with none of those — a blocked baseline eval that
+    was marked successful — is ignored, as are ``failed`` and ``skipped`` rows.
     """
-    placeholders = ", ".join("?" for _ in _BASELINE_STATUSES)
     row = conn.execute(
-        f"""
+        """
         SELECT dev_query_ids FROM optimization_runs
-        WHERE status IN ({placeholders})
+        WHERE status IN ('rejected', 'promoted')
+           OR (
+                status = 'succeeded'
+                AND (
+                    (baseline_metrics IS NOT NULL AND baseline_metrics NOT IN ('', 'null', '{}'))
+                    OR (mlflow_run_id IS NOT NULL AND TRIM(mlflow_run_id) != '')
+                    OR (dev_delta IS NOT NULL AND dev_delta NOT IN ('', 'null', '{}'))
+                    OR (
+                        candidate_config_path IS NOT NULL
+                        AND TRIM(candidate_config_path) != ''
+                    )
+                )
+           )
         ORDER BY started_at DESC
         LIMIT 1
-        """,
-        _BASELINE_STATUSES,
+        """
     ).fetchone()
     if row is None:
         return None
     loaded = json.loads(row["dev_query_ids"])
     return set(loaded) if isinstance(loaded, list) else set()
+
+
+_CHAMPION_METRIC_KEYS = ("ndcg", "recall", "precision")
+_BASELINE_FAILURE = "Blocked at baseline eval: the baseline smoke eval did not complete."
+_NOT_A_CAUSE = frozenset({"no change.", "no change", "null", "none", "blocked"})
+
+
+def _baseline_failure_reason(run_dir: Path, result: AgentResultFile) -> str | None:
+    """Why a result is a blocked baseline, or None when the round really finished.
+
+    ``state.json`` status ``blocked`` fails the run. A null candidate with no
+    champion metrics also fails: the baseline eval never completed. The cause
+    is the short error from ``baseline_smoke.json`` when that file is present.
+    """
+    state = _read_object(run_dir / "state.json")
+    smoke = _read_smoke(run_dir / "baseline_smoke.json")
+    blocked = _status_is_blocked(state) or _status_is_blocked({"status": result.status})
+    if result.candidate_config_path is not None and not blocked:
+        return None
+    if not blocked and _champion_metrics(run_dir, result):
+        return None
+    cause = _cause_from_smoke(smoke) or _cause_from_summary(result.summary)
+    if not cause:
+        return _BASELINE_FAILURE
+    return f"Blocked at baseline eval: {cause}"
+
+
+def _champion_metrics(run_dir: Path, result: AgentResultFile) -> dict[str, float]:
+    """Numeric champion scores from the result or a completed smoke eval."""
+    direct = _metric_map(result.metrics)
+    if direct:
+        return direct
+    return _smoke_metrics(_read_smoke(run_dir / "baseline_smoke.json"))
+
+
+def _metric_map(payload: dict[str, Any] | None) -> dict[str, float]:
+    if not isinstance(payload, dict):
+        return {}
+    nested = payload.get("metrics")
+    source = nested if isinstance(nested, dict) else payload
+    found: dict[str, float] = {}
+    for key in _CHAMPION_METRIC_KEYS:
+        value = source.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        found[key] = float(value)
+    return found
+
+
+def _smoke_metrics(smoke: dict[str, Any] | None) -> dict[str, float]:
+    if not smoke or smoke.get("status") == "error":
+        return {}
+    errors = smoke.get("errors")
+    if isinstance(errors, int) and not isinstance(errors, bool) and errors > 0:
+        return {}
+    return _metric_map(smoke)
+
+
+def _status_is_blocked(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    status = payload.get("status")
+    return isinstance(status, str) and status.strip().lower() == "blocked"
+
+
+def _cause_from_smoke(smoke: dict[str, Any] | None) -> str | None:
+    if not smoke:
+        return None
+    for key in ("error", "message", "detail", "cause"):
+        text = _short_cause(smoke.get(key))
+        if text:
+            return text
+    details = smoke.get("error_details")
+    if isinstance(details, list) and details:
+        first = details[0]
+        if isinstance(first, dict):
+            return _short_cause(first.get("error") or first.get("message"))
+    return None
+
+
+def _cause_from_summary(summary: str) -> str | None:
+    text = _short_cause(summary)
+    if text is None or text.lower() in _NOT_A_CAUSE:
+        return None
+    return text
+
+
+def _short_cause(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    if not text:
+        return None
+    if len(text) > 240:
+        return text[:237] + "..."
+    return text
+
+
+def _read_object(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    return loaded
+
+
+def _read_smoke(path: Path) -> dict[str, Any] | None:
+    """JSON object in the smoke file, or its text when the body is not JSON."""
+    if not path.is_file():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        text = _short_cause(raw)
+        return {"error": text} if text else None
+    if isinstance(loaded, dict):
+        return loaded
+    return None
 
 
 def _read_result(path: Path) -> AgentResultFile | None:
@@ -1950,6 +2097,7 @@ def _finish(
     holdout_delta: dict[str, float] | None = None,
     holdout_wins: int | None = None,
     holdout_losses: int | None = None,
+    baseline_metrics: dict[str, float] | None = None,
 ) -> bool:
     """Mark one running row finished. Returns whether this call changed it."""
     with connect(db_path) as conn:
@@ -1958,7 +2106,8 @@ def _finish(
             UPDATE optimization_runs
             SET status = ?, reason = ?, primary_metric = ?, candidate_config_path = ?,
                 mlflow_run_id = ?, summary = ?, ended_at = ?, pid = NULL,
-                dev_delta = ?, holdout_delta = ?, holdout_wins = ?, holdout_losses = ?
+                dev_delta = ?, holdout_delta = ?, holdout_wins = ?, holdout_losses = ?,
+                baseline_metrics = ?
             WHERE run_id = ? AND status = 'running'
             """,
             (
@@ -1973,6 +2122,7 @@ def _finish(
                 _dump_delta(holdout_delta),
                 holdout_wins,
                 holdout_losses,
+                _dump_delta(baseline_metrics),
                 run_id,
             ),
         )
@@ -2010,6 +2160,7 @@ def _ensure_score_columns(conn: sqlite3.Connection) -> None:
         ("holdout_wins", "INTEGER"),
         ("holdout_losses", "INTEGER"),
         ("hermes_run_id", "TEXT"),
+        ("baseline_metrics", "TEXT"),
     ):
         if name not in existing:
             conn.execute(f"ALTER TABLE optimization_runs ADD COLUMN {name} {column_type}")

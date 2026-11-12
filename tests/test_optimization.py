@@ -53,6 +53,20 @@ elif mode == "null":
         "primary_metric": "ndcg",
         "summary": "No change.",
         "mlflow_run_id": None,
+        "metrics": {"ndcg": 0.5, "recall": 0.8, "precision": 0.4},
+    }), encoding="utf-8")
+elif mode == "blocked":
+    (out / "state.json").write_text(json.dumps({"step": "baseline", "status": "blocked"}), encoding="utf-8")
+    (out / "baseline_smoke.json").write_text(json.dumps({
+        "status": "error",
+        "error": "MLflow experiment 'dev_rag_experiment' does not exist. Refusing to auto-create per contract - check dev_rag_experiment.",
+    }), encoding="utf-8")
+    (out / "result.json").write_text(json.dumps({
+        "candidate_config_path": None,
+        "primary_metric": "ndcg",
+        "summary": "baseline did not finish",
+        "mlflow_run_id": None,
+        "metrics": {},
     }), encoding="utf-8")
 elif mode == "candidate":
     target = out / "candidate.yaml"
@@ -62,6 +76,14 @@ elif mode == "candidate":
         "primary_metric": "ndcg",
         "summary": "Raised top_k.",
         "mlflow_run_id": "ml-1",
+    }), encoding="utf-8")
+elif mode == "empty":
+    (out / "result.json").write_text(json.dumps({
+        "candidate_config_path": None,
+        "primary_metric": "ndcg",
+        "summary": "No change.",
+        "mlflow_run_id": None,
+        "metrics": {},
     }), encoding="utf-8")
 elif mode == "bad":
     (out / "result.json").write_text("{", encoding="utf-8")
@@ -244,11 +266,11 @@ def test_new_dev_questions_are_counted_since_the_last_non_skipped_run(tmp_path: 
             """
             INSERT INTO optimization_runs (
                 run_id, status, trigger_kind, snapshot_id, dev_count, new_dev_count,
-                holdout_count, dev_query_ids, started_at, ended_at
+                holdout_count, dev_query_ids, started_at, ended_at, baseline_metrics
             )
-            VALUES ('old', 'succeeded', 'cron', 'old-snap', 1, 1, 0, ?, 't0', 't1')
+            VALUES ('old', 'succeeded', 'cron', 'old-snap', 1, 1, 0, ?, 't0', 't1', ?)
             """,
-            (json.dumps([query_id]),),
+            (json.dumps([query_id]), json.dumps({"ndcg": 0.5, "recall": 0.8})),
         )
     run = start_optimization_run(
         db_path,
@@ -304,6 +326,95 @@ def test_null_candidate_succeeds_and_a_candidate_does_not_replace_the_champion(
     assert stored.reason == "The candidate config could not be read."
     assert stored.candidate_config_path is not None
     assert champion.read_text(encoding="utf-8") == before
+
+
+def test_a_blocked_baseline_fails_with_the_smoke_error(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace = tmp_path / "workspace"
+    db_path = tmp_path / "private" / "product.db"
+    script = tmp_path / "runner.py"
+    script.write_text(_SCRIPT, encoding="utf-8")
+    workspace.mkdir()
+    (workspace / "mode.txt").write_text("blocked\n", encoding="utf-8")
+    run = start_optimization_run(
+        db_path,
+        workspace,
+        trigger="manual",
+        options=_options(
+            tmp_path,
+            min_dev_questions=0,
+            min_new_dev_questions=0,
+            min_holdout_questions=0,
+            runner_script=script,
+        ),
+    )
+    wait_for_run(run.run_id)
+    finished = get_run(db_path, run.run_id)
+    assert finished.status == "failed"
+    assert finished.reason == (
+        "Blocked at baseline eval: MLflow experiment 'dev_rag_experiment' does not exist. "
+        "Refusing to auto-create per contract - check dev_rag_experiment."
+    )
+    assert finished.candidate_config_path is None
+
+
+def test_a_null_candidate_without_metrics_is_not_a_completed_round(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace = tmp_path / "workspace"
+    db_path = tmp_path / "private" / "product.db"
+    script = tmp_path / "runner.py"
+    script.write_text(_SCRIPT, encoding="utf-8")
+    workspace.mkdir()
+    (workspace / "mode.txt").write_text("empty\n", encoding="utf-8")
+    run = start_optimization_run(
+        db_path,
+        workspace,
+        trigger="manual",
+        options=_options(
+            tmp_path,
+            min_dev_questions=0,
+            min_new_dev_questions=0,
+            min_holdout_questions=0,
+            runner_script=script,
+        ),
+    )
+    wait_for_run(run.run_id)
+    finished = get_run(db_path, run.run_id)
+    assert finished.status == "failed"
+    assert finished.reason == (
+        "Blocked at baseline eval: the baseline smoke eval did not complete."
+    )
+
+
+def test_a_succeeded_row_without_metrics_does_not_consume_dev_questions(tmp_path: Path) -> None:
+    _tracking(tmp_path)
+    workspace = tmp_path / "workspace"
+    db_path = tmp_path / "private" / "product.db"
+    query_id = _label(db_path, _dev_query())
+    init_optimization(db_path)
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO optimization_runs (
+                run_id, status, trigger_kind, snapshot_id, dev_count, new_dev_count,
+                holdout_count, dev_query_ids, started_at, ended_at
+            )
+            VALUES ('blocked-baseline', 'succeeded', 'manual', 'snap', 1, 1, 0, ?, 't0', 't1')
+            """,
+            (json.dumps([query_id]),),
+        )
+    run = start_optimization_run(
+        db_path,
+        workspace,
+        trigger="cron",
+        options=_options(
+            tmp_path, min_dev_questions=1, min_new_dev_questions=2, min_holdout_questions=0
+        ),
+    )
+    assert run.status == "skipped"
+    assert run.new_dev_count == 1
+    assert "1 new labeled questions in dev, 2 needed" in (run.reason or "")
+    assert "0 new labeled questions" not in (run.reason or "")
 
 
 def test_invalid_result_fails_with_the_runner_error(tmp_path: Path) -> None:

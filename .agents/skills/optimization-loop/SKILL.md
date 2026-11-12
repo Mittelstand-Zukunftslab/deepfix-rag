@@ -51,7 +51,7 @@ This skill is the whole contract for a round. Pathology skills are sibling folde
 deepfix eval --config configs/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --json
 ```
 
-If `errors > 0`, STOP: write `result.json` with a null candidate, put the first error from `error_details` in `summary`, and finish. Never read errored cases as retrieval misses. `eval` exits 2 when every case errored (missing embedding or Cohere credentials, unreachable endpoint, wrong `--dataset`).
+If `errors > 0`, STOP: write `result.json` with a null candidate, put the first error from `error_details` in `summary`, and finish. Never read errored cases as retrieval misses. `eval` exits 2 when every case errored (missing embedding or Cohere credentials, unreachable endpoint, wrong `--dataset`). If it exits before a summary, for example because the MLflow experiment does not exist, save that JSON as `<run_dir>/baseline_smoke.json` (or `<run_dir>/output/baseline_smoke.json` when `result.json` is written under `output/`). Set `state.json` `status` to `blocked` and copy the `error` string into `summary`. A null candidate with no champion metrics is a blocked baseline, not a recommendation.
 
 2. Pick ONE pathology skill. Define `recall` and `ndcg` as the summary values, and `miss_rate = failure_distribution.retrieval_miss / total`. In `--retrieval-only` mode `retrieval_miss` means no judged relevant document was retrieved, and `retrieval_induced_error` means only some were. Take the first row that matches:
 

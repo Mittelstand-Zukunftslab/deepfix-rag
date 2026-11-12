@@ -200,6 +200,10 @@ def optimization_instructions(run_id: str) -> str:
         "candidate_config_path (a path or null), primary_metric, summary, "
         "and mlflow_run_id (a string or null). "
         "Set candidate_config_path to null when you do not recommend a change. "
+        "A null candidate still needs champion metrics from a completed baseline "
+        "eval. If that eval does not complete, write output/state.json with "
+        'status "blocked", save the eval JSON (including its error) as '
+        "output/baseline_smoke.json, and put that error in summary. "
         f"Then upload with `deepfix-sync upload --run-id {checked} --result {result}`. "
         f"When candidate_config_path is a path, also pass `--candidate {candidate}`. "
         "The task is complete only when that result file exists with those keys."

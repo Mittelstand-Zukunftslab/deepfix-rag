@@ -62,6 +62,7 @@ _NULL_RESULT = {
     "primary_metric": "ndcg",
     "summary": "No change.",
     "mlflow_run_id": None,
+    "metrics": {"ndcg": 0.5, "recall": 0.8, "precision": 0.4},
 }
 _OPENHANDS_RUNNER = """
 import json, sys
@@ -73,6 +74,7 @@ out = Path("runs") / run_id
     "primary_metric": "ndcg",
     "summary": "No change.",
     "mlflow_run_id": None,
+    "metrics": {"ndcg": 0.5, "recall": 0.8, "precision": 0.4},
 }), encoding="utf-8")
 """
 

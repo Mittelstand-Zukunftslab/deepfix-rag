@@ -20,7 +20,7 @@ from deepfix_rag.hermes_iam import (
     authorize,
     hermes_prefix_policy,
 )
-from deepfix_rag.hermes_sync import download_input, main, upload_output
+from deepfix_rag.hermes_sync import download_input, download_result, main, upload_output
 from deepfix_rag.index_manifest import write_index_manifest
 from deepfix_rag.promotion import apply_candidate
 from deepfix_rag.run_bundle import (
@@ -238,6 +238,22 @@ def test_sync_helper_round_trip_records_the_request_plan(tmp_path: Path) -> None
     )
     assert inner.get(BUCKET, f"{plan.prefix}/output/result.json") == result.read_bytes()
     assert inner.get(BUCKET, f"{plan.prefix}/output/candidate.yaml") == candidate.read_bytes()
+    smoke = work / "baseline_smoke.json"
+    smoke.write_text('{"status":"error","error":"missing experiment"}\n', encoding="utf-8")
+    state = work / "state.json"
+    state.write_text('{"status":"blocked"}\n', encoding="utf-8")
+    uploaded_reports = upload_output(
+        inner,
+        bucket=BUCKET,
+        run_id=RUN_A,
+        result_path=result,
+        candidate_path=candidate,
+    )
+    assert any(request.key.endswith("/output/baseline_smoke.json") for request in uploaded_reports)
+    destination = tmp_path / "copied" / "result.json"
+    assert download_result(inner, bucket=BUCKET, run_id=RUN_A, destination=destination)
+    assert (destination.parent / "baseline_smoke.json").read_bytes() == smoke.read_bytes()
+    assert (destination.parent / "state.json").read_bytes() == state.read_bytes()
     operations = (*downloaded, *uploaded)
     assert [request.operation for request in downloaded][0] == "list"
     assert all(request.key.startswith(f"optimization/runs/{RUN_A}/") for request in operations)

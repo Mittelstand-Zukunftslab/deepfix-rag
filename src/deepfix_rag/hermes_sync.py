@@ -46,6 +46,7 @@ _INPUT_DIR = "input"
 _OUTPUT_RESULT = "output/result.json"
 _OUTPUT_CANDIDATE = "output/candidate.yaml"
 _OUTPUT_HEARTBEAT = "output/heartbeat.json"
+_OUTPUT_REPORTS = ("state.json", "baseline_smoke.json")
 
 
 def download_input(
@@ -86,6 +87,8 @@ def upload_output(
     prefix = run_prefix(run_id)
     recorder = RecordingObjectStore(store)
     recorder.put(bucket, f"{prefix}/{_OUTPUT_RESULT}", result_path.read_bytes())
+    for name, path in _report_files(result_path):
+        recorder.put(bucket, f"{prefix}/output/{name}", path.read_bytes())
     if candidate_path is not None:
         if not candidate_path.is_file():
             raise RunBundleError("candidate file is missing")
@@ -118,7 +121,53 @@ def download_result(
         return False
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(body)
+    for name in _OUTPUT_REPORTS:
+        _copy_optional(
+            store,
+            bucket=bucket,
+            key=f"{run_prefix(run_id)}/output/{name}",
+            destination=destination.parent / name,
+        )
     return True
+
+
+def _report_files(result_path: Path) -> list[tuple[str, Path]]:
+    """``state.json`` and ``baseline_smoke.json`` beside the result, if present.
+
+    The file next to ``result.json`` wins. The parent directory is the fallback
+    for a report written in the run directory rather than ``output/``.
+    """
+    found: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+    for directory in (result_path.parent, result_path.parent.parent):
+        for name in _OUTPUT_REPORTS:
+            if name in seen:
+                continue
+            path = directory / name
+            if not path.is_file():
+                continue
+            seen.add(name)
+            found.append((name, path))
+    return found
+
+
+def _copy_optional(
+    store: ObjectStore,
+    *,
+    bucket: str,
+    key: str,
+    destination: Path,
+) -> None:
+    try:
+        body = store.get(bucket, key)
+    except KeyError:
+        return
+    except ClientError as exc:
+        if not _missing_object(exc):
+            raise
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(body)
 
 
 def heartbeat_timestamp(
