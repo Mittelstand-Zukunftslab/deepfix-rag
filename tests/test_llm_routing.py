@@ -7,7 +7,7 @@ import litellm
 import pytest
 
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.config.settings import settings
+from deepfix_rag.config.settings import ModelNotConfigured, settings
 from deepfix_rag.evaluation.llm import ProxyJudgeLLM
 from deepfix_rag.evaluation.runner import GenerationEvaluator
 from deepfix_rag.llm import resolve_litellm_model
@@ -120,3 +120,26 @@ def test_embeddings_and_reranker_keep_their_own_model_ids() -> None:
     assert reranker.model == settings.COHERE_MODEL
     # The Cohere client holds the endpoint; the public field stays at its default.
     assert reranker._client._client_wrapper._base_url == settings.COHERE_BASE_URL
+
+
+@pytest.mark.unit
+def test_answer_and_judge_models_follow_their_env_vars() -> None:
+    """LLM_MODEL and LLM_JUDGE_MODEL are independent and come from the environment."""
+    with _generation_settings("qwen/fixture-answer", _OPENROUTER, "test-key"):
+        settings.LLM_JUDGE_MODEL = "z-ai/fixture-judge"
+        llm = RAGWorkflow()._get_llm()
+        judge = GenerationEvaluator(generation_metrics=[]).judge
+    assert llm.model == "openrouter/qwen/fixture-answer"
+    assert isinstance(judge, ProxyJudgeLLM)
+    assert judge.model == "openrouter/z-ai/fixture-judge"
+
+
+@pytest.mark.unit
+def test_a_missing_generation_or_judge_model_names_the_variable() -> None:
+    """No hardcoded fallback: the pipeline and the judge fail naming the variable."""
+    with _generation_settings("", _OPENROUTER, "test-key"):
+        assert settings.LLM_JUDGE_MODEL == ""
+        with pytest.raises(ModelNotConfigured, match="LLM_MODEL"):
+            RAGWorkflow()._get_llm()
+        with pytest.raises(ModelNotConfigured, match="LLM_JUDGE_MODEL"):
+            GenerationEvaluator(generation_metrics=[])

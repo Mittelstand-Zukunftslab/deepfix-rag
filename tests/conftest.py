@@ -11,8 +11,44 @@ import pytest
 from typer.testing import CliRunner
 
 from deepfix_rag.config.schema import DataLoaderConfig, RAGConfig
+from deepfix_rag.config.settings import settings
 from deepfix_rag.pipeline import RAGWorkflow
 from tests.identity import IdentityIssuer
+
+# Fixture model ids. Tests never read the deployment model names, so the suite
+# behaves the same with and without a repository .env.
+FIXTURE_EMBEDDING_MODEL = "fixture/embedding-test"
+FIXTURE_RERANKER_MODEL = "fixture/reranker-test"
+FIXTURE_LLM_MODEL = "fixture/generation-test"
+FIXTURE_JUDGE_MODEL = "fixture/judge-test"
+FIXTURE_HERMES_MODEL = "fixture/hermes-test"
+FIXTURE_AGENT_MODEL = "fixture/agent-test"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _fixture_model_env() -> None:
+    """Fill in a model id only where the environment left one empty.
+
+    Model ids come from the environment in production, and no default is in the
+    package. CI has no ``.env``, so the ids are pinned here to keep the suite
+    reproducible. A developer's ``.env`` still wins, which matters for the
+    integration tests that call a live embedding endpoint.
+    """
+    defaults = {
+        "LLM_MODEL": FIXTURE_LLM_MODEL,
+        "LLM_JUDGE_MODEL": FIXTURE_JUDGE_MODEL,
+        "EMBEDDING_MODEL": FIXTURE_EMBEDDING_MODEL,
+        "COHERE_MODEL": FIXTURE_RERANKER_MODEL,
+        "HERMES_MODEL": FIXTURE_HERMES_MODEL,
+        "DEEPFIX_LLM_MODEL_NAME": FIXTURE_AGENT_MODEL,
+    }
+    previous = {name: getattr(settings, name) for name in defaults}
+    for name, value in defaults.items():
+        if not getattr(settings, name):
+            setattr(settings, name, value)
+    yield
+    for name, value in previous.items():
+        setattr(settings, name, value)
 
 
 @pytest.fixture(scope="session")

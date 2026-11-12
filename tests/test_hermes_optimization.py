@@ -23,10 +23,10 @@ import pytest
 from deepfix_rag.agent_process import AGENT_UNAVAILABLE_MESSAGE
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.config.settings import Settings
+from deepfix_rag.config.settings import Settings, settings
 from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.feedback import is_holdout, normalize_query, query_id_for, record_vote
-from deepfix_rag.hermes_client import HERMES_MODEL, HERMES_PROVIDER
+from deepfix_rag.hermes_client import HERMES_PROVIDER
 from deepfix_rag.hermes_sync import download_result
 from deepfix_rag.interactions import record_interaction
 from deepfix_rag.optimization import (
@@ -231,6 +231,63 @@ def test_hermes_is_available_only_when_health_succeeds_and_the_key_is_set() -> N
 
 
 @pytest.mark.unit
+def test_an_openhands_run_without_a_model_names_the_variable(tmp_path: Path) -> None:
+    """An empty DEEPFIX_LLM_MODEL_NAME blocks the launch and says which variable it is."""
+    from deepfix_rag.optimization import OPENHANDS_MODEL_MISSING_MESSAGE, agent_status
+
+    script = tmp_path / "runner.py"
+    script.write_text(_OPENHANDS_RUNNER, encoding="utf-8")
+    options = OptimizationSettings(
+        min_dev_questions=0,
+        min_new_dev_questions=0,
+        min_holdout_questions=0,
+        interpreter=Path(sys.executable),
+        model="",
+        base_url="https://openrouter.ai/api/v1",
+        api_key="test-key",
+        runner_script=script,
+    )
+    available, message = agent_status(options)
+    assert available is False
+    assert message == OPENHANDS_MODEL_MISSING_MESSAGE
+    assert "DEEPFIX_LLM_MODEL_NAME" in (message or "")
+
+
+@pytest.mark.unit
+def test_a_hermes_run_without_a_model_names_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HERMES_MODEL is required before the API submits a run, not after."""
+    from deepfix_rag.optimization import HERMES_MODEL_MISSING_MESSAGE, agent_status
+
+    monkeypatch.delenv("HERMES_MODEL", raising=False)
+    previous = settings.HERMES_MODEL
+    settings.HERMES_MODEL = ""
+    try:
+        options = OptimizationSettings(
+            agent=OptimizationAgent.HERMES,
+            interpreter=None,
+            hermes_base_url="http://127.0.0.1:1",
+            hermes_api_key=API_KEY,
+        )
+        available, message = agent_status(options)
+    finally:
+        settings.HERMES_MODEL = previous
+    assert available is False
+    assert message == HERMES_MODEL_MISSING_MESSAGE
+    assert "HERMES_MODEL" in (message or "")
+
+
+@pytest.mark.unit
+def test_settings_from_copies_the_agent_model_from_the_environment() -> None:
+    copied = settings_from(
+        Settings(OPENHANDS_PYTHON=None, API_SERVER_KEY=None),
+        source_env={"DEEPFIX_LLM_MODEL_NAME": "deepseek/fixture-optimizer"},
+    )
+    assert copied.model == "deepseek/fixture-optimizer"
+
+
+@pytest.mark.unit
 def test_download_result_writes_the_output_object_and_ignores_a_missing_one(
     tmp_path: Path,
 ) -> None:
@@ -354,7 +411,7 @@ def test_hermes_null_candidate_succeeds_from_the_downloaded_file(
     assert set(body) == {"input", "instructions", "provider", "model"}
     assert body["input"] == body["instructions"]
     assert body["provider"] == HERMES_PROVIDER
-    assert body["model"] == HERMES_MODEL
+    assert body["model"] == settings.HERMES_MODEL
     instructions = body["instructions"]
     assert "candidate_config_path" in instructions
     assert "primary_metric" in instructions

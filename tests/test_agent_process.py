@@ -24,7 +24,7 @@ from deepfix_rag.agent_process import (
     openrouter_settings,
     run_agent_job,
 )
-from deepfix_rag.config.settings import Settings
+from deepfix_rag.config.settings import Settings, settings
 
 _DUMP = """
 import json, os, sys
@@ -71,6 +71,19 @@ def test_openrouter_key_comes_from_deepfix_llm_api_key() -> None:
     assert api_key == "openrouter-key"
     assert Settings.model_fields["OPTIMIZATION_RUN_TIMEOUT_HOURS"].default == 3
     assert DEFAULT_TIMEOUT_SECONDS == 3 * 60 * 60
+
+
+@pytest.mark.unit
+def test_the_agent_model_has_no_code_default() -> None:
+    """The model is deployment configuration, not a constant in the package."""
+    assert Settings.model_fields["DEEPFIX_LLM_MODEL_NAME"].default == ""
+    settings.DEEPFIX_LLM_MODEL_NAME = ""
+    try:
+        assert openrouter_settings({"DEEPFIX_LLM_API_KEY": "key"})[0] == ""
+    finally:
+        settings.DEEPFIX_LLM_MODEL_NAME = "fixture/agent-test"
+    model, _base_url, _api_key = openrouter_settings({"DEEPFIX_LLM_MODEL_NAME": "qwen/env-model"})
+    assert model == "qwen/env-model"
 
 
 @pytest.mark.unit

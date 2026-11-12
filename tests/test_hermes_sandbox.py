@@ -21,6 +21,7 @@ pytestmark = [pytest.mark.unit]
 REPO_ROOT = Path(__file__).resolve().parents[1]
 API_KEY = "a" * 32
 CHAT_KEY = "b" * 32
+MODEL = "fixture/hermes-model"
 
 
 def _skills(tmp_path: Path) -> Path:
@@ -39,6 +40,7 @@ def _env(**overrides: str) -> dict[str, str]:
     env = {
         "API_SERVER_KEY": API_KEY,
         "OPENROUTER_API_KEY": "sk-or-test",
+        "HERMES_MODEL": MODEL,
         "S3_ENDPOINT_URL": "http://rustfs:9000",
         "S3_URI": "s3://deepfix-index/dev",
         "S3_REGION": "us-east-1",
@@ -57,7 +59,7 @@ def test_apply_sandbox_writes_optimization_config_and_stopped_chat(tmp_path: Pat
 
     config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
     assert config["model"]["provider"] == "openrouter"
-    assert config["model"]["default"] == "anthropic/claude-haiku-5.5"
+    assert config["model"]["default"] == MODEL
     assert config["model"]["base_url"] == boot.MODEL_BASE_URL
     assert config["terminal"]["backend"] == "local"
     assert config["terminal"]["timeout"] == boot.TERMINAL_TIMEOUT_SECONDS
@@ -135,6 +137,44 @@ def test_model_base_url_override_is_written_to_both_profiles(tmp_path: Path) -> 
     chat = yaml.safe_load((home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8"))
     assert config["model"]["base_url"] == endpoint
     assert chat["model"]["base_url"] == endpoint
+
+
+def test_hermes_model_env_is_written_to_both_profiles(tmp_path: Path) -> None:
+    """The model id comes from HERMES_MODEL, and the chat profile gets the same one."""
+    home = tmp_path / "data"
+    boot.apply_sandbox(home, _env(HERMES_MODEL="deepseek/fixture-flash"), _skills(tmp_path))
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    chat = yaml.safe_load((home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8"))
+    assert config["model"]["default"] == "deepseek/fixture-flash"
+    assert chat["model"]["default"] == "deepseek/fixture-flash"
+    assert config["model"]["provider"] == boot.MODEL_PROVIDER
+    assert chat["model"]["provider"] == boot.MODEL_PROVIDER
+
+
+def test_hermes_model_provider_env_overrides_the_provider(tmp_path: Path) -> None:
+    home = tmp_path / "data"
+    boot.apply_sandbox(home, _env(HERMES_MODEL_PROVIDER="vllm"), _skills(tmp_path))
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    chat = yaml.safe_load((home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8"))
+    assert config["model"]["provider"] == "vllm"
+    assert chat["model"]["provider"] == "vllm"
+
+
+def test_a_missing_hermes_model_fails_before_writing_config(tmp_path: Path) -> None:
+    """No default model id: boot names HERMES_MODEL instead of seeding an old one."""
+    home = tmp_path / "data"
+    env = _env()
+    env.pop("HERMES_MODEL")
+    with pytest.raises(boot.SandboxBootError, match="HERMES_MODEL"):
+        boot.apply_sandbox(home, env, _skills(tmp_path))
+    assert not (home / "config.yaml").exists()
+    assert not (home / "profiles" / "chat" / "config.yaml").exists()
+
+
+def test_a_hermes_model_with_a_newline_is_refused(tmp_path: Path) -> None:
+    home = tmp_path / "data"
+    with pytest.raises(boot.SandboxBootError, match="HERMES_MODEL"):
+        boot.apply_sandbox(home, _env(HERMES_MODEL="fixture/model\ninjected"), _skills(tmp_path))
 
 
 def test_hermes_otel_is_enabled_on_the_optimization_profile_only(tmp_path: Path) -> None:
@@ -326,12 +366,24 @@ def test_image_locks_skills_and_records_the_toolset_names() -> None:
     assert "content_capture" in dockerfile
     compose = (REPO_ROOT / "compose.hermes.yml").read_text(encoding="utf-8")
     assert "MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}" in compose
+    assert "HERMES_MODEL: ${HERMES_MODEL:?HERMES_MODEL is required}" in compose
+    assert "HERMES_MODEL_PROVIDER: ${HERMES_MODEL_PROVIDER:-openrouter}" in compose
     assert "HERMES_MODEL_BASE_URL: ${HERMES_MODEL_BASE_URL:-}" in compose
+    # `deepfix eval` runs in this container, so it needs the same model env names.
+    assert "LLM_MODEL: ${LLM_MODEL:-}" in compose
+    assert "LLM_JUDGE_MODEL: ${LLM_JUDGE_MODEL:-}" in compose
     assert "EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}" in compose
     assert "EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}" in compose
     assert "EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}" in compose
+    assert "COHERE_API_KEY: ${COHERE_API_KEY:-}" in compose
+    assert "COHERE_BASE_URL: ${COHERE_BASE_URL:-}" in compose
+    assert "COHERE_MODEL: ${COHERE_MODEL:-}" in compose
     assert "MLFLOW_DEV_RAG_EXPERIMENT:" in compose
     stack = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "LLM_MODEL: ${LLM_MODEL:-}" in stack
+    assert "LLM_JUDGE_MODEL: ${LLM_JUDGE_MODEL:-}" in stack
+    assert "HERMES_MODEL: ${HERMES_MODEL:-}" in stack
+    assert "HERMES_MODEL_PROVIDER: ${HERMES_MODEL_PROVIDER:-openrouter}" in stack
     assert '"5000:5000"' in stack
     assert "MLFLOW_TRACKING_USERNAME" not in stack
     assert "MLFLOW_TRACKING_PASSWORD" not in stack
@@ -356,7 +408,7 @@ def test_apply_sandbox_requires_scoped_s3_key_and_rejects_root(tmp_path: Path) -
     home = tmp_path / "data"
     skills = _skills(tmp_path)
     with pytest.raises(boot.SandboxBootError, match="S3_ACCESS_KEY_ID"):
-        boot.apply_sandbox(home, {"API_SERVER_KEY": API_KEY}, skills)
+        boot.apply_sandbox(home, {"API_SERVER_KEY": API_KEY, "HERMES_MODEL": MODEL}, skills)
     with pytest.raises(boot.SandboxBootError, match="RUSTFS_ACCESS_KEY"):
         boot.apply_sandbox(home, _env(RUSTFS_ACCESS_KEY="root-access"), skills)
     scoped = _env(

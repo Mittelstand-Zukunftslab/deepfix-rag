@@ -14,10 +14,10 @@ import time
 
 import pytest
 
+from deepfix_rag.config.settings import ModelNotConfigured, settings
 from deepfix_rag.hermes_client import (
     HERMES_EVENT_NAMES,
     HERMES_MAX_TURNS,
-    HERMES_MODEL,
     HERMES_PROVIDER,
     HERMES_RUN_STATUSES,
     HermesClient,
@@ -451,7 +451,7 @@ def test_start_run_sends_the_fixed_instructions_and_replays_the_original_id() ->
     body = bodies[0]
     assert set(body) == {"input", "instructions", "provider", "model"}
     assert body["provider"] == HERMES_PROVIDER
-    assert body["model"] == HERMES_MODEL
+    assert body["model"] == settings.HERMES_MODEL
     assert "openrouter/" not in body["model"]
     instructions = optimization_instructions(DEEPFIX_RUN)
     assert body["input"] == instructions
@@ -477,6 +477,45 @@ def test_start_run_sends_the_fixed_instructions_and_replays_the_original_id() ->
         assert API_KEY.encode() not in call.body
         assert all(API_KEY not in value for value in call.headers.values())
         _assert_secret_absent(call.path)
+
+
+def test_the_posted_model_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HERMES_MODEL is what the API submits, and the provider can be overridden."""
+    monkeypatch.setenv("HERMES_MODEL", "deepseek/fixture-optimizer")
+    monkeypatch.setenv("HERMES_MODEL_PROVIDER", "vllm")
+    with HermesApi() as api:
+        with _client(api) as client:
+            client.start_run(DEEPFIX_RUN)
+    body = json.loads(api.calls[0].body)
+    assert body["model"] == "deepseek/fixture-optimizer"
+    assert body["provider"] == "vllm"
+
+
+def test_an_explicit_model_argument_wins_over_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HERMES_MODEL", "deepseek/fixture-optimizer")
+    with HermesApi() as api:
+        with _client(api, model="qwen/fixture-explicit") as client:
+            client.start_run(DEEPFIX_RUN)
+    assert json.loads(api.calls[0].body)["model"] == "qwen/fixture-explicit"
+
+
+def test_a_missing_hermes_model_is_named_before_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No hardcoded fallback: the caller fails with the variable name."""
+    monkeypatch.delenv("HERMES_MODEL", raising=False)
+    previous = settings.HERMES_MODEL
+    settings.HERMES_MODEL = ""
+    try:
+        with HermesApi() as api:
+            with _client(api) as client:
+                with pytest.raises(ModelNotConfigured, match="HERMES_MODEL"):
+                    client.start_run(DEEPFIX_RUN)
+        assert api.calls == []
+    finally:
+        settings.HERMES_MODEL = previous
 
 
 @pytest.mark.parametrize("code", ["admission_conflict", "idempotency_key_conflict"])
