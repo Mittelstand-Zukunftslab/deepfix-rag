@@ -1772,14 +1772,29 @@ def _running_id(conn: sqlite3.Connection) -> str | None:
     return str(row["run_id"])
 
 
+# A round counts as the baseline only after it finishes. ``failed`` includes a
+# cancel, a stall, a holdout-guard refusal, a crash, and an invalid result.
+# Those runs, and ``skipped`` ones, must not spend the new-question budget.
+_BASELINE_STATUSES = ("succeeded", "rejected", "promoted")
+
+
 def _previous_dev_ids(conn: sqlite3.Connection) -> set[str] | None:
+    """Dev question ids from the newest round that actually finished.
+
+    The baseline is the latest ``succeeded``, ``rejected``, or ``promoted``
+    run. A newer ``failed`` or ``skipped`` row is ignored, so a run that died
+    before it produced a result — including one refused at the holdout upload
+    guard — does not make those questions look already used.
+    """
+    placeholders = ", ".join("?" for _ in _BASELINE_STATUSES)
     row = conn.execute(
-        """
+        f"""
         SELECT dev_query_ids FROM optimization_runs
-        WHERE status != 'skipped'
+        WHERE status IN ({placeholders})
         ORDER BY started_at DESC
         LIMIT 1
-        """
+        """,
+        _BASELINE_STATUSES,
     ).fetchone()
     if row is None:
         return None

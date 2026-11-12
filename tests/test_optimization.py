@@ -539,7 +539,7 @@ def test_a_run_inside_the_timeout_still_conflicts(tmp_path: Path) -> None:
     assert get_run(db_path, "active").ended_at is None
 
 
-def test_an_interrupted_run_still_consumes_its_dev_questions(tmp_path: Path) -> None:
+def test_a_failed_run_does_not_consume_new_dev_questions(tmp_path: Path) -> None:
     _tracking(tmp_path)
     workspace = tmp_path / "workspace"
     db_path = tmp_path / "private" / "product.db"
@@ -552,10 +552,11 @@ def test_an_interrupted_run_still_consumes_its_dev_questions(tmp_path: Path) -> 
         workspace,
         trigger="cron",
         options=_options(
-            tmp_path, min_dev_questions=1, min_new_dev_questions=1, min_holdout_questions=0
+            tmp_path, min_dev_questions=1, min_new_dev_questions=2, min_holdout_questions=0
         ),
     )
     assert run.status == "skipped"
-    assert run.new_dev_count == 0
+    assert run.new_dev_count == 1
     assert run.dev_count == 1
-    assert "0 new labeled questions in dev, 1 needed" in (run.reason or "")
+    assert "1 new labeled questions in dev, 2 needed" in (run.reason or "")
+    assert "0 new labeled questions" not in (run.reason or "")
