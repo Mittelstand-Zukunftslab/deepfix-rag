@@ -1,11 +1,11 @@
 """Shared LiteLLM options for every completion path in this package.
 
 Answer generation, the DeepEval judge, and evaluation all call LiteLLM.
-Some models (Claude Haiku 5.5, Opus 4.7) reject ``temperature`` other than 1.
+Some models (a Claude Haiku, an Opus) reject ``temperature`` other than 1.
 ``litellm.drop_params`` omits those arguments instead of failing the call.
 
 OpenRouter model ids keep the upstream provider in the first segment
-(``anthropic/claude-haiku-5.5``). LiteLLM reads that segment as the provider
+(``vendor/model-name``). LiteLLM reads that segment as the provider
 unless the id starts with ``openrouter/``.
 """
 

@@ -21,12 +21,14 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 import json
 import logging
+import os
 import time
 from typing import Any
 import urllib.parse
 
 import httpx
 
+from deepfix_rag.config.settings import ModelNotConfigured, settings
 from deepfix_rag.run_bundle import RunBundleError, container_work_dir, validate_run_id
 
 # Hermes writes a keepalive comment when an events stream has been idle for
@@ -40,7 +42,10 @@ DEFAULT_READ_TIMEOUT = 30.0
 DEFAULT_WRITE_TIMEOUT = 30.0
 DEFAULT_POOL_TIMEOUT = 5.0
 HERMES_PROVIDER = "openrouter"
-HERMES_MODEL = "anthropic/claude-haiku-5.5"
+# The model id is configuration: Compose passes HERMES_MODEL and the sandbox
+# writes the same value into its config.yaml. No default lives in this module.
+HERMES_MODEL_ENV = "HERMES_MODEL"
+HERMES_PROVIDER_ENV = "HERMES_MODEL_PROVIDER"
 # Same cap the sandbox writes as ``agent.max_turns``. ``skill_view`` consumes
 # turns, so the budget is the image value, not the old 15-step OpenHands line.
 HERMES_MAX_TURNS = 40
@@ -254,11 +259,39 @@ def hermes_agent_available(base_url: str, api_server_key: str | None) -> bool:
     return hermes_health_ok(base_url, api_server_key)
 
 
+def hermes_model_id(source: Mapping[str, str] | None = None) -> str:
+    """Model id Hermes runs with, from ``HERMES_MODEL``.
+
+    ``source`` defaults to the process environment, which ``Settings`` also
+    reads. An empty value raises ``ModelNotConfigured`` naming the variable.
+    """
+    env = os.environ if source is None else source
+    raw = env.get(HERMES_MODEL_ENV)
+    value = raw if raw is not None else settings.HERMES_MODEL
+    text = (value or "").strip()
+    if not text:
+        raise ModelNotConfigured(
+            f"{HERMES_MODEL_ENV} is not set. Set it in the environment "
+            "(see example.env) to the model id the Hermes sandbox runs."
+        )
+    return text
+
+
+def hermes_provider(source: Mapping[str, str] | None = None) -> str:
+    """Provider segment Hermes routes through. ``HERMES_MODEL_PROVIDER`` wins."""
+    env = os.environ if source is None else source
+    raw = env.get(HERMES_PROVIDER_ENV)
+    value = raw if raw is not None else settings.HERMES_MODEL_PROVIDER
+    return (value or "").strip() or HERMES_PROVIDER
+
+
 class HermesClient:
     """HTTP client for the Hermes runs API.
 
     ``base_url`` is the API origin, for example ``http://hermes:8642``.
-    ``api_server_key`` is sent only as ``Authorization: Bearer``.
+    ``api_server_key`` is sent only as ``Authorization: Bearer``. ``model``
+    and ``provider`` are what ``POST /v1/runs`` submits; by default they come
+    from ``HERMES_MODEL`` and ``HERMES_MODEL_PROVIDER``.
     """
 
     def __init__(
@@ -266,6 +299,8 @@ class HermesClient:
         base_url: str,
         api_server_key: str,
         *,
+        model: str | None = None,
+        provider: str | None = None,
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         read_timeout: float = DEFAULT_READ_TIMEOUT,
         write_timeout: float = DEFAULT_WRITE_TIMEOUT,
@@ -277,6 +312,10 @@ class HermesClient:
     ) -> None:
         self._api_server_key = _visible_secret(api_server_key)
         self.base_url = _check_base_url(base_url, self._api_server_key)
+        # Resolved on use, not on construction: stop/recover paths build a
+        # client for a run that is already submitted and never need the id.
+        self._model = (model or "").strip()
+        self._provider = (provider or "").strip()
         self.connect_timeout = _positive("connect_timeout", connect_timeout)
         self.read_timeout = _positive("read_timeout", read_timeout)
         self.write_timeout = _positive("write_timeout", write_timeout)
@@ -314,6 +353,16 @@ class HermesClient:
     def close(self) -> None:
         self._http.close()
 
+    @property
+    def model(self) -> str:
+        """Model id posted with ``POST /v1/runs``. ``HERMES_MODEL`` unless given."""
+        return self._model or hermes_model_id()
+
+    @property
+    def provider(self) -> str:
+        """Provider segment posted with ``POST /v1/runs``."""
+        return self._provider or hermes_provider()
+
     def start_run(self, run_id: str) -> HermesRunAccepted:
         """``POST /v1/runs``. ``run_id`` is the DeepFix id and the idempotency key.
 
@@ -326,8 +375,8 @@ class HermesClient:
         payload = {
             "input": instructions,
             "instructions": instructions,
-            "provider": HERMES_PROVIDER,
-            "model": HERMES_MODEL,
+            "provider": self.provider,
+            "model": self.model,
         }
         response = self._send(
             "POST",

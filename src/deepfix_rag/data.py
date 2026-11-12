@@ -33,7 +33,7 @@ from .config.schema import (
     DataPreset,
     DataSourceType,
 )
-from .config.settings import LOGGER, settings
+from .config.settings import LOGGER, require_model, settings
 
 _CHUNK_ID_SUFFIX = re.compile(r"::chunk_\d+$")
 T = TypeVar("T")
@@ -140,7 +140,7 @@ def _select_by_ids_and_limit(
 def _default_embed_model() -> BaseEmbedding:
     """Build the project default OpenAI-compatible embedding model from settings."""
     return OpenAIEmbedding(
-        model_name=settings.EMBEDDING_MODEL,
+        model_name=require_model("EMBEDDING_MODEL"),
         api_base=settings.EMBEDDING_BASE_URL,
         api_key=settings.EMBEDDING_API_KEY,
     )

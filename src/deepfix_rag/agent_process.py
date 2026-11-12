@@ -11,6 +11,8 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
+from deepfix_rag.config.settings import settings
+
 DEFAULT_TIMEOUT_SECONDS = 3 * 60 * 60
 DEFAULT_ITERATIONS = 15
 DEFAULT_GOAL_ROUNDS = 3
@@ -61,9 +63,14 @@ def openrouter_settings(source: Mapping[str, str]) -> tuple[str, str, str | None
     """Return the OpenRouter model, base URL, and key.
 
     The key is ``DEEPFIX_LLM_API_KEY``. The product ``LLM_API_KEY`` is not used.
+    The model is ``DEEPFIX_LLM_MODEL_NAME`` with no code default. It may be
+    empty here because a Hermes run does not use this model; the OpenHands
+    launch path refuses to start and names the variable when it is missing.
     """
-    model = source.get("DEEPFIX_LLM_MODEL_NAME") or "openai/gpt-6-luna-pro"
-    base_url = source.get("DEEPFIX_LLM_BASE_URL") or "https://openrouter.ai/api/v1"
+    model = (
+        source.get("DEEPFIX_LLM_MODEL_NAME", "").strip() or settings.DEEPFIX_LLM_MODEL_NAME.strip()
+    )
+    base_url = source.get("DEEPFIX_LLM_BASE_URL") or settings.DEEPFIX_LLM_BASE_URL
     api_key = source.get("DEEPFIX_LLM_API_KEY") or None
     return model, base_url, api_key
 

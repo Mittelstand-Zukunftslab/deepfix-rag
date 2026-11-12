@@ -39,7 +39,7 @@ from deepfix_rag.config.schema import (
     RAGConfig,
     RetrievalMetricType,
 )
-from deepfix_rag.config.settings import LOGGER, settings
+from deepfix_rag.config.settings import LOGGER, require_model, settings
 from deepfix_rag.data import DataLoader, QARecord, QAValidationError
 from deepfix_rag.evaluation.labels import (
     generation_metrics_for_record,
@@ -427,7 +427,7 @@ class GenerationEvaluator:
     ) -> None:
         self.threshold = threshold
         self.judge = judge or ProxyJudgeLLM(
-            model=settings.LLM_JUDGE_MODEL,
+            model=require_model("LLM_JUDGE_MODEL"),
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
         )
@@ -625,16 +625,29 @@ class EvaluationRunner:
             measures=config.eval.retrieval_metrics,
             cutoff_k=self.cutoff_k,
         )
-
-        if not config.retrieval_only:
-            self.generation_evaluator = generation_evaluator or GenerationEvaluator(
-                generation_metrics=config.eval.generation_metrics,
-                threshold=config.eval.threshold,
-            )
-        else:
-            self.generation_evaluator = None
+        # The judge is built on the first run that scores generation metrics, not
+        # here: `--retrieval-only` can override the config, and that path needs no
+        # judge, so LLM_JUDGE_MODEL must not be required for it.
+        self.generation_evaluator = generation_evaluator
 
         self.tracker = tracker or EvaluationTracker()
+
+    def _ensure_generation_evaluator(self) -> GenerationEvaluator | None:
+        """Build the judge when this run scores generation metrics.
+
+        ``--retrieval-only`` overrides the config after construction, and a
+        retrieval-only run needs no judge. Building it here keeps
+        ``LLM_JUDGE_MODEL`` required only when a generation metric will be scored.
+        """
+        if self.config.retrieval_only:
+            self.generation_evaluator = None
+            return None
+        if self.generation_evaluator is None:
+            self.generation_evaluator = GenerationEvaluator(
+                generation_metrics=self.config.eval.generation_metrics,
+                threshold=self.config.eval.threshold,
+            )
+        return self.generation_evaluator
 
     async def _execute_case(
         self,
@@ -738,6 +751,8 @@ class EvaluationRunner:
 
         if overrides:
             self.config = apply_mutation(self.config, overrides)
+
+        self._ensure_generation_evaluator()
 
         qa_pairs = resolve_eval_records(
             dataset_path,

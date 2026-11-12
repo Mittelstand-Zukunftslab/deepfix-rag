@@ -20,6 +20,7 @@ from deepfix_rag.cli.ui import (
 )
 from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.config.schema import RAGConfig
+from deepfix_rag.config.settings import ModelNotConfigured
 from deepfix_rag.data import QAValidationError
 from deepfix_rag.evaluation.runner import EvaluationSummary, EvaluationTracker, run_evaluation
 from deepfix_rag.index_manifest import (
@@ -194,6 +195,8 @@ def _evaluate(
         raise _EvalFailure(str(exc), EXIT_VALIDATION_ERROR, "validation_error") from exc
     except RuntimeError as exc:
         raise _EvalFailure(str(exc), EXIT_RUNTIME_ERROR, "evaluation_failed") from exc
+    except ModelNotConfigured as exc:
+        raise _EvalFailure(str(exc), EXIT_VALIDATION_ERROR, "missing_model") from exc
     except Exception as exc:
         raise _EvalFailure(
             f"{label} failed: {exc}",

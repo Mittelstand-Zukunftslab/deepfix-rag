@@ -31,7 +31,7 @@ from deepfix_rag.agent_process import (
     interpreter_imports_agent,
     run_agent_job,
 )
-from deepfix_rag.config.settings import LOGGER, Settings
+from deepfix_rag.config.settings import LOGGER, ModelNotConfigured, Settings
 from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.feedback import export_feedback
 from deepfix_rag.hermes_client import (
@@ -41,6 +41,7 @@ from deepfix_rag.hermes_client import (
     HermesRun,
     HermesStreamError,
     hermes_agent_available,
+    hermes_model_id,
 )
 from deepfix_rag.hermes_sync import (
     bucket_from_env,
@@ -95,9 +96,17 @@ OPENHANDS_STATUS_MESSAGE = (
     "OpenHands is not set up on this server, so a run cannot start. "
     "The schedule and history are still shown."
 )
+OPENHANDS_MODEL_MISSING_MESSAGE = (
+    "DEEPFIX_LLM_MODEL_NAME is not set, so an OpenHands run cannot start. "
+    "Set it in the server environment to the OpenRouter model id the agent runs."
+)
 HERMES_STATUS_MESSAGE = (
     "Hermes is not set up on this server, so a run cannot start. "
     "The schedule and history are still shown."
+)
+HERMES_MODEL_MISSING_MESSAGE = (
+    "HERMES_MODEL is not set, so a Hermes run cannot start. "
+    "Set it in the server environment to the model id the sandbox runs."
 )
 _HERMES_IN_PROGRESS = frozenset({"started", "running", "stopping", "queued"})
 STALE_REASON = "Stale: the run exceeded the configured timeout."
@@ -173,7 +182,8 @@ class OptimizationSettings:
     timeout_seconds: float = 3 * 60 * 60
     goal_rounds: int = 3
     interpreter: Path | None = None
-    model: str = "openai/gpt-6-luna-pro"
+    # No code default: settings_from copies DEEPFIX_LLM_MODEL_NAME through openrouter_settings.
+    model: str = ""
     base_url: str | None = "https://openrouter.ai/api/v1"
     api_key: str | None = None
     runner_script: Path | None = None
@@ -1620,8 +1630,26 @@ _wakes: dict[str, threading.Event] = {}
 
 def _launch_blocked_message(options: OptimizationSettings) -> str:
     if options.agent is OptimizationAgent.HERMES:
+        if not _hermes_model_configured():
+            return HERMES_MODEL_MISSING_MESSAGE
         return HERMES_UNAVAILABLE_MESSAGE
+    if _openhands_model_missing(options):
+        return OPENHANDS_MODEL_MISSING_MESSAGE
     return AGENT_UNAVAILABLE_MESSAGE
+
+
+def _openhands_model_missing(options: OptimizationSettings) -> bool:
+    """True when the interpreter exists but no model id was configured."""
+    return _interpreter_ready(options.interpreter) and not options.model.strip()
+
+
+def _hermes_model_configured() -> bool:
+    """True when ``HERMES_MODEL`` names a model, so a Hermes run can be submitted."""
+    try:
+        hermes_model_id()
+    except ModelNotConfigured:
+        return False
+    return True
 
 
 def _start_thread(
@@ -1731,7 +1759,7 @@ def _interpreter_ready(interpreter: Path | None) -> bool:
 def _can_launch(options: OptimizationSettings) -> bool:
     """True when this process can start the agent the run will use."""
     if options.agent is OptimizationAgent.HERMES:
-        return agent_available(options)
+        return _hermes_model_configured() and agent_available(options)
     if not _interpreter_ready(options.interpreter):
         return False
     if not options.api_key or not options.base_url or not options.model:
@@ -1750,7 +1778,11 @@ def agent_status(options: OptimizationSettings) -> tuple[bool, str | None]:
     if agent_available(options):
         return True, None
     if options.agent is OptimizationAgent.HERMES:
+        if not _hermes_model_configured():
+            return False, HERMES_MODEL_MISSING_MESSAGE
         return False, HERMES_STATUS_MESSAGE
+    if _openhands_model_missing(options):
+        return False, OPENHANDS_MODEL_MISSING_MESSAGE
     return False, OPENHANDS_STATUS_MESSAGE
 
 

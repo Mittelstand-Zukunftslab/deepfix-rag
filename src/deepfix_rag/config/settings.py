@@ -19,6 +19,26 @@ def get_logger():
     return logger
 
 
+class ModelNotConfigured(ValueError):
+    """A model id that the caller needs is missing from the environment."""
+
+
+def require_model(name: str, value: str | None = None) -> str:
+    """Return a configured model id, or fail naming the environment variable.
+
+    Every model id comes from the environment (see ``example.env`` and the
+    Compose files). ``value`` overrides the ``Settings`` attribute of the same
+    name; ``None`` reads it from the settings singleton.
+    """
+    text = (value if value is not None else getattr(settings, name, "") or "").strip()
+    if not text:
+        raise ModelNotConfigured(
+            f"{name} is not set. Set it in the environment (see example.env) to a model id "
+            "your endpoint serves."
+        )
+    return text
+
+
 class Settings(BaseSettings):
     # MLflow
     MLFLOW_TRACKING_URI: str | None = None
@@ -27,23 +47,28 @@ class Settings(BaseSettings):
     DATA_ROOT: str = os.path.join(Path(__file__).parents[3], "data", "raw")
     DATA_PROCESSES_DIR: str = os.path.join(Path(__file__).parents[3], "data", "processed")
 
-    # LLM
+    # LLM. Every model id comes from the environment; there is no code default.
+    # A consumer calls ``require_model`` and fails naming the variable when it is empty.
     LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
     LLM_API_KEY: str | None = None
-    LLM_MODEL: str = "anthropic/claude-haiku-5.5"
+    LLM_MODEL: str = ""
     LLM_CONTEXT_WINDOW: int = 20000
 
     # Judge
-    LLM_JUDGE_MODEL: str = "openai/gpt-5.6-luna"
+    LLM_JUDGE_MODEL: str = ""
+
+    # Hermes runs API. The sandbox writes the same id into its config.yaml.
+    HERMES_MODEL: str = ""
+    HERMES_MODEL_PROVIDER: str = "openrouter"
 
     # Embedding
-    EMBEDDING_MODEL: str = "perplexity/pplx-embed-v1-4b"
+    EMBEDDING_MODEL: str = ""
     EMBEDDING_BASE_URL: str = "https://openrouter.ai/api/v1"
     EMBEDDING_API_KEY: str | None = None
 
     # Reranker (Cohere-compatible)
     COHERE_API_KEY: str | None = None
-    COHERE_MODEL: str = "cohere/rerank-4-fast"
+    COHERE_MODEL: str = ""
     COHERE_BASE_URL: str = "https://openrouter.ai/api/v1"
 
     # Memgraph
@@ -84,7 +109,7 @@ class Settings(BaseSettings):
     # OpenRouter credentials for the OpenHands child. The key is never the product LLM key.
     DEEPFIX_LLM_API_KEY: str | None = None
     DEEPFIX_LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
-    DEEPFIX_LLM_MODEL_NAME: str = "openai/gpt-6-luna-pro"
+    DEEPFIX_LLM_MODEL_NAME: str = ""
     # Omit sampling params the provider rejects. Claude Haiku 5.5 allows only temperature=1.
     DEEPFIX_LLM_DROP_PARAMS: bool = True
     OPENHANDS_PYTHON: str | None = None

@@ -66,7 +66,7 @@ from deepfix_rag.config.schema import (
     RetrievalBackend,
     VectorStoreType,
 )
-from deepfix_rag.config.settings import LOGGER, settings
+from deepfix_rag.config.settings import LOGGER, require_model, settings
 from deepfix_rag.data import DataLoader, build_node_parser
 from deepfix_rag.index_manifest import write_index_manifest
 from deepfix_rag.llm import litellm_additional_kwargs, resolve_litellm_model
@@ -206,7 +206,7 @@ class RAGWorkflow(Workflow):
         if self.embed_model is not None:
             return self.embed_model
         return OpenAIEmbedding(
-            model_name=settings.EMBEDDING_MODEL,
+            model_name=require_model("EMBEDDING_MODEL"),
             api_base=settings.EMBEDDING_BASE_URL,
             api_key=settings.EMBEDDING_API_KEY,
         )
@@ -214,7 +214,7 @@ class RAGWorkflow(Workflow):
     def _get_llm(self) -> BaseLLM:
         if self.llm is not None:
             return self.llm
-        model_name = resolve_litellm_model(settings.LLM_MODEL, settings.LLM_BASE_URL)
+        model_name = resolve_litellm_model(require_model("LLM_MODEL"), settings.LLM_BASE_URL)
         return CustomLiteLLM(
             model=model_name,
             temperature=self.config.generation.temperature,
@@ -229,7 +229,7 @@ class RAGWorkflow(Workflow):
         if not self.config.rerank.enabled:
             return None
         return CohereRerank(
-            model=settings.COHERE_MODEL,
+            model=require_model("COHERE_MODEL"),
             top_n=self.config.rerank.top_n,
             api_key=settings.COHERE_API_KEY,
             base_url=settings.COHERE_BASE_URL,

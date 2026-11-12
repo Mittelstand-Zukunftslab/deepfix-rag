@@ -168,8 +168,9 @@ RUN find /opt/deepfix/skills /opt/deepfix/plugins -type d -exec chmod 0755 {} + 
 ENV PATH="/opt/deepfix/bin:/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/deepfix/.venv/bin:/usr/local/bin:${PATH}"
 
 # s6 continues after a failing cont-init script unless this is 2. The sandbox
-# boot script exits 1 when API_SERVER_KEY is missing or LLM_API_KEY is set,
-# and the container must stop instead of serving without that check.
+# boot script exits 1 when API_SERVER_KEY or HERMES_MODEL is missing or
+# LLM_API_KEY is set, and the container must stop instead of serving without
+# that check.
 ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2
 
 WORKDIR /opt/data

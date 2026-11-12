@@ -40,7 +40,10 @@ DEFAULT_RUN_TAG_PLUGIN = Path("/opt/deepfix/plugins/deepfix-run-tag")
 HERMES_OTEL_PLUGIN = "hermes_otel"
 RUN_TAG_PLUGIN = "deepfix-run-tag"
 MODEL_PROVIDER = "openrouter"
-MODEL_DEFAULT = "anthropic/claude-haiku-5.5"
+MODEL_PROVIDER_ENV = "HERMES_MODEL_PROVIDER"
+# The model id is configuration, not code. Compose passes HERMES_MODEL and the
+# boot fails when it is missing instead of seeding a repository-wide default.
+MODEL_ENV = "HERMES_MODEL"
 MODEL_BASE_URL = "https://openrouter.ai/api/v1"
 MODEL_BASE_URL_ENV = "HERMES_MODEL_BASE_URL"
 # Starting point from the PRD. Confirmed on v0.22.7: the platform clamp is
@@ -209,14 +212,43 @@ def model_base_url(env: Mapping[str, str]) -> str:
     return value
 
 
+def model_provider(env: Mapping[str, str]) -> str:
+    """Provider Hermes routes through. ``HERMES_MODEL_PROVIDER`` overrides OpenRouter."""
+    value = env.get(MODEL_PROVIDER_ENV, "").strip() or MODEL_PROVIDER
+    if any(char in value for char in "\n\r\x00"):
+        raise SandboxBootError(f"{MODEL_PROVIDER_ENV} contains a newline or NUL")
+    return value
+
+
+def model_id(env: Mapping[str, str]) -> str:
+    """Provider model id for both profiles. ``HERMES_MODEL`` is required.
+
+    The id is written into ``config.yaml`` on every boot, so a missing value
+    would silently keep an older model. Boot fails instead.
+    """
+    value = env.get(MODEL_ENV, "").strip()
+    if not value:
+        raise SandboxBootError(
+            f"{MODEL_ENV} is required and must be the model id this sandbox runs "
+            "(for example the id in example.env). Compose passes HERMES_MODEL from .env."
+        )
+    if any(char in value for char in "\n\r\x00"):
+        raise SandboxBootError(f"{MODEL_ENV} contains a newline or NUL")
+    return value
+
+
 def optimization_config_patch(
-    skills_dir: Path, *, base_url: str = MODEL_BASE_URL
+    skills_dir: Path,
+    *,
+    base_url: str = MODEL_BASE_URL,
+    provider: str = MODEL_PROVIDER,
+    model: str = "",
 ) -> dict[str, Any]:
     """Config keys this sandbox owns. Other seeded keys are left in place."""
     return {
         "model": {
-            "provider": MODEL_PROVIDER,
-            "default": MODEL_DEFAULT,
+            "provider": provider,
+            "default": model,
             "base_url": base_url,
         },
         "terminal": {
@@ -247,7 +279,11 @@ def optimization_config_patch(
 
 
 def chat_profile_config(
-    config_version: object, *, base_url: str = MODEL_BASE_URL
+    config_version: object,
+    *,
+    base_url: str = MODEL_BASE_URL,
+    provider: str = MODEL_PROVIDER,
+    model: str = "",
 ) -> dict[str, Any]:
     """A second profile that is not the optimization agent.
 
@@ -257,8 +293,8 @@ def chat_profile_config(
     """
     config: dict[str, Any] = {
         "model": {
-            "provider": MODEL_PROVIDER,
-            "default": MODEL_DEFAULT,
+            "provider": provider,
+            "default": model,
             "base_url": base_url,
         },
         "approvals": {"mode": "smart"},
@@ -671,6 +707,8 @@ def apply_sandbox(
     chat_key = validate_api_key(chat_key_raw, name=CHAT_API_KEY_ENV) if chat_key_raw else ""
 
     base_url = model_base_url(env)
+    provider = model_provider(env)
+    model = model_id(env)
     home.mkdir(parents=True, exist_ok=True)
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -678,7 +716,10 @@ def apply_sandbox(
 
     config_path = home / "config.yaml"
     config = _load_yaml(config_path)
-    _merge(config, optimization_config_patch(skills_dir, base_url=base_url))
+    _merge(
+        config,
+        optimization_config_patch(skills_dir, base_url=base_url, provider=provider, model=model),
+    )
     _dump_yaml(config_path, config)
     _chown_hermes(config_path)
 
@@ -705,7 +746,9 @@ def apply_sandbox(
 
     chat_dir = home / "profiles" / CHAT_PROFILE
     chat_dir.mkdir(parents=True, exist_ok=True)
-    chat_config = chat_profile_config(config.get("_config_version"), base_url=base_url)
+    chat_config = chat_profile_config(
+        config.get("_config_version"), base_url=base_url, provider=provider, model=model
+    )
     _dump_yaml(chat_dir / "config.yaml", chat_config)
     _chown_hermes(chat_dir / "config.yaml")
     soul = chat_dir / "SOUL.md"
