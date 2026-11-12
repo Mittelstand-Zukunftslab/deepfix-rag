@@ -140,6 +140,18 @@ class CustomLiteLLM(LiteLLM):
         return await asyncio.to_thread(self.chat, messages, **kwargs)
 
 
+def index_workflow_timeout(seconds: float | None = None) -> float | None:
+    """Timeout passed to the index workflow.
+
+    ``None`` or a non-positive value disables it. Query workflows keep the
+    ``RAGWorkflow`` default of 600 seconds.
+    """
+    value = settings.DEEPFIX_INDEX_TIMEOUT_SECONDS if seconds is None else seconds
+    if value <= 0:
+        return None
+    return float(value)
+
+
 def lancedb_storage_options(
     uri: str,
     *,

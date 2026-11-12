@@ -28,7 +28,10 @@ from deepfix_rag.run_bundle import (
     RecordingObjectStore,
     RunBundleError,
     candidate_index_uri,
+    clear_index_prefix,
+    index_object_prefix,
     plan_run_bundle,
+    reject_holdout_leaks,
     stage_run_bundle,
 )
 
@@ -392,6 +395,47 @@ def test_promotion_rebuilds_locally_and_ignores_the_remote_candidate_index() -> 
     assert 'deepfix-sync = "deepfix_rag.hermes_sync:main"' in script
     dockerfile = (REPO_ROOT / "docker" / "hermes" / "Dockerfile").read_text(encoding="utf-8")
     assert "/usr/local/bin/deepfix-sync" in dockerfile
+
+
+def test_force_clear_deletes_only_the_index_prefix(tmp_path: Path) -> None:
+    store = DirectoryObjectStore(tmp_path / "objects")
+    store.put(BUCKET, "dev/documents.lance/data.arrow", b"half")
+    store.put(BUCKET, "dev/manifest.json", b"old")
+    store.put(BUCKET, "device/keep.txt", b"sibling")
+    store.put(BUCKET, "holdout/questions.jsonl", b"secret")
+    store.put(BUCKET, "optimization/runs/runa0001/input/champion.yaml", b"run")
+    removed = clear_index_prefix(store, f"s3://{BUCKET}/dev")
+    assert removed == 2
+    assert store.list(BUCKET, "dev/") == []
+    assert store.get(BUCKET, "device/keep.txt") == b"sibling"
+    assert store.get(BUCKET, "holdout/questions.jsonl") == b"secret"
+    assert store.get(BUCKET, "optimization/runs/runa0001/input/champion.yaml") == b"run"
+    bucket, prefix = index_object_prefix(
+        f"s3://{BUCKET}/optimization/runs/runa0001/candidate-index"
+    )
+    assert bucket == BUCKET
+    assert prefix == "optimization/runs/runa0001/candidate-index/"
+    for uri in (f"s3://{BUCKET}", f"s3://{BUCKET}/", f"s3://{BUCKET}/../dev"):
+        with pytest.raises(RunBundleError, match="empty prefix"):
+            clear_index_prefix(store, uri)
+
+
+def test_holdout_leak_names_the_dev_question_and_not_the_query(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    concatenated = f"{HOLDOUT_QUERY}hat is the rest of a second question"
+    dev_path = _dev_file(tmp_path, concatenated)
+    plan = plan_run_bundle(
+        run_id=RUN_A,
+        workspace=workspace,
+        dev_path=dev_path,
+        bucket=BUCKET,
+    )
+    with pytest.raises(RunBundleError, match=DEV_ID) as caught:
+        reject_holdout_leaks(plan, queries=(HOLDOUT_QUERY,), query_ids=(HOLDOUT_ID,))
+    message = str(caught.value)
+    assert "dev question" in message
+    assert HOLDOUT_QUERY not in message
+    assert HOLDOUT_ID not in message
 
 
 def test_run_id_with_a_slash_is_rejected(tmp_path: Path) -> None:

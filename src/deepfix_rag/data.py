@@ -39,6 +39,31 @@ _CHUNK_ID_SUFFIX = re.compile(r"::chunk_\d+$")
 T = TypeVar("T")
 
 
+def hf_load_streams(limit: int | None, doc_ids: list[str] | None) -> bool:
+    """Stream a Hugging Face split when a limit can stop before the full corpus.
+
+    A required-id scan may have to read the whole split, so that path stays
+    eager. A plain ``limit`` stops after that many rows and never materializes
+    the rest.
+    """
+    return limit is not None and not doc_ids
+
+
+def with_dataset_path(config: DataLoaderConfig, path: str) -> DataLoaderConfig:
+    """Point data loading at ``path`` and keep limit, split, and PCA settings.
+
+    ``source_type`` is inferred again only when the path changes.
+    """
+    if config.path_or_repo == path:
+        return config
+    # model_copy does not re-run validators, so build a new config and let
+    # source_type be inferred from the new path.
+    values = config.model_dump()
+    values["path_or_repo"] = path
+    values["source_type"] = None
+    return DataLoaderConfig.model_validate(values)
+
+
 def _normalize_doc_id(value: str) -> str:
     """Return parent doc_id, stripping a trailing `::chunk_{n}` suffix if present."""
     if not value:
@@ -372,8 +397,12 @@ class BundestagLoader(BaseLoaderStrategy):
     ) -> list[Document]:
         repo = self.CORPUS_REPO
         split = "train"
-        LOGGER.info(f"Downloading HuggingFace Bundestag corpus '{repo}' (split: {split})...")
-        hf_data = load_dataset(repo, split=split)
+        streaming = hf_load_streams(config.limit, doc_ids)
+        LOGGER.info(
+            f"Downloading HuggingFace Bundestag corpus '{repo}' "
+            f"(split: {split}, streaming: {streaming})..."
+        )
+        hf_data = load_dataset(repo, split=split, streaming=streaming)
 
         def _docs() -> Iterable[Document]:
             for row in hf_data:
@@ -432,13 +461,15 @@ class LegalRagBenchLoader(BaseLoaderStrategy):
     ) -> list[Document]:
         split = "test"
         subset = "corpus"
+        streaming = hf_load_streams(config.limit, doc_ids)
         LOGGER.info(
-            f"Downloading HuggingFace Legal RAG Bench corpus '{self.REPO}' (subset: {subset}, split: {split})..."
+            f"Downloading HuggingFace Legal RAG Bench corpus '{self.REPO}' "
+            f"(subset: {subset}, split: {split}, streaming: {streaming})..."
         )
         try:
-            hf_data = load_dataset(self.REPO, subset, split=split)
+            hf_data = load_dataset(self.REPO, subset, split=split, streaming=streaming)
         except Exception:
-            hf_data = load_dataset(self.REPO, split=split)
+            hf_data = load_dataset(self.REPO, split=split, streaming=streaming)
 
         def _docs() -> Iterable[Document]:
             for row in hf_data:

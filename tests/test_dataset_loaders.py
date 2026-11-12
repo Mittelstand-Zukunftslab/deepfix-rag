@@ -20,10 +20,41 @@ from deepfix_rag.data import (
     HuggingFaceLoader,
     LegalRagBenchLoader,
     QARecord,
+    hf_load_streams,
+    with_dataset_path,
 )
-from deepfix_rag.pipeline import RAGWorkflow
+from deepfix_rag.pipeline import RAGWorkflow, index_workflow_timeout
 
 pytestmark = [pytest.mark.unit]
+
+
+def test_dataset_override_keeps_the_record_limit():
+    cfg = DataLoaderConfig(
+        path_or_repo=DataPreset.BUNDESTAG_CORPUS,
+        limit=2000,
+        split="train",
+        enable_embedding_pca=False,
+        embedding_pca_components=32,
+    )
+    updated = with_dataset_path(cfg, "HF:other/repo")
+    assert updated.path_or_repo == "HF:other/repo"
+    assert updated.limit == 2000
+    assert updated.split == "train"
+    assert updated.enable_embedding_pca is False
+    assert updated.embedding_pca_components == 32
+    assert updated.source_type == DataSourceType.HUGGINGFACE
+    assert with_dataset_path(cfg, cfg.path_or_repo).limit == 2000
+    assert hf_load_streams(2000, None) is True
+    assert hf_load_streams(None, None) is False
+    assert hf_load_streams(2000, ["doc-1"]) is False
+
+
+def test_index_workflow_timeout_defaults_off_and_stays_configurable():
+    assert index_workflow_timeout(0) is None
+    assert index_workflow_timeout(-1) is None
+    assert index_workflow_timeout(7200) == 7200.0
+    workflow = RAGWorkflow(timeout=index_workflow_timeout(0))
+    assert workflow._timeout is None
 
 
 def test_dataloader_config_inference_and_defaults(tmp_path: Path):

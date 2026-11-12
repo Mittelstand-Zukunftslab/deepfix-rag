@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     # many minutes fails the row. SSE ": keepalive" comments do not count.
     OPTIMIZATION_HEARTBEAT_STALL_MINUTES: float = 5
     OPTIMIZATION_GOAL_ROUNDS: int = 3
+    # Seconds for `deepfix index`. 0 disables the workflow timeout. The class
+    # default of 600 killed a 2,000-document index. Query workflows stay at 600.
+    DEEPFIX_INDEX_TIMEOUT_SECONDS: float = 0
 
     @property
     def product_db_path(self) -> Path:

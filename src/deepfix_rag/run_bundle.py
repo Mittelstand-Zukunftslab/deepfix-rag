@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import re
 from typing import Protocol
@@ -350,6 +351,51 @@ def plan_run_bundle(
     )
 
 
+def index_object_prefix(uri: str) -> tuple[str, str]:
+    """Bucket and key prefix for an ``s3://bucket/prefix`` index URI.
+
+    The prefix always ends in ``/`` and is never empty or ``..``, so clearing
+    ``s3://bucket/dev`` removes ``dev/...`` and not ``device/...`` or the bucket.
+    """
+    parsed = urllib.parse.urlparse(uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise RunBundleError("index uri must be s3://bucket/prefix")
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise RunBundleError("refusing to clear an s3 index with an empty prefix")
+    return parsed.netloc, "/".join(parts) + "/"
+
+
+def clear_index_prefix(store: ObjectStore, uri: str) -> int:
+    """Delete every object under the index URI and nothing outside that prefix."""
+    bucket, prefix = index_object_prefix(uri)
+    removed = 0
+    for key in store.list(bucket, prefix):
+        if not key.startswith(prefix):
+            continue
+        store.delete(bucket, key)
+        removed += 1
+    return removed
+
+
+def _dev_question_ids(body: bytes, needles: list[bytes]) -> list[str]:
+    """Query ids of dev rows whose line contains a holdout needle."""
+    found: list[str] = []
+    for raw in body.splitlines():
+        if not raw.strip() or not any(needle in raw for needle in needles):
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        query_id = row.get("query_id")
+        if isinstance(query_id, str) and query_id and query_id not in found:
+            found.append(query_id)
+    return found
+
+
 def reject_holdout_leaks(
     plan: RunBundlePlan,
     *,
@@ -358,15 +404,31 @@ def reject_holdout_leaks(
 ) -> None:
     """Refuse the plan when any object key or body contains a holdout needle.
 
-    The error text does not include the query or the id.
+    When the needle is inside ``feedback_dev.jsonl``, the error names that dev
+    question id. It never includes the holdout query text.
     """
     needles = [item.encode("utf-8") for item in (*queries, *query_ids) if item]
     if not needles:
         return
+    leaked = False
+    dev_ids: list[str] = []
     for obj in plan.objects:
         haystack = obj.key.encode("utf-8") + b"\n" + obj.body
-        if any(needle in haystack for needle in needles):
-            raise RunBundleError("refusing to upload a bundle that contains holdout content")
+        if not any(needle in haystack for needle in needles):
+            continue
+        leaked = True
+        if obj.key.endswith("/input/feedback_dev.jsonl"):
+            for query_id in _dev_question_ids(obj.body, needles):
+                if query_id not in dev_ids:
+                    dev_ids.append(query_id)
+    if not leaked:
+        return
+    if dev_ids:
+        named = ", ".join(dev_ids)
+        raise RunBundleError(
+            f"refusing to upload a bundle that contains holdout content in dev question {named}"
+        )
+    raise RunBundleError("refusing to upload a bundle that contains holdout content")
 
 
 def publish_plan(plan: RunBundlePlan, store: ObjectStore) -> tuple[StoreRequest, ...]:
