@@ -186,8 +186,13 @@ def test_mutate_config_examples_run_and_change_the_config(
 ) -> None:
     """Each mutate-config example parses (values with spaces are quoted) and exits 0."""
     for command in _commands(name, "deepfix mutate-config"):
-        rendered = command.replace("<run_dir>", str(tmp_path)).replace(
-            "configs/champion.yaml", str(default_config_path)
+        rendered = (
+            command
+            # The sandbox champion lives in the run bundle. A test substitutes a
+            # real config so the example can actually run.
+            .replace("<run_dir>/input/champion.yaml", str(default_config_path))
+            .replace("<run_dir>", str(tmp_path))
+            .replace("configs/champion.yaml", str(default_config_path))
         )
         args = shlex.split(rendered.strip("`"))[1:]
         assert args[0] == "mutate-config", command
@@ -509,3 +514,55 @@ def test_chunking_hpo_stays_out_of_api_rounds() -> None:
     assert "--tune-chunking" in text
     assert "Never run it with `--tune-chunking` in an API-driven round" in text
     assert "hpo-search" in text
+
+
+def test_every_skill_eval_reads_the_local_index_cache() -> None:
+    """A round localizes the champion index once; every eval reads that copy."""
+    for name in (LOOP_SKILL, HPO_SKILL):
+        commands = [
+            command for command in _commands(name, "deepfix eval") if "<run_dir>" in command
+        ]
+        assert commands, name
+        for command in commands:
+            if "configs/champion.yaml" in command:
+                continue
+            has_cache = (
+                "--index-dir <run_dir>/idx-cache" in command
+                or "--index-dir <run_dir>/idx " in command
+                or "--index-dir <run_dir>/idx" in command
+            )
+            assert has_cache, f"{name}: `{command}` does not read a local index"
+
+    # A comparison must cover both sides, or the baseline re-reads S3.
+    comparisons = [
+        command
+        for name in (LOOP_SKILL, HPO_SKILL)
+        for command in _commands(name, "deepfix eval")
+        if "--compare" in command
+    ]
+    assert comparisons
+    for command in comparisons:
+        assert "--baseline-index-dir" in command, command
+
+
+def test_the_hpo_skill_never_tells_the_agent_to_copy_the_index_by_hand() -> None:
+    text = _read(HPO_SKILL)
+    # The cache is the agent's read path; a manual copy is a pitfall, not a step.
+    pitfall = text.split("## Pitfalls", 1)[1]
+    assert "Copying the S3 index prefix by hand" in pitfall
+    for command in _commands(HPO_SKILL, "aws s3"):
+        raise AssertionError(f"hpo-search shells out to aws s3: {command}")
+    for command in _commands(HPO_SKILL, "cp -r"):
+        raise AssertionError(f"hpo-search copies the index by hand: {command}")
+
+
+def test_the_round_never_points_at_a_path_the_sandbox_does_not_have() -> None:
+    """`configs/champion.yaml` does not exist in the sandbox; `input/` does.
+
+    Scope is the skills a round can actually follow: the loop, the routed
+    skills, and the two readable references. The manual-only skills keep their
+    repository paths because a developer runs them in a checkout.
+    """
+    for name in (LOOP_SKILL, *ROUTED_SKILLS, *REFERENCE_SKILLS):
+        for command in _commands(name, "deepfix"):
+            assert "configs/champion.yaml" not in command, f"{name}: `{command}`"

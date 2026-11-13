@@ -11,9 +11,9 @@ trigger_conditions:
   - "failure_distribution.retrieval_miss / total >= 0.3 and recall < 0.6 on eval --json (optimization-loop routing row 2)"
   - "Retrieved passages are cut off mid-sentence or mid-statute"
 cli_actions:
-  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set chunking.strategy=semantic --set chunking.semantic_breakpoint_percentile=90 --json"
+  - "deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set chunking.strategy=semantic --set chunking.semantic_breakpoint_percentile=90 --json"
   - "deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json"
-  - "deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
+  - "deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --baseline-index-dir <run_dir>/idx --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --json"
 ---
 
 Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Chunking is index-time: a config edit without `index --force` scores the previous index.
@@ -27,7 +27,7 @@ High `recall` with low `ndcg` is a ranking problem. Use `rerank-calibration`. A 
 1. Mutate one chunking hypothesis. Confirm `diffs` is non-empty.
 
 ```
-deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set chunking.strategy=semantic --set chunking.semantic_breakpoint_percentile=90 --json
+deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set chunking.strategy=semantic --set chunking.semantic_breakpoint_percentile=90 --json
 ```
 
 2. Rebuild into a directory under the run. Indexing reads the corpus from the config; do not pass `--dataset`.
@@ -39,7 +39,7 @@ deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --forc
 3. Compare on the full dev set (no `--limit`) as in the loop's step 5: save the output, print the gate summary. `--index-dir` applies to the candidate only. Then apply the loop's gate (`delta.ndcg` or `delta.recall` >= 0.025 for the primary metric, no regression in `ndcg`, `recall`, `precision`) and write `result.json`. This only recommends the candidate; the API decides.
 
 ```
-deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
+deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --baseline-index-dir <run_dir>/idx --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
 
 Use `recall` as the primary metric when the goal is fewer misses, `ndcg` when ranking quality is the goal. This is the only chunking path in a round: one `mutate-config`, one re-index, one compare. `deepfix hpo --tune-chunking` is never run inside a round (see the manual section below). Query-time work (rerank and fusion) is a different path and goes through `hpo-search`.

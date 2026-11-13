@@ -16,11 +16,11 @@ trigger_conditions:
   - "An optimization round is starting and no pathology skill has been chosen yet"
   - "eval --compare JSON is available and the candidate must be recommended or discarded"
 cli_actions:
-  - "deepfix eval --config configs/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --json"
+  - "deepfix eval --config <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --index-dir <run_dir>/idx-cache --json"
   - "deepfix hpo --config <run_dir>/input/hpo_retrieval_small.yaml --base-config <run_dir>/input/champion.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json"
-  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
+  - "deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
   - "deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json"
-  - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
+  - "deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache --json"
   - "deepfix gate --compare <run_dir>/compare.json --primary ndcg --json"
 ---
 
@@ -28,7 +28,7 @@ This skill is the whole contract for a round. Pathology skills are sibling folde
 
 ## Hard rules
 
-- Write only under `<run_dir>` (the run directory named in the prompt, `runs/<run_id>/`). Never edit `configs/champion.yaml` or anything under `indexes/current`.
+- Write only under `<run_dir>` (the run directory named in the prompt, `runs/<run_id>/`). The champion is read-only input at `<run_dir>/input/champion.yaml`; never edit it, and never write anything under `indexes/current`.
 - Backends: `dense`, `hybrid`, `bm25` only. The API rejects `graph` and `mixed`.
 - Never promote. You recommend a candidate in `result.json`; the API re-scores it and decides.
 - One hypothesis per run. If it fails the gate, write `result.json` with a null candidate and finish. Do not try a second one. A query-time hypothesis is one bounded `deepfix hpo` sweep (see `hpo-search`): the sweep may score many configs internally, but you still recommend at most one.
@@ -38,7 +38,7 @@ This skill is the whole contract for a round. Pathology skills are sibling folde
 
 ## Setup facts
 
-- The working directory is the product workspace: `configs/champion.yaml`, `corpus/`, `indexes/current`, `runs/<run_id>/`. Run plain `deepfix ...` from there. Never `cd` elsewhere, never `uv run`, never pass `--env-file`.
+- The sandbox has no repository checkout. Your run lives under `<run_dir>`: `input/` holds the bundle the API wrote (`input/champion.yaml`, `input/feedback_dev.jsonl`, `input/corpus`, `input/champion-index`, `input/hpo_retrieval_small.yaml`) and `output/` holds what you write. A `configs/champion.yaml` path does not exist here; always use `<run_dir>/input/champion.yaml`. Run plain `deepfix ...` from the workspace. Never `cd` elsewhere, never `uv run`, never pass `--env-file`.
 - The `deepfix` command on PATH is the sandbox shim. While a command runs it rewrites `output/heartbeat.json` every 30 seconds and copies stdout and stderr to the container log. A direct call to the virtualenv interpreter does not write that file.
 - `<dev_path>` is the dev dataset named in the prompt. Pass it as `--dataset <dev_path>` to every `eval`. Do not pass it to `index`: indexing reads the corpus from the config.
 - Dev rows have only `query_id`, `query`, `doc_ids` and `negative_doc_ids`. There are no answers and no unanswerable rows. `ndcg` and `precision` are computed over judged documents only.
@@ -51,7 +51,7 @@ This skill is the whole contract for a round. Pathology skills are sibling folde
 1. Baseline smoke test on 30 questions. Read `errors`, `total`, `recall`, `ndcg` and `failure_distribution` from the JSON.
 
 ```
-deepfix eval --config configs/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --json
+deepfix eval --config <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --index-dir <run_dir>/idx-cache --json
 ```
 
 If `errors > 0`, STOP: write `result.json` with a null candidate, put the first error from `error_details` in `summary`, and finish. Never read errored cases as retrieval misses. `eval` exits 2 when every case errored (missing embedding credentials, a missing `OPENROUTER_API_KEY` for rerank, an unreachable endpoint, or a wrong `--dataset`). If it exits before a summary, for example because the MLflow experiment does not exist, save that JSON as `<run_dir>/baseline_smoke.json` (or `<run_dir>/output/baseline_smoke.json` when `result.json` is written under `output/`). Set `state.json` `status` to `blocked` and copy the `error` string into `summary`. A null candidate with no champion metrics is a blocked baseline, not a recommendation.
@@ -71,7 +71,7 @@ The thresholds come from a 30-question sample, where one question moves a metric
 
 Rows 3 and 5 are query-time work: rerank and fusion. Follow `hpo-search` for both. It runs **one** `deepfix hpo` sweep over the shipped small space and then confirms the best trial on the full dev set — do not hand-write one `mutate-config` candidate instead. `chunking-tuning` and `retrieval-backend-selection` stay one-hypothesis, re-index paths with no HPO. `rerank-calibration` and `hybrid-fusion-tuning` remain readable for their single-setting recipes and their validated findings, but a round routes through `hpo-search`. `retrieval-backend-selection` was named `embedding-selection`, and `hybrid-fusion-tuning` was named `query-rewriting`; those old folders are aliases. The skills `deflection-and-refusal`, `legal-retrieval-grounding`, `multi-hop-aggregation` and `diagnostic-server` are not routed from here and must not be used in a round.
 
-Before choosing, read `<workspace>/runs/ledger.jsonl` if it exists. Skip a hypothesis whose `skill` and `keys` already appear on a row with the same `champion_sha256` as `configs/champion.yaml`. After each command, write `<run_dir>/state.json` with `step`, `skill`, `commands`, and `status`.
+Before choosing, read `<workspace>/runs/ledger.jsonl` if it exists. Skip a hypothesis whose `skill` and `keys` already appear on a row with the same `champion_sha256` as `<run_dir>/input/champion.yaml`. After each command, write `<run_dir>/state.json` with `step`, `skill`, `commands`, and `status`.
 
 3. Produce `<run_dir>/candidate.yaml`. **Query-time** (`hpo-search`, routing rows 3 and 5): one bounded sweep writes it.
 
@@ -82,7 +82,7 @@ deepfix hpo --config <run_dir>/input/hpo_retrieval_small.yaml --base-config <run
 Write a provisional `result.json` as soon as that call reports a best trial, then continue to the confirmation. **Index-time** (`chunking-tuning`, `retrieval-backend-selection`): one `mutate-config`. An unknown `--set` key exits 1 with `error_type` `unknown_key` and writes nothing. On success, confirm `diffs` is non-empty. `ignored_keys` is always empty. `index_time_changed` tells you whether step 4 must rebuild.
 
 ```
-deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
+deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
 ```
 
 The example is a single-setting `rerank-calibration` hypothesis, kept for manual use. In a round, rows 3 and 5 go through `hpo-search` instead. Take the real command from the pathology skill you chose.
@@ -93,10 +93,10 @@ The example is a single-setting `rerank-calibration` hypothesis, kept for manual
 deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json
 ```
 
-5. Compare on the FULL dev set. Do not pass `--limit`. `--index-dir` applies to the candidate only; the baseline is scored on the index named in `configs/champion.yaml`. Drop `--index-dir` when you did not re-index — `hpo-search` never re-indexes, so its confirmation has no `--index-dir` and its candidate is scored on the champion's index. The output is long, so save it. `eval` exits 1 with `error_type` `stale_index` when the index manifest does not match the config, and exits 2 with `error_type` `partial_errors` when any compare case errored (`--max-error-rate` defaults to 0). Each side includes `effective_backend`, `configured_backend`, and `judge_failures`.
+5. Compare on the FULL dev set. Do not pass `--limit`. The baseline is the bundle's champion, `<run_dir>/input/champion.yaml`. `--index-dir` applies to the candidate and `--baseline-index-dir` applies to the baseline, so passing both `<run_dir>/idx-cache` keeps the whole comparison on the local copy instead of re-reading S3. `deepfix hpo` fills that cache from the champion's remote index, bucket and key intact. Use `--index-dir <run_dir>/idx` instead only when you rebuilt an index in step 4. The output is long, so save it. `eval` exits 1 with `error_type` `stale_index` when the index manifest does not match the config, and exits 2 with `error_type` `partial_errors` when any compare case errored (`--max-error-rate` defaults to 0). Each side includes `effective_backend`, `configured_backend`, and `judge_failures`.
 
 ```
-deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
+deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache --json > <run_dir>/compare.json
 ```
 
 ```
@@ -141,7 +141,7 @@ A pass here is a recommendation, not a promotion. Do not recommend when `pass` i
 
 `retrieval.load_if_exists` defaults to true, so an existing index hides index-time edits. `deepfix index` writes `<index_dir>/deepfix_index.json`. `eval` exits 1 with `error_type` `stale_index` when that manifest does not match the config. `index --if-changed` returns `skipped: true` when the hash matches. The API treats these keys as index-time (`indexing.index_time_signature`, also listed by `deepfix schema --json`) and builds its own index when they differ from the champion: `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, and `retrieval.graph_max_paths_per_chunk`.
 
-Query-time (no re-index; the existing index is reused): `retrieval.language`, `retrieval.top_k`, `retrieval.fusion_mode`, `retrieval.dense_weight`, `retrieval.bm25_weight`, `retrieval.bm25_k1`, `retrieval.bm25_b`, `rerank.enabled`, `rerank.top_n`. Everything the shipped `<run_dir>/input/hpo_retrieval_small.yaml` samples is in this list, so a sweep and its confirmation reuse the champion's index without `--index-dir`.
+Query-time (no re-index; the existing index is reused): `retrieval.language`, `retrieval.top_k`, `retrieval.fusion_mode`, `retrieval.dense_weight`, `retrieval.bm25_weight`, `retrieval.bm25_k1`, `retrieval.bm25_b`, `rerank.enabled`, `rerank.top_n`. Everything the shipped `<run_dir>/input/hpo_retrieval_small.yaml` samples is in this list, so a sweep and its confirmation reuse the champion's index. Point both evals at `<run_dir>/idx-cache` so the reuse is local.
 
 - `retrieval.top_k` only moves the scores through reranking (it is the pool the reranker sees) or, slightly, through hybrid fusion (each retriever returns `top_k` candidates before they are fused). With rerank off, a `top_k` above `eval.cutoff_k` does not change the dense or bm25 scores: on a 60-document test corpus the top 5 was identical for 10 of 10 queries on dense and on bm25, and changed for 2 of 10 on hybrid. A `top_k`-only candidate is not a useful hypothesis.
 - Any `chunking.*` change needs `deepfix index` into `<run_dir>/idx` before the compare.
@@ -167,6 +167,7 @@ Benchmark evidence, not product data. Bundestag QA, first 100 training questions
 ## Pitfalls
 
 - A mutation that exits 1 with `error_type` `unknown_key` changed nothing. A success whose `diffs` object is empty also changed nothing.
-- `--index-dir` on `eval` does not move the baseline; do not expect the champion to be scored on the candidate index.
+- `--index-dir` on `eval` does not move the baseline; pass `--baseline-index-dir` when both sides should read the same local copy. Without it the baseline reads the index named in its own config, which for a bundle champion is the `s3://` URI.
+- Copying an S3 index prefix by hand. `deepfix hpo` localizes it into `<run_dir>/idx-cache` with the bucket and key intact; a manual copy costs turns.
 - Treating errored cases as retrieval misses sends you down the wrong pathology.
 - `primary_metric` must be `ndcg`, `recall` or `precision`. Values such as `ndcg@5` or `faithfulness` are never scored, so the API rejects the run.

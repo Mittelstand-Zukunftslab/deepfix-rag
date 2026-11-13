@@ -13,11 +13,11 @@ trigger_conditions:
   - "failure_distribution.retrieval_miss > 0 and recall < 0.8 on eval --json (optimization-loop routing row 4)"
   - "dense, bm25, and hybrid have not been compared with eval --retrieval-only --compare"
 cli_actions:
-  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=dense --json"
-  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=bm25 --json"
-  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.language=english --json"
+  - "deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=dense --json"
+  - "deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=bm25 --json"
+  - "deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.language=english --json"
   - "deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json"
-  - "deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
+  - "deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --baseline-index-dir <run_dir>/idx --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --json"
 ---
 
 Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt.
@@ -32,10 +32,10 @@ High `recall` with low `ndcg` is `rerank-calibration`. Cut-off passages are `chu
 
 ## Procedure
 
-One hypothesis per run: pick ONE backend that differs from the champion's (read `retrieval.backend` in `configs/champion.yaml`). A `hybrid` champion usually tries `dense`; a `dense` or `bm25` champion tries `hybrid`. `retrieval.backend` is index-time. The API rebuilds its own index for that candidate, so the measurement has to use `<run_dir>/idx` or the local scores and the API re-score are not on the same index. Confirm `diffs` is non-empty and `index_time_changed` is true.
+One hypothesis per run: pick ONE backend that differs from the champion's (read `retrieval.backend` in `<run_dir>/input/champion.yaml`). A `hybrid` champion usually tries `dense`; a `dense` or `bm25` champion tries `hybrid`. `retrieval.backend` is index-time. The API rebuilds its own index for that candidate, so the measurement has to use `<run_dir>/idx` or the local scores and the API re-score are not on the same index. Confirm `diffs` is non-empty and `index_time_changed` is true.
 
 ```
-deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=dense --json
+deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=dense --json
 ```
 
 ```
@@ -45,7 +45,7 @@ deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --forc
 Compare on the full dev set (no `--limit`). Then run `deepfix gate` as in the loop and write `result.json`. This only recommends the backend; the API decides. Primary metric is `recall` when the goal is fewer misses.
 
 ```
-deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
+deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --baseline-index-dir <run_dir>/idx --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
 
 Other values for the same slot: `--set retrieval.backend=bm25`, `--set retrieval.backend=hybrid`.
@@ -53,7 +53,7 @@ Other values for the same slot: `--set retrieval.backend=bm25`, `--set retrieval
 Language check. When the champion is `bm25` or `hybrid`, read a few files in `corpus/` before choosing. If the text is not in the champion's `retrieval.language` (for example English text under the default `german`), the BM25 side stems the wrong language and misses exact terms. Then the one hypothesis for this run is the language, not the backend. Language is query-time, so do not re-index and do not pass `--index-dir`:
 
 ```
-deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.language=english --json
+deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.language=english --json
 ```
 
 Compare it on the champion index. A `dense` champion is unaffected by this key. If hybrid wins on `ndcg` only after rerank, use `rerank-calibration` instead of fusion weights alone.

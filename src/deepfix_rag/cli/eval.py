@@ -229,7 +229,17 @@ def eval_cmd(
         help=(
             "Directory containing the built vector/lexical index (overrides "
             "config.retrieval.lancedb_index_dir for the candidate only). The --compare "
-            "baseline is always scored on the index in its own config."
+            "baseline is scored on the index in its own config unless "
+            "--baseline-index-dir is also given."
+        ),
+    ),
+    baseline_index_dir: str | None = typer.Option(
+        None,
+        "--baseline-index-dir",
+        help=(
+            "Local index directory for the --compare baseline, instead of the one in "
+            "its config. Use this to score both sides from one local copy of a remote "
+            "index, so neither side reaches the object store."
         ),
     ),
     compare: Path | None = typer.Option(
@@ -348,7 +358,10 @@ def eval_cmd(
                 error_type="validation_error",
             )
         try:
-            assert_index_current(baseline_config.retrieval.lancedb_index_dir, baseline_config)
+            assert_index_current(
+                baseline_index_dir or baseline_config.retrieval.lancedb_index_dir,
+                baseline_config,
+            )
         except StaleIndexError as exc:
             emit_error(
                 str(exc),
@@ -397,7 +410,7 @@ def eval_cmd(
                         redirect_stdout=False,
                         dataset_path=target_dataset,
                         config=baseline_config,
-                        index_dir=None,
+                        index_dir=baseline_index_dir,
                         split=target_split,
                         limit=target_limit,
                         max_concurrency=target_concurrency,

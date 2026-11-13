@@ -495,7 +495,9 @@ def test_eval_help_scopes_index_dir_to_candidate(cli_runner: CliRunner):
     assert result.exit_code == EXIT_SUCCESS
     flattened = " ".join(re.sub(r"[│╭╮╰╯─]", " ", result.stdout).split())
     assert "candidate only" in flattened
-    assert "baseline is always scored on the index in its own config" in flattened
+    assert "unless --baseline-index-dir is also given" in flattened
+    assert "--baseline-index-dir" in flattened
+    assert "instead of the one in its config" in flattened
 
 
 class _RejectingEmbeddingHandler(BaseHTTPRequestHandler):
@@ -573,3 +575,95 @@ def test_eval_exits_2_naming_the_error_when_every_case_errors(
     assert "First error:" in payload["error"]
     assert "First error: None" not in payload["error"]
     assert "rejected the request" in payload["error"]
+
+
+@pytest.mark.integration
+@pytest.mark.network
+def test_baseline_index_dir_scores_both_sides_from_one_local_copy(
+    cli_runner: CliRunner,
+    mlflow_tracking_uri: str,
+    sample_qa_path: Path,
+    sample_corpus_path: Path,
+    populated_sample_index_dir: Path,
+    small_index_dir: tuple[Path, Path],
+    tmp_path: Path,
+):
+    """A round localizes the champion index once, then points both sides at it.
+
+    The baseline config names a directory that does not exist, which is what a
+    run-bundle champion looks like before the index is copied locally. With
+    --baseline-index-dir both sides read the same local copy, so no side falls
+    back to the object store.
+    """
+    small_dir, small_corpus = small_index_dir
+    champion_path = _write_eval_config(
+        tmp_path / "champion.yaml", sample_corpus_path, tmp_path / "missing-champion-index"
+    )
+    candidate_path = _write_eval_config(
+        tmp_path / "candidate.yaml", small_corpus, tmp_path / "missing-candidate-index"
+    )
+    dataset_args = ["--dataset", str(sample_qa_path)]
+
+    compared = cli_runner.invoke(
+        app,
+        [
+            *EVAL_RUN_COMMAND,
+            "--config",
+            str(candidate_path),
+            "--index-dir",
+            str(small_dir),
+            "--baseline-index-dir",
+            str(populated_sample_index_dir),
+            "--compare",
+            str(champion_path),
+            *dataset_args,
+        ],
+    )
+
+    assert compared.exit_code == EXIT_SUCCESS, compared.stderr
+    payload = json.loads(compared.stdout)
+    # The baseline read the full index from --baseline-index-dir, not the
+    # nonexistent path in its own config.
+    assert payload["baseline"]["errors"] == 0
+    assert payload["baseline"]["recall"] == pytest.approx(1.0)
+    assert payload["candidate"]["errors"] == 0
+    assert payload["delta"]["recall"] != 0
+
+
+@pytest.mark.integration
+@pytest.mark.network
+def test_a_missing_baseline_index_dir_is_reported_as_an_index_problem(
+    cli_runner: CliRunner,
+    mlflow_tracking_uri: str,
+    sample_qa_path: Path,
+    sample_corpus_path: Path,
+    populated_sample_index_dir: Path,
+    tmp_path: Path,
+):
+    """A wrong --baseline-index-dir must fail, not silently read the config path."""
+    champion_path = _write_eval_config(
+        tmp_path / "champion.yaml", sample_corpus_path, populated_sample_index_dir
+    )
+    stale = tmp_path / "stale-baseline-index"
+    stale.mkdir()
+    (stale / "documents.lance").write_text("not an index", encoding="utf-8")
+
+    result = cli_runner.invoke(
+        app,
+        [
+            *EVAL_RUN_COMMAND,
+            "--config",
+            str(champion_path),
+            "--index-dir",
+            str(populated_sample_index_dir),
+            "--baseline-index-dir",
+            str(stale),
+            "--compare",
+            str(champion_path),
+            "--dataset",
+            str(sample_qa_path),
+        ],
+    )
+    assert result.exit_code == EXIT_VALIDATION_ERROR, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["error_type"] == "stale_index"

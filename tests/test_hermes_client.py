@@ -471,6 +471,10 @@ def test_start_run_sends_the_fixed_instructions_and_replays_the_original_id() ->
     assert "hpo-search" in instructions
     assert "/input/hpo_retrieval_small.yaml" in instructions
     assert "--base-config" in instructions
+    # The round never copies the S3 index by hand; every eval reads the cache.
+    assert "idx-cache" in instructions
+    assert "--baseline-index-dir" in instructions
+    assert "never copy an S3 prefix yourself" in instructions
     assert "ONCE" in instructions
     assert "Do not run `deepfix hpo`" not in instructions
     assert "run-diagnostic" in instructions

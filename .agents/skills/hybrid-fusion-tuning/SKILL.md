@@ -13,8 +13,8 @@ trigger_conditions:
   - "retrieval_miss > 0, recall >= 0.8 and the champion backend is hybrid (optimization-loop routing row 5)"
   - "Queries use acronyms or paraphrases that rarely appear in the source text, so dense and BM25 disagree"
 cli_actions:
-  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.fusion_mode=relative_score --set retrieval.dense_weight=0.7 --set retrieval.bm25_weight=0.3 --json"
-  - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
+  - "deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.fusion_mode=relative_score --set retrieval.dense_weight=0.7 --set retrieval.bm25_weight=0.3 --json"
+  - "deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache --dataset <dev_path> --retrieval-only --json"
 ---
 
 **In an API-driven round, query-time fusion and rerank go through `hpo-search`, not this skill.** `hpo-search` runs one bounded `deepfix hpo` sweep over the shipped small space (fusion mode, dense weight, `top_k`, rerank) and then confirms the best trial on the full dev set. This skill documents a single hand-picked fusion setting for manual use and for reading the findings; a round does not hand-write one candidate instead of the sweep.
@@ -32,23 +32,23 @@ High `recall` and low `ndcg` means the documents were retrieved and then ranked 
 1. Switch the fusion mode so the weights are read, and set both weights together. Confirm `diffs` is non-empty and contains `retrieval.fusion_mode`.
 
 ```
-deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.fusion_mode=relative_score --set retrieval.dense_weight=0.7 --set retrieval.bm25_weight=0.3 --json
+deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.fusion_mode=relative_score --set retrieval.dense_weight=0.7 --set retrieval.bm25_weight=0.3 --json
 ```
 
-Before tuning weights, check that `retrieval.language` in `configs/champion.yaml` matches the corpus text (default `german`). It selects the stemmer on the BM25 side, so a mismatch weakens exactly the exact-term matching that the weights are meant to balance. If it does not match, make the language the one hypothesis of this run (`--set retrieval.language=english`, valid values listed in `retrieval-backend-selection`) and leave the fusion settings alone.
+Before tuning weights, check that `retrieval.language` in `<run_dir>/input/champion.yaml` matches the corpus text (default `german`). It selects the stemmer on the BM25 side, so a mismatch weakens exactly the exact-term matching that the weights are meant to balance. If it does not match, make the language the one hypothesis of this run (`--set retrieval.language=english`, valid values listed in `retrieval-backend-selection`) and leave the fusion settings alone.
 
 Heuristic for the direction: queries with exact terms or acronyms favour more `bm25_weight` (for example 0.3 dense / 0.7 BM25); paraphrased queries favour more `dense_weight`. Choose one setting; do not sweep.
 
 Alternative single hypothesis, BM25 saturation and length normalization:
 
 ```
-deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.bm25_k1=1.2 --set retrieval.bm25_b=0.5 --json
+deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.bm25_k1=1.2 --set retrieval.bm25_b=0.5 --json
 ```
 
 2. Compare on the full dev set (no `--limit`). Save the output and run `deepfix gate` as in the loop. Then write `result.json`. This only recommends the candidate; the API decides. Primary metric is `recall` when the goal is fewer misses.
 
 ```
-deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
+deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
 
 If `effective_backend` is `dense` while the champion is `hybrid`, the BM25 docstore was empty. Re-index into `<run_dir>/idx` and compare with `--index-dir <run_dir>/idx` before judging the result. The gate rejects that fallback.

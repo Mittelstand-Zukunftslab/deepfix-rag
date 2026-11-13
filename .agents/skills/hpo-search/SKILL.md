@@ -13,7 +13,8 @@ trigger_conditions:
   - "The lever is query-time (rerank.*, retrieval.top_k, retrieval.fusion_mode, fusion weights), so no re-index is needed"
 cli_actions:
   - "deepfix hpo --config <run_dir>/input/hpo_retrieval_small.yaml --base-config <run_dir>/input/champion.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json"
-  - "deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --json"
+  - "deepfix eval --config <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --index-dir <run_dir>/idx-cache --json"
+  - "deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache --json"
   - "deepfix gate --compare <run_dir>/compare.json --primary ndcg --json"
 ---
 
@@ -44,11 +45,19 @@ This skill replaces a single hand-written `mutate-config` hypothesis with **one*
 
 ### 1. Baseline smoke
 
-Already done by the loop's step 1. Keep its `recall` and `ndcg`; they are the numbers your confirmation compares against.
+Score the champion once, from the bundle's champion config. Keep its `recall` and `ndcg`; they are the numbers your confirmation compares against.
+
+```
+deepfix eval --config <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --index-dir <run_dir>/idx-cache --json
+```
+
+`--index-dir <run_dir>/idx-cache` is safe before the cache exists: the HPO call in step 3 fills it. If the champion index is already local, the flag is a no-op that keeps every eval on one path.
 
 ### 2. The index is localized for you
 
-Every trial reads a local index. When the champion's `retrieval.lancedb_index_dir` is an `s3://` URI, `deepfix hpo` copies it **once** into `<run_dir>/idx-cache` before the first trial and points every trial there. You do not copy anything yourself. Do not pass `--index-dir` unless you need a different directory, and then it must be a path under `<run_dir>`. Never write a cross-run cache: the cache belongs to this run directory.
+When the champion's `retrieval.lancedb_index_dir` is an `s3://` URI, `deepfix hpo` copies the whole prefix — bucket and key — **once** into `<run_dir>/idx-cache` before the first trial, and points every trial there. You never copy a prefix by hand and never pass `--index-dir` to `hpo`; the default is the cache under the run directory. Never write a cross-run cache.
+
+Every later eval reads the same cache with `--index-dir <run_dir>/idx-cache`, so nothing in the round touches the object store twice.
 
 ### 3. One HPO call
 
@@ -75,11 +84,13 @@ Subsample HPO scores are **not** a recommendation. Never put an HPO metric into 
 
 ### 5. Confirmation on the full dev set
 
-No `--limit`. The candidate is query-time only, so no re-index and no `--index-dir`. The baseline is the champion snapshot from the bundle, `<run_dir>/input/champion.yaml`, never `configs/champion.yaml`: the sandbox has no repository checkout, so that path does not exist here.
+No `--limit`. The candidate is query-time only, so no re-index. Both sides read the local cache: `--index-dir` covers the candidate and `--baseline-index-dir` covers the champion, so neither reaches S3. The baseline is the champion snapshot from the bundle, `<run_dir>/input/champion.yaml`, never `configs/champion.yaml`: the sandbox has no repository checkout, so that path does not exist here.
 
 ```
-deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
+deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache --json > <run_dir>/compare.json
 ```
+
+Without `--baseline-index-dir`, `eval` scores the baseline on the index named in its own config, which is the `s3://` URI from the bundle. That is correct but re-reads the object store; the flag is what keeps the round on the local copy.
 
 ```
 deepfix gate --compare <run_dir>/compare.json --primary ndcg --json
@@ -98,11 +109,15 @@ Fill in `mlflow_run_id` from the compare JSON's candidate side, restate baseline
 - `best_trial.params` / `best_trial.values` come from the 20-question subsample. Use them only to describe the hypothesis.
 - `stopped_early` is true when the sweep finished fewer trials than `--n-trials` — because `--timeout` stopped it or a trial failed. Say so in `summary`; it does not invalidate the confirmation.
 - `failed_trials` counts trials Optuna recorded `FAIL`. Each one errored on every case, so it measured nothing and can never be the best trial. The error text is on the trial row's `user_attrs.error` in `hpo_trials.json`.
+- `pruned_trials` counts duplicate parameter sets Optuna redrew. They are skipped without an eval — `user_attrs.duplicate_of` names the trial they repeat — so `n_trials` completed evaluations and `pruned_trials` is overhead, not lost budget.
+- The exported `<run_dir>/candidate.yaml` holds the champion config plus the **tuned** parameters only: no `data.limit`, no `data.path_or_repo`, no `retrieval.lancedb_index_dir`. Do not expect the subsample or the cache path in it.
 - `trials_path` points at `<run_dir>/hpo_trials.json`. `index_dir` / `index_cache_source` show the local index the trials used.
 - `completed_trials` / `total_trials` describe the study, not your turn budget.
 
 ## Pitfalls
 
+- Copying the S3 index prefix by hand. `deepfix hpo` localizes it, bucket and key intact, into `<run_dir>/idx-cache`. A manual copy burns turns and the cache is already where every eval should read from.
+- Passing `--index-dir` to `hpo`. The default is the run cache; only pass it to choose a different directory under `<run_dir>`.
 - Running HPO twice in one round. The budget is 40 turns and the gate is decided by the full-dev confirmation, not by a second sweep.
 - Comparing the HPO subsample score with the baseline smoke (30 questions, different seed). Only the full-dev compare counts.
 - Passing `--limit` to the confirmation. The gate needs every dev question.
