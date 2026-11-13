@@ -887,3 +887,99 @@ def test_a_parameter_the_config_ignores_does_not_make_a_new_trial(
         later.suggest_categorical(key, [value])
 
     assert opt._duplicate_of(later, {**first_params, "retrieval.dense_weight": 0.7}) == 0
+
+
+def test_one_index_is_loaded_for_the_whole_study(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trials share one loaded index instead of re-opening LanceDB each time.
+
+    Per-trial re-opening plus a BM25 docstore rebuild was the largest avoidable
+    allocation in the HPO-007 sweep, which peaked at 4092 MiB of a 4 GiB limit.
+    """
+    from deepfix_rag.pipeline import RAGWorkflow
+
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    loads = {"n": 0}
+    original_exists = RAGWorkflow._index_exists
+
+    def _counted_exists(self):  # noqa: ANN001
+        found = original_exists(self)
+        if found:
+            loads["n"] += 1
+        return found
+
+    monkeypatch.setattr(RAGWorkflow, "_index_exists", _counted_exists)
+
+    space = _query_time_space()
+    space.search_space.hybrid.rerank_choices = [False]
+    space.search_space.hybrid.top_k_choices = [10, 20, 50]
+    space.search_space.hybrid.fusion_modes = [
+        FusionMode.RECIPROCAL_RANK,
+        FusionMode.RELATIVE_SCORE,
+        FusionMode.DIST_BASED_SCORE,
+    ]
+    space.search_space.hybrid.dense_weight_choices = [0.3, 0.5, 0.7]
+    opt = _opt(index_dir, sample_corpus_path, hpo_config=space, seed=0)
+    result = opt.optimize(n_trials=4, dataset_path=str(sample_qa_path), limit=2)
+
+    assert result.to_dict()["completed_trials"] == 4
+    assert opt.shared_index is not None
+    # One load for the study, not one per completed trial.
+    assert loads["n"] == 1, f"expected a single index load, saw {loads['n']}"
+
+
+def test_a_trial_reuses_the_shared_index_and_does_not_reload(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """A preloaded index is handed to the runner, so ingestion does not re-open it."""
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    opt = _opt(index_dir, sample_corpus_path, seed=0)
+    opt._load_shared_index()
+    assert opt.shared_index is not None
+
+    shared = opt.shared_index
+    metrics = opt._run_trial_evaluation(
+        trial_config=opt.base_config,
+        dataset_path=str(sample_qa_path),
+        split="dev",
+        limit=2,
+        run_name="shared_index_trial",
+    )
+    assert metrics
+    # The study's index object is still the one every trial reads.
+    assert opt.shared_index is shared
+
+
+def test_the_runner_releases_its_index_reference_after_a_run(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """The runner must not keep the index alive past the run it scored."""
+    import asyncio
+
+    from llama_index.core.embeddings import MockEmbedding
+
+    from deepfix_rag.evaluation.runner import EvaluationRunner
+
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    opt = _opt(index_dir, sample_corpus_path, seed=0)
+    opt._load_shared_index()
+    shared = opt.shared_index
+
+    runner = EvaluationRunner(
+        config=opt.base_config,
+        embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+        persist=False,
+        index=shared,
+    )
+    asyncio.run(runner.run(dataset_path=str(sample_qa_path), limit=2))
+    # The caller still owns the index; the runner dropped only its own hand-off.
+    assert opt.shared_index is shared
+    assert runner._preloaded_index is shared

@@ -615,12 +615,17 @@ class EvaluationRunner:
         embed_model: Any = None,
         llm: Any = None,
         persist: bool = True,
+        index: Any = None,
     ) -> None:
         self.config = config
         self.cutoff_k = config.eval.cutoff_k
         self.embed_model = embed_model
         self.llm = llm
         self.persist = persist
+        # A caller that scores several configs against one index (HPO) passes it
+        # in, so each run does not re-open LanceDB and rebuild the docstore. The
+        # runner never closes it: ownership stays with the caller.
+        self._preloaded_index = index
 
         self.retrieval_evaluator = retrieval_evaluator or RetrievalEvaluator(
             measures=config.eval.retrieval_metrics,
@@ -796,7 +801,12 @@ class EvaluationRunner:
             embed_model=self.embed_model,
             llm=self.llm,
         )
-        await workflow.run(ingest=True)
+        if self._preloaded_index is not None:
+            # Reuse the caller's index instead of re-opening LanceDB and
+            # rebuilding the BM25 docstore for every config that is scored.
+            workflow._index = self._preloaded_index
+        else:
+            await workflow.run(ingest=True)
 
         async def _run(qa: QARecord, i: int) -> CaseResult:
             async with semaphore:
@@ -926,6 +936,14 @@ class EvaluationRunner:
                 nested=nested,
                 config_yaml=self.config.to_yaml(),
             )
+
+        # Drop this run's retriever, reranker and per-query structures before the
+        # caller starts the next config. A preloaded index belongs to the caller,
+        # so only this workflow's reference is cleared; the objects themselves
+        # are collected on the caller's next gc, which HPO runs between trials.
+        workflow._index = None
+        cases = []
+        res_df = None
 
         return summary
 

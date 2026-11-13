@@ -3,6 +3,7 @@
 import asyncio
 import concurrent.futures
 from dataclasses import dataclass, field
+import gc
 import json
 from pathlib import Path
 import shutil
@@ -32,6 +33,7 @@ from deepfix_rag.index_cache import (
     is_remote_index_uri,
     localize_index,
 )
+from deepfix_rag.pipeline import RAGWorkflow
 
 INDEX_CACHE_DIRNAME = "idx-cache"
 TRIALS_ARTIFACT_NAME = "hpo_trials.json"
@@ -127,6 +129,20 @@ def _weight_ratio(dense_weight: float, bm25_weight: float) -> float:
     if total <= 0:
         return 0.5
     return round(float(dense_weight) / total, 6)
+
+
+def _load_index(config: RAGConfig, *, embed_model: Any = None) -> Any:
+    """Open the configured index once, outside any trial.
+
+    ``RAGWorkflow.run(ingest=True)`` with ``load_if_exists`` does exactly this,
+    but doing it here lets the study keep one index object instead of one per
+    trial. Returns None when the config would have to build an index, because a
+    study over query-time knobs must never rebuild.
+    """
+    workflow = RAGWorkflow(config=config, embed_model=embed_model)
+    if not workflow._index_exists():
+        return None
+    return workflow._load_existing_index()
 
 
 def write_best_so_far(path: Path | str, config: RAGConfig) -> Path:
@@ -376,6 +392,10 @@ class HyperparameterOpt:
         self.index_dir = Path(index_dir) if index_dir is not None else None
         self.local_index_dir: Path | None = None
         self.index_copy_source: str | None = None
+        # One index, loaded once, shared by every trial. Re-opening LanceDB and
+        # rebuilding the BM25 docstore per trial was the largest avoidable
+        # allocation in the HPO-007 sweep.
+        self.shared_index: Any = None
         # A test pins the embedding model so it never calls a live endpoint.
         self.embed_model = embed_model
         self.llm = llm
@@ -430,6 +450,7 @@ class HyperparameterOpt:
             embed_model=self.embed_model,
             llm=self.llm,
             persist=self.persist,
+            index=self.shared_index,
         )
         summary = await runner.run(
             dataset_path=dataset_path,
@@ -499,6 +520,33 @@ class HyperparameterOpt:
             overrides["retrieval.lancedb_index_dir"] = str(local)
             overrides["retrieval.load_if_exists"] = True
         return overrides
+
+    def _load_shared_index(self) -> None:
+        """Load the trial index once for the whole study.
+
+        Every trial of a study reads the same index: only query-time knobs
+        differ, and a chunking study re-indexes per trial anyway. Loading it
+        once removes a per-trial LanceDB open plus BM25 docstore rebuild, which
+        is the largest allocation in the sweep. A failure here is not fatal for
+        the study: the trial path falls back to loading its own index.
+        """
+        if self.shared_index is not None:
+            return
+        try:
+            self.shared_index = _load_index(self.base_config, embed_model=self.embed_model)
+        except Exception as exc:  # a broken shared load must not kill the study
+            LOGGER.warning(f"Could not preload the index; each trial will load its own: {exc}")
+            self.shared_index = None
+
+    def _release_trial_objects(self) -> None:
+        """Drop per-trial allocations and collect before the next trial.
+
+        A trial builds a retriever, a reranker client, and (for hybrid) a BM25
+        structure over the whole docstore. None of that is reusable across
+        trials with different query-time knobs, and holding it while the next
+        trial allocates its own is what pushed the sandbox to its memory limit.
+        """
+        gc.collect()
 
     def _failed_trial_error(self, trial: optuna.Trial, message: str) -> TrialEvaluationError:
         """Build the error that marks a trial FAILED instead of scoring it 0.0."""
@@ -662,6 +710,9 @@ class HyperparameterOpt:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 except Exception as e:
                     LOGGER.debug(f"Failed to cleanup temp dir {temp_dir}: {e}")
+            # Free this trial's retriever, reranker client and BM25 structure
+            # before the next one allocates its own.
+            self._release_trial_objects()
 
     def _export_overrides(self, params: dict[str, Any]) -> dict[str, Any]:
         """Overrides for an exported candidate: the tuned params and nothing else.
@@ -724,6 +775,7 @@ class HyperparameterOpt:
         )
         # Copy a remote index before the first trial so no trial fetches it again.
         self.local_index_for()
+        self._load_shared_index()
 
         directions = ["maximize"] * len(self.metric_names)
 
