@@ -1,7 +1,9 @@
 # Product API (FastAPI in src/deepfix_rag/api).
 # Build context is the repository root: docker build -t deepfix-api .
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm
+# Pinned to the uv that wrote uv.lock's `revision`, so a builder upgrade cannot
+# make the lock look out of sync with the tool that reads it.
+FROM ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm
 
 WORKDIR /app
 
