@@ -23,12 +23,18 @@ from deepfix_rag.config.hpo import (
 )
 from deepfix_rag.config.mutator import apply_mutation
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.config.settings import LOGGER, settings
+from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.evaluation.runner import EvaluationRunner
+from deepfix_rag.index_cache import (
+    index_dir_populated as _index_dir_populated,
+)
+from deepfix_rag.index_cache import (
+    is_remote_index_uri,
+    localize_index,
+)
 
 INDEX_CACHE_DIRNAME = "idx-cache"
 TRIALS_ARTIFACT_NAME = "hpo_trials.json"
-_REMOTE_SCHEMES = ("s3://", "gs://", "az://", "abfs://", "abfss://", "hdfs://", "gcs://")
 # Overrides that exist only so a trial can score a subsample. They must never
 # reach an exported candidate, which is re-scored on the full dev set.
 _TRIAL_ONLY_OVERRIDE_KEYS = frozenset(
@@ -39,128 +45,6 @@ _TRIAL_ONLY_OVERRIDE_KEYS = frozenset(
         "retrieval.lancedb_index_dir",
     }
 )
-
-
-def is_remote_index_uri(uri: str) -> bool:
-    """True for an index outside the local filesystem."""
-    return str(uri).strip().lower().startswith(_REMOTE_SCHEMES)
-
-
-def _index_dir_populated(path: Path) -> bool:
-    """True when the directory already holds a LanceDB index, so no copy is needed."""
-    try:
-        return path.is_dir() and any(path.iterdir())
-    except OSError:
-        return False
-
-
-def _split_s3_uri(uri: str) -> tuple[str, str]:
-    """Bucket and key prefix for an ``s3://bucket/key`` URI.
-
-    The bucket is *not* part of the key. Passing a bare key to pyarrow makes it
-    treat the first path segment as the bucket, which is how
-    ``s3://deepfix-index/optimization/runs/x/index`` turned into a lookup for a
-    bucket named ``optimization``.
-    """
-    remainder = uri[len("s3://") :]
-    bucket, _, key = remainder.partition("/")
-    if not bucket:
-        raise ValueError(f"S3 URI has no bucket: {uri}")
-    return bucket, key.strip("/")
-
-
-def _s3_filesystem() -> Any:
-    """pyarrow S3 filesystem for the RustFS endpoint the rest of the CLI uses."""
-    from pyarrow import fs
-
-    endpoint = str(settings.S3_ENDPOINT_URL or "").strip()
-    return fs.S3FileSystem(
-        endpoint_override=endpoint or None,
-        access_key=settings.S3_ACCESS_KEY_ID or None,
-        secret_key=settings.S3_SECRET_ACCESS_KEY or None,
-        region=settings.S3_REGION or None,
-        scheme="http" if endpoint.startswith("http://") else "https",
-    )
-
-
-def copy_index_tree(
-    source: str,
-    target: Path,
-    *,
-    filesystem: Any = None,
-) -> Path:
-    """Copy a directory or a remote object prefix into ``target``.
-
-    A local directory is copied with ``copytree``. A remote ``s3://bucket/key``
-    prefix is walked with pyarrow's S3 filesystem, which reads the same
-    ``S3_*`` settings LanceDB already uses. The bucket stays the bucket and the
-    key stays the key, so the copy lands the index's own files under
-    ``target``. No full-object download is repeated once the files are on disk.
-    """
-    target.mkdir(parents=True, exist_ok=True)
-    if not is_remote_index_uri(source):
-        source_path = Path(source)
-        if not source_path.is_dir():
-            raise FileNotFoundError(f"Index directory does not exist: {source}")
-        shutil.copytree(source_path, target, dirs_exist_ok=True)
-        return target
-    if not str(source).lower().startswith("s3://"):
-        raise ValueError(f"Only s3:// index URIs can be copied: {source}")
-    _copy_object_prefix(source, target, filesystem=filesystem)
-    return target
-
-
-def _s3_object_prefix(uri: str) -> str:
-    """The ``bucket/key`` prefix pyarrow addresses objects by.
-
-    pyarrow's S3 paths always include the bucket: a selector base of
-    ``optimization/runs/x/index`` is read as bucket ``optimization`` with key
-    ``runs/x/index``. Every prefix this module hands to pyarrow, and every
-    prefix it strips from a returned path, has to include the bucket.
-    """
-    bucket, key = _split_s3_uri(uri)
-    return f"{bucket}/{key}" if key else bucket
-
-
-def _relative_key(path: str, object_prefix: str) -> str:
-    """The part of ``path`` below ``object_prefix``, with no leading separator.
-
-    ``object_prefix`` is a full ``bucket/key`` prefix, matching what pyarrow
-    returns from ``get_file_info``.
-    """
-    trimmed = str(path).lstrip("/")
-    prefix = object_prefix.strip("/")
-    if not prefix:
-        return trimmed
-    if trimmed == prefix:
-        return ""
-    if trimmed.startswith(prefix + "/"):
-        return trimmed[len(prefix) + 1 :]
-    return trimmed
-
-
-def _copy_object_prefix(uri: str, target: Path, *, filesystem: Any = None) -> None:
-    from pyarrow import fs
-
-    object_prefix = _s3_object_prefix(uri)
-    s3 = filesystem if filesystem is not None else _s3_filesystem()
-    selector = fs.FileSelector(object_prefix, recursive=True)
-    infos = s3.get_file_info(selector)
-    copied = 0
-    for info in infos:
-        if info.type != fs.FileType.File:
-            continue
-        relative = _relative_key(info.path, object_prefix)
-        if not relative:
-            continue
-        destination = target / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with s3.open_input_stream(info.path) as reader:
-            destination.write_bytes(reader.read())
-        copied += 1
-    if copied == 0:
-        raise FileNotFoundError(f"No index files found under {uri}")
-    LOGGER.info(f"Copied {copied} index files from {uri} into {target}")
 
 
 def write_best_so_far(path: Path | str, config: RAGConfig) -> Path:
@@ -500,7 +384,7 @@ class HyperparameterOpt:
             self.local_index_dir = configured
             if remote_base and not _index_dir_populated(configured):
                 LOGGER.info(f"Copying the index from {base_uri} into {configured}")
-                copy_index_tree(base_uri, configured)
+                localize_index(base_uri, configured, self.base_config)
                 self.index_copy_source = base_uri
             return configured
         if not remote_base:
@@ -510,15 +394,19 @@ class HyperparameterOpt:
         return self.local_index_dir
 
     def _copy_remote_index(self, uri: str) -> Path:
-        """Copy a remote index into the run directory exactly once."""
+        """Copy a remote index into the run directory exactly once.
+
+        The copy carries a manifest built for this run's base config, so a later
+        ``deepfix eval --index-dir`` on the cache passes the staleness check
+        instead of falling back to the object store.
+        """
         base = self.run_dir or Path.cwd()
         target = Path(base) / INDEX_CACHE_DIRNAME
-        target.mkdir(parents=True, exist_ok=True)
-        if any(target.iterdir()):
+        if _index_dir_populated(target):
             LOGGER.info(f"Reusing the cached index at {target}")
             return target
         LOGGER.info(f"Copying the index from {uri} into {target}")
-        copy_index_tree(uri, target)
+        localize_index(uri, target, self.base_config)
         return target
 
     def _base_overrides(self) -> dict[str, Any]:

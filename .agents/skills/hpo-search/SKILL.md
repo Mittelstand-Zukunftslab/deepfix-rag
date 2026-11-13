@@ -4,7 +4,7 @@ description: >
   Query-time search procedure for an API-driven round under the 40 agent turns
   cap. Run ONE bounded `deepfix hpo` sweep over the shipped small retrieval space
   (rerank and/or fusion), then confirm the best trial on the FULL dev set with
-  `deepfix eval` and `deepfix gate`. Do not hand-try candidates one at a time.
+  eval and gate steps. Do not hand-try candidates one at a time.
 failure_mode:
   - retrieval_induced_error
   - retrieval_miss
@@ -43,21 +43,52 @@ This skill replaces a single hand-written `mutate-config` hypothesis with **one*
 
 ## Procedure
 
-### 1. Baseline smoke
+### 1. Localize the index first
 
-Score the champion once, from the bundle's champion config. Keep its `recall` and `ndcg`; they are the numbers your confirmation compares against.
+`<run_dir>/idx-cache` must exist and carry a manifest before any eval scores
+against it. The first eval below creates it: when `--index-dir` names a missing
+or empty directory and the champion config's `retrieval.lancedb_index_dir` is an
+`s3://` URI, the eval copies that prefix — bucket and key intact — into the
+directory and writes `deepfix_index.json` from this run's champion config. That
+is the only eval in the round that may touch object storage.
 
 ```
 deepfix eval --config <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --index-dir <run_dir>/idx-cache --json
 ```
 
-`--index-dir <run_dir>/idx-cache` is safe before the cache exists: the HPO call in step 3 fills it. If the champion index is already local, the flag is a no-op that keeps every eval on one path.
+Confirm the cache is complete before going further:
 
-### 2. The index is localized for you
+```
+ls <run_dir>/idx-cache/deepfix_index.json
+```
 
-When the champion's `retrieval.lancedb_index_dir` is an `s3://` URI, `deepfix hpo` copies the whole prefix — bucket and key — **once** into `<run_dir>/idx-cache` before the first trial, and points every trial there. You never copy a prefix by hand and never pass `--index-dir` to `hpo`; the default is the cache under the run directory. Never write a cross-run cache.
+If that file is missing, stop: the copy did not finish and every later eval will
+either re-localize or fail.
 
-Every later eval reads the same cache with `--index-dir <run_dir>/idx-cache`, so nothing in the round touches the object store twice.
+Two things this prevents, both seen in a real run:
+
+- A cache without `deepfix_index.json` fails the staleness check, and the round
+  falls back to reading S3 for every eval.
+- An `--index-dir` that silently fell through to ingestion built a *new* index
+  from the corpus and scored it (recall 0.067) while looking like a normal run.
+  It no longer does that: the local path is localized or the run fails naming
+  the directory.
+
+### 2. Baseline smoke
+
+Read `recall` and `ndcg` from step 1's JSON. They are the numbers your
+confirmation compares against. If `errors > 0`, stop and write a blocked
+`result.json` as the loop's step 1 describes.
+
+### 2b. The cache is reused for the whole round
+
+`deepfix hpo` finds the cache populated and reads it, so its trials never fetch
+the object store. You never copy a prefix by hand and never pass `--index-dir`
+to `hpo`; the default is the cache under the run directory. Never write a
+cross-run cache.
+
+Every later eval reads the same cache with `--index-dir <run_dir>/idx-cache`, so
+nothing in the round touches the object store twice.
 
 ### 3. One HPO call
 

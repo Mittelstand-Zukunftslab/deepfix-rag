@@ -667,3 +667,158 @@ def test_a_missing_baseline_index_dir_is_reported_as_an_index_problem(
     assert result.exit_code == EXIT_VALIDATION_ERROR, result.stdout
     payload = json.loads(result.stdout)
     assert payload["error_type"] == "stale_index"
+
+
+@pytest.mark.integration
+@pytest.mark.network
+def test_eval_with_a_missing_index_dir_never_builds_a_new_index(
+    cli_runner: CliRunner,
+    mlflow_tracking_uri: str,
+    sample_qa_path: Path,
+    sample_corpus_path: Path,
+    populated_sample_index_dir: Path,
+    tmp_path: Path,
+):
+    """An empty --index-dir with a local config index fails instead of scoring a fresh build.
+
+    HPO-007's smoke eval pointed at a cache that did not exist yet. Ingestion
+    built a brand-new index from the corpus and reported recall 0.067, which
+    looked like a bad champion rather than a missing cache.
+    """
+    config_path = _write_eval_config(
+        tmp_path / "champion.yaml", sample_corpus_path, populated_sample_index_dir
+    )
+    missing = tmp_path / "idx-cache"
+
+    result = cli_runner.invoke(
+        app,
+        [
+            *EVAL_RUN_COMMAND,
+            "--config",
+            str(config_path),
+            "--dataset",
+            str(sample_qa_path),
+            "--index-dir",
+            str(missing),
+        ],
+    )
+
+    assert result.exit_code == EXIT_VALIDATION_ERROR, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["error_type"] == "stale_index"
+    assert "--index-dir" in payload["error"]
+    assert "does not exist or is empty" in payload["error"]
+    # Nothing was built: a missing cache stays missing.
+    assert not missing.exists()
+
+
+@pytest.mark.integration
+@pytest.mark.network
+def test_eval_localizes_an_empty_cache_from_a_remote_config_index(
+    cli_runner: CliRunner,
+    mlflow_tracking_uri: str,
+    sample_qa_path: Path,
+    sample_corpus_path: Path,
+    populated_sample_index_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """An empty cache next to a remote config index is filled, then scored."""
+    from deepfix_rag.index_cache import copy_index_tree
+
+    config_path = _write_eval_config(
+        tmp_path / "champion.yaml",
+        sample_corpus_path,
+        "s3://deepfix-index/optimization/runs/r1/index",
+    )
+    empty_cache = tmp_path / "idx-cache"
+    empty_cache.mkdir()
+
+    def _fake_localize(source, target, config, **_kwargs):  # noqa: ANN001
+        return copy_index_tree(str(populated_sample_index_dir), target)
+
+    monkeypatch.setattr("deepfix_rag.cli.eval.localize_index", _fake_localize)
+
+    result = cli_runner.invoke(
+        app,
+        [
+            *EVAL_RUN_COMMAND,
+            "--config",
+            str(config_path),
+            "--dataset",
+            str(sample_qa_path),
+            "--index-dir",
+            str(empty_cache),
+        ],
+    )
+
+    assert result.exit_code == EXIT_SUCCESS, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["errors"] == 0
+    assert payload["recall"] == pytest.approx(1.0)
+
+
+@pytest.mark.integration
+@pytest.mark.network
+def test_a_localized_cache_from_eval_passes_the_next_staleness_check(
+    cli_runner: CliRunner,
+    mlflow_tracking_uri: str,
+    sample_qa_path: Path,
+    sample_corpus_path: Path,
+    populated_sample_index_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The cache eval fills must be reusable by the next eval without S3."""
+    from deepfix_rag.index_cache import copy_index_tree
+    from deepfix_rag.index_manifest import assert_index_current
+
+    config_path = _write_eval_config(
+        tmp_path / "champion.yaml",
+        sample_corpus_path,
+        "s3://deepfix-index/optimization/runs/r2/index",
+    )
+    empty_cache = tmp_path / "idx-cache"
+
+    def _fake_localize(source, target, config, **_kwargs):  # noqa: ANN001
+        from deepfix_rag.index_cache import write_localized_manifest
+
+        copy_index_tree(str(populated_sample_index_dir), target)
+        write_localized_manifest(target, config, source=str(source))
+        return target
+
+    monkeypatch.setattr("deepfix_rag.cli.eval.localize_index", _fake_localize)
+    first = cli_runner.invoke(
+        app,
+        [
+            *EVAL_RUN_COMMAND,
+            "--config",
+            str(config_path),
+            "--dataset",
+            str(sample_qa_path),
+            "--index-dir",
+            str(empty_cache),
+        ],
+    )
+    assert first.exit_code == EXIT_SUCCESS, first.stdout
+
+    # The second run finds a populated cache with a matching manifest: no copy.
+    monkeypatch.setattr(
+        "deepfix_rag.cli.eval.localize_index",
+        lambda *a, **k: pytest.fail("a populated cache must not be re-localized"),
+    )
+    second = cli_runner.invoke(
+        app,
+        [
+            *EVAL_RUN_COMMAND,
+            "--config",
+            str(config_path),
+            "--dataset",
+            str(sample_qa_path),
+            "--index-dir",
+            str(empty_cache),
+        ],
+    )
+    assert second.exit_code == EXIT_SUCCESS, second.stdout
+    assert json.loads(second.stdout)["recall"] == pytest.approx(1.0)
+    assert_index_current(empty_cache, RAGConfig.from_yaml(config_path))

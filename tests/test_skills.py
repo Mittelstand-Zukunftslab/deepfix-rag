@@ -566,3 +566,19 @@ def test_the_round_never_points_at_a_path_the_sandbox_does_not_have() -> None:
     for name in (LOOP_SKILL, *ROUTED_SKILLS, *REFERENCE_SKILLS):
         for command in _commands(name, "deepfix"):
             assert "configs/champion.yaml" not in command, f"{name}: `{command}`"
+
+
+def test_the_hpo_skill_localizes_the_cache_before_scoring_anything() -> None:
+    """Step 1 creates the cache; every later eval reuses it, manifest included."""
+    text = _read(HPO_SKILL)
+    assert text.index("### 1. Localize the index first") < text.index("### 2. Baseline smoke")
+    assert "<run_dir>/idx-cache/deepfix_index.json" in text
+    # Both later evals read the cache, and the confirmation covers both sides.
+    assert "### 2b. The cache is reused for the whole round" in text
+    confirmation = [
+        command for command in _commands(HPO_SKILL, "deepfix eval") if "--compare" in command
+    ]
+    assert confirmation
+    for command in confirmation:
+        assert "--index-dir <run_dir>/idx-cache" in command, command
+        assert "--baseline-index-dir <run_dir>/idx-cache" in command, command

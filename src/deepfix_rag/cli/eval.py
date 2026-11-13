@@ -18,11 +18,19 @@ from deepfix_rag.cli.ui import (
     print_json,
     print_success,
 )
+from deepfix_rag.cli.ui import (
+    print_info as _info,
+)
 from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.config.settings import ModelNotConfigured
 from deepfix_rag.data import QAValidationError
 from deepfix_rag.evaluation.runner import EvaluationSummary, EvaluationTracker, run_evaluation
+from deepfix_rag.index_cache import (
+    index_dir_populated,
+    is_remote_index_uri,
+    localize_index,
+)
 from deepfix_rag.index_manifest import (
     StaleIndexError,
     assert_index_current,
@@ -206,6 +214,49 @@ def _evaluate(
     return summary
 
 
+def _resolve_explicit_index_dir(
+    explicit: str,
+    config: RAGConfig,
+    *,
+    label: str,
+    json_output: bool,
+) -> str:
+    """Resolve an explicit index directory for scoring, or fail naming the problem.
+
+    ``eval`` never builds an index. A missing or empty directory used to fall
+    through to ingestion, which embedded the corpus and scored a fresh index
+    (0.067 recall in HPO-007) while looking like a normal run. Two outcomes are
+    allowed now:
+
+    * the directory already holds an index: score it;
+    * the directory is missing or empty and the config's own index is remote:
+      localize the remote index here, manifest included, then score it.
+
+    For a missing directory with no remote source to localize, this raises, so a
+    typo fails loudly instead of silently scoring a fabricated index.
+    """
+    path = Path(explicit)
+    if index_dir_populated(path):
+        return explicit
+    source = str(config.retrieval.lancedb_index_dir)
+    if not is_remote_index_uri(source):
+        raise StaleIndexError(
+            f"{label} '{explicit}' does not exist or is empty, and the config's index "
+            f"'{source}' is local, so there is nothing to localize. Build it with "
+            "`deepfix index --index-dir` first, or point --index-dir at an existing index."
+        )
+    try:
+        localize_index(source, path, config)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        raise StaleIndexError(
+            f"{label} '{explicit}' is empty and the index at '{source}' could not be "
+            f"copied into it: {exc}. Localize the index first, for example by running "
+            "`deepfix hpo` for this run."
+        ) from exc
+    _info(f"{label} '{explicit}' was empty; localized it from '{source}'.")
+    return explicit
+
+
 def eval_cmd(
     config: Path = typer.Option(
         ..., "--config", "-c", help="Path to RAG configuration YAML file."
@@ -329,6 +380,19 @@ def eval_cmd(
     target_retrieval_only = rag_config.retrieval_only or retrieval_only
     persist = not no_mlflow
 
+    if index_dir is not None:
+        try:
+            target_index_dir = _resolve_explicit_index_dir(
+                index_dir, rag_config, label="--index-dir", json_output=json_output
+            )
+        except StaleIndexError as exc:
+            emit_error(
+                str(exc),
+                code=EXIT_VALIDATION_ERROR,
+                json_output=json_output,
+                error_type="stale_index",
+            )
+
     try:
         assert_index_current(target_index_dir, rag_config)
     except StaleIndexError as exc:
@@ -357,9 +421,25 @@ def eval_cmd(
                 json_output=json_output,
                 error_type="validation_error",
             )
+        resolved_baseline_dir = baseline_index_dir
+        if baseline_index_dir is not None:
+            try:
+                resolved_baseline_dir = _resolve_explicit_index_dir(
+                    baseline_index_dir,
+                    baseline_config,
+                    label="--baseline-index-dir",
+                    json_output=json_output,
+                )
+            except StaleIndexError as exc:
+                emit_error(
+                    str(exc),
+                    code=EXIT_VALIDATION_ERROR,
+                    json_output=json_output,
+                    error_type="stale_index",
+                )
         try:
             assert_index_current(
-                baseline_index_dir or baseline_config.retrieval.lancedb_index_dir,
+                resolved_baseline_dir or baseline_config.retrieval.lancedb_index_dir,
                 baseline_config,
             )
         except StaleIndexError as exc:
@@ -410,7 +490,7 @@ def eval_cmd(
                         redirect_stdout=False,
                         dataset_path=target_dataset,
                         config=baseline_config,
-                        index_dir=baseline_index_dir,
+                        index_dir=resolved_baseline_dir,
                         split=target_split,
                         limit=target_limit,
                         max_concurrency=target_concurrency,
