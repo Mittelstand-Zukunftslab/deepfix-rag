@@ -470,6 +470,26 @@ class HPOConfig(BaseModel):
         default=None,
         description="Optional destination path to export the best configuration YAML.",
     )
+    run_dir: Path | str | None = Field(
+        default=None,
+        description=(
+            "Optional run directory for the HPO artifacts (hpo_trials.json, the "
+            "best-so-far YAML, and the default idx-cache). Defaults to the output "
+            "file's directory."
+        ),
+    )
+    seed: int | None = Field(
+        default=None,
+        description=(
+            "With a limit, draw a deterministic sample of that many rows with this "
+            "seed. Applied to every trial."
+        ),
+    )
+    timeout: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Optional wall-clock budget in seconds for the whole study.",
+    )
     metrics: HPOMetricConfig = Field(
         default_factory=HPOMetricConfig, description="Target metrics configuration."
     )

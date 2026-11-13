@@ -17,7 +17,7 @@ from deepfix_rag.cli.ui import (
 from deepfix_rag.config.hpo import load_hpo_config
 from deepfix_rag.config.mutator import apply_mutation
 from deepfix_rag.config.schema import RetrievalBackend
-from deepfix_rag.hpo import HyperparameterOpt
+from deepfix_rag.hpo import TRIALS_ARTIFACT_NAME, HyperparameterOpt
 
 
 def hpo_cmd(
@@ -81,6 +81,40 @@ def hpo_cmd(
         "-o",
         help="Optional destination path to export the best configuration YAML.",
     ),
+    index_dir: Path | None = typer.Option(
+        None,
+        "--index-dir",
+        "-i",
+        help=(
+            "Local index directory every trial reads. A copy of a remote "
+            "retrieval.lancedb_index_dir is made under it. Defaults to "
+            "<run-dir>/idx-cache when the base index is an s3:// URI."
+        ),
+    ),
+    run_dir: Path | None = typer.Option(
+        None,
+        "--run-dir",
+        help=(
+            "Run directory for HPO artifacts (hpo_trials.json, best-so-far YAML, "
+            "and the default idx-cache). Defaults to the output file's directory."
+        ),
+    ),
+    seed: int | None = typer.Option(
+        None,
+        "--seed",
+        help=(
+            "With --limit, draw a deterministic sample of that many rows with this "
+            "seed instead of taking the first rows. Applied to every trial."
+        ),
+    ),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        help=(
+            "Wall-clock budget in seconds for the whole study. A stop after at "
+            "least one complete trial still leaves the artifacts and best-so-far YAML."
+        ),
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -117,6 +151,11 @@ def hpo_cmd(
     effective_split = split or hpo_config.split or base_config.data.split
     effective_limit = limit if limit is not None else (hpo_config.limit or base_config.data.limit)
     effective_output = output or hpo_config.output
+    effective_run_dir = run_dir or hpo_config.run_dir
+    if effective_run_dir is None and effective_output is not None:
+        effective_run_dir = Path(effective_output).resolve().parent
+    effective_seed = seed if seed is not None else hpo_config.seed
+    effective_timeout = timeout if timeout is not None else hpo_config.timeout
 
     overrides: dict[str, Any] = {}
     if paradigm is not None:
@@ -163,9 +202,14 @@ def hpo_cmd(
             study_name=hpo_config.study_name,
             storage_uri=effective_storage_uri,
             tune_chunking=effective_tune_chunking,
+            seed=effective_seed,
+            run_dir=effective_run_dir,
+            index_dir=index_dir,
+            output_path=effective_output,
         )
         result = opt.optimize(
             n_trials=effective_n_trials,
+            timeout=effective_timeout,
             dataset_path=effective_dataset,
             split=effective_split,
             limit=effective_limit,
@@ -191,6 +235,12 @@ def hpo_cmd(
     payload = result.to_dict()
     if exported_path_str:
         payload["exported_config_path"] = exported_path_str
+    if opt.local_index_dir is not None:
+        payload["index_dir"] = str(opt.local_index_dir)
+        payload["index_cache_source"] = opt.index_copy_source
+    if effective_run_dir is not None:
+        payload["run_dir"] = str(effective_run_dir)
+        payload["trials_path"] = str(Path(effective_run_dir) / TRIALS_ARTIFACT_NAME)
 
     if json_output:
         print_json(payload)

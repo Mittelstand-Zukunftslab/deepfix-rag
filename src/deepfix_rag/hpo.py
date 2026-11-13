@@ -3,6 +3,7 @@
 import asyncio
 import concurrent.futures
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -21,8 +22,123 @@ from deepfix_rag.config.hpo import (
 )
 from deepfix_rag.config.mutator import apply_mutation
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.config.settings import LOGGER
+from deepfix_rag.config.settings import LOGGER, settings
 from deepfix_rag.evaluation.runner import EvaluationRunner
+
+INDEX_CACHE_DIRNAME = "idx-cache"
+TRIALS_ARTIFACT_NAME = "hpo_trials.json"
+_REMOTE_SCHEMES = ("s3://", "gs://", "az://", "abfs://", "abfss://", "hdfs://", "gcs://")
+
+
+def is_remote_index_uri(uri: str) -> bool:
+    """True for an index outside the local filesystem."""
+    return str(uri).strip().lower().startswith(_REMOTE_SCHEMES)
+
+
+def copy_index_tree(source: str, target: Path) -> Path:
+    """Copy a directory or a remote object prefix into ``target``.
+
+    A local directory is copied with ``copytree``. A remote ``s3://bucket/key``
+    prefix is walked with pyarrow's S3 filesystem, which reads the same
+    ``S3_*`` settings LanceDB already uses. No full-object download is repeated
+    once the files are on disk.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    if not is_remote_index_uri(source):
+        source_path = Path(source)
+        if not source_path.is_dir():
+            raise FileNotFoundError(f"Index directory does not exist: {source}")
+        shutil.copytree(source_path, target, dirs_exist_ok=True)
+        return target
+    _copy_object_prefix(source, target)
+    return target
+
+
+def _copy_object_prefix(uri: str, target: Path) -> None:
+    from pyarrow import fs
+
+    bucket, _, prefix = uri[len("s3://") :].partition("/")
+    filesystem = fs.S3FileSystem(
+        endpoint_override=settings.S3_ENDPOINT_URL or None,
+        access_key=settings.S3_ACCESS_KEY_ID or None,
+        secret_key=settings.S3_SECRET_ACCESS_KEY or None,
+        region=settings.S3_REGION or None,
+        scheme="http" if str(settings.S3_ENDPOINT_URL or "").startswith("http://") else "https",
+    )
+    selector = fs.FileSelector(prefix.rstrip("/"), recursive=True)
+    infos = filesystem.get_file_info(selector)
+    copied = 0
+    for info in infos:
+        if info.type != fs.FileType.File:
+            continue
+        relative = info.path[len(prefix.rstrip("/")) :].lstrip("/")
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with filesystem.open_input_stream(info.path) as reader:
+            destination.write_bytes(reader.read())
+        copied += 1
+    if copied == 0:
+        raise FileNotFoundError(f"No index files found under {uri}")
+
+
+def write_best_so_far(path: Path | str, config: RAGConfig) -> Path:
+    """Write the best trial's config so a stopped study still leaves a candidate."""
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False),
+        encoding="utf-8",
+    )
+    return out
+
+
+def _trial_row(trial: FrozenTrial, metric_names: list[str]) -> dict[str, Any]:
+    values = list(trial.values) if trial.values is not None else []
+    if not values and trial.value is not None:
+        values = [trial.value]
+    return {
+        "trial_number": trial.number,
+        "state": trial.state.name,
+        "params": dict(trial.params),
+        "values": values,
+        "metrics": {
+            name: values[index] for index, name in enumerate(metric_names) if index < len(values)
+        },
+        "user_attrs": dict(trial.user_attrs),
+        "duration_seconds": trial.duration.total_seconds() if trial.duration else None,
+    }
+
+
+def _write_trial_rows(
+    run_dir: Path | str,
+    metric_names: list[str],
+    trials: list[FrozenTrial],
+) -> Path:
+    """Rewrite ``<run_dir>/hpo_trials.json`` with every trial seen so far."""
+    target = Path(run_dir) / TRIALS_ARTIFACT_NAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = [_trial_row(trial, metric_names) for trial in trials]
+    target.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+    return target
+
+
+def _best_trial(study: optuna.Study) -> FrozenTrial | None:
+    complete = [trial for trial in study.trials if trial.state == TrialState.COMPLETE]
+    if not complete:
+        return None
+
+    def score(trial: FrozenTrial) -> float:
+        values = list(trial.values or [])
+        if values:
+            return sum(float(value) for value in values)
+        return float(trial.value or 0.0)
+
+    return max(complete, key=score)
+
+
+def index_cache_path(run_dir: Path | str) -> Path:
+    """Default local cache for a remote index under the run directory."""
+    return Path(run_dir) / INDEX_CACHE_DIRNAME
 
 
 @dataclass
@@ -36,6 +152,11 @@ class HPOResult:
     pareto_configs: list[RAGConfig] = field(default_factory=list)
     best_trial: FrozenTrial | None = None
     best_config: RAGConfig | None = None
+    run_dir: Path | None = None
+    trials_path: Path | None = None
+    index_dir: Path | None = None
+    index_cache_source: str | None = None
+    stopped_early: bool = False
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert study trials to a structured DataFrame."""
@@ -91,6 +212,11 @@ class HPOResult:
             "best_trial": best_trial_dict,
             "pareto_trials": pareto_list,
             "best_config": self.best_config.model_dump() if self.best_config else None,
+            "stopped_early": self.stopped_early,
+            "run_dir": str(self.run_dir) if self.run_dir is not None else None,
+            "trials_path": str(self.trials_path) if self.trials_path is not None else None,
+            "index_dir": str(self.index_dir) if self.index_dir is not None else None,
+            "index_cache_source": self.index_cache_source,
         }
 
     def export_best_config(self, output_path: Path | str) -> Path:
@@ -141,6 +267,13 @@ class HyperparameterOpt:
         study_name: str | None = None,
         storage_uri: str = "sqlite:///:memory:",
         tune_chunking: bool = False,
+        seed: int | None = None,
+        run_dir: Path | str | None = None,
+        index_dir: Path | str | None = None,
+        output_path: Path | str | None = None,
+        embed_model: Any = None,
+        llm: Any = None,
+        persist: bool = True,
     ) -> None:
         self.base_config = base_config
         self.hpo_config = hpo_config or HPOConfig(search_space=search_space or HPOSearchSpace())
@@ -160,6 +293,18 @@ class HyperparameterOpt:
             engine_kwargs={"pool_size": 20, "connect_args": {"timeout": 10}},
         )
         self.tune_chunking = tune_chunking or self.hpo_config.tune_chunking
+        self.seed = seed
+        self.run_dir = Path(run_dir) if run_dir is not None else None
+        self.output_path = Path(output_path) if output_path is not None else None
+        # An explicit --index-dir wins; otherwise a remote base index is copied
+        # once to <run_dir>/idx-cache and every trial reads that local copy.
+        self.index_dir = Path(index_dir) if index_dir is not None else None
+        self.local_index_dir: Path | None = None
+        self.index_copy_source: str | None = None
+        # A test pins the embedding model so it never calls a live endpoint.
+        self.embed_model = embed_model
+        self.llm = llm
+        self.persist = persist
 
         if base_config.retrieval_only:
             self.metric_names = list(self.hpo_config.metrics.retrieval_only_targets)
@@ -197,16 +342,64 @@ class HyperparameterOpt:
         split: str,
         limit: int | None,
         run_name: str,
+        seed: int | None = None,
     ) -> dict[str, float]:
         """Execute EvaluationRunner asynchronously for a single trial."""
-        runner = EvaluationRunner(config=trial_config)
+        runner = EvaluationRunner(
+            config=trial_config,
+            embed_model=self.embed_model,
+            llm=self.llm,
+            persist=self.persist,
+        )
         summary = await runner.run(
             dataset_path=dataset_path,
             run_name=run_name,
             split=split,
             limit=limit,
+            seed=seed,
         )
         return summary.metrics
+
+    def local_index_for(self) -> Path | None:
+        """The local index every trial should read, or None to keep the base URI.
+
+        A remote ``retrieval.lancedb_index_dir`` is copied once into
+        ``<run_dir>/idx-cache`` (or the explicit ``--index-dir``) before the
+        first trial. Later trials in this process reuse that copy, so the
+        object store is not fetched again per trial.
+        """
+        configured = self.index_dir
+        if configured is not None:
+            return configured
+        if self.local_index_dir is not None:
+            return self.local_index_dir
+        base_uri = str(self.base_config.retrieval.lancedb_index_dir)
+        if not is_remote_index_uri(base_uri):
+            return None
+        self.local_index_dir = self._copy_remote_index(base_uri)
+        self.index_copy_source = base_uri
+        return self.local_index_dir
+
+    def _copy_remote_index(self, uri: str) -> Path:
+        """Copy a remote index into the run directory exactly once."""
+        base = self.run_dir or Path.cwd()
+        target = Path(base) / INDEX_CACHE_DIRNAME
+        target.mkdir(parents=True, exist_ok=True)
+        if any(target.iterdir()):
+            LOGGER.info(f"Reusing the cached index at {target}")
+            return target
+        LOGGER.info(f"Copying the index from {uri} into {target}")
+        copy_index_tree(uri, target)
+        return target
+
+    def _base_overrides(self) -> dict[str, Any]:
+        """Index location plus the sample seed shared by every trial."""
+        overrides: dict[str, Any] = {}
+        local = self.local_index_for()
+        if local is not None:
+            overrides["retrieval.lancedb_index_dir"] = str(local)
+            overrides["retrieval.load_if_exists"] = True
+        return overrides
 
     def _objective(
         self,
@@ -223,7 +416,7 @@ class HyperparameterOpt:
         )
 
         # 2. Mutate config
-        trial_config = apply_mutation(self.base_config, overrides)
+        trial_config = apply_mutation(self.base_config, {**self._base_overrides(), **overrides})
 
         temp_dir: str | None = None
         # 3. Check if chunking was modified and isolate index dir if so
@@ -255,6 +448,7 @@ class HyperparameterOpt:
                             split=split,
                             limit=limit,
                             run_name=run_name,
+                            seed=self.seed,
                         ),
                     ).result()
             else:
@@ -265,6 +459,7 @@ class HyperparameterOpt:
                         split=split,
                         limit=limit,
                         run_name=run_name,
+                        seed=self.seed,
                     )
                 )
 
@@ -294,6 +489,29 @@ class HyperparameterOpt:
                 except Exception as e:
                     LOGGER.debug(f"Failed to cleanup temp dir {temp_dir}: {e}")
 
+    def _best_config_from_trial(self, trial: FrozenTrial) -> RAGConfig:
+        """The base config with one trial's sampled parameters applied."""
+        return apply_mutation(self.base_config, {**self._base_overrides(), **dict(trial.params)})
+
+    def _record_trial(self, study: optuna.Study, trial: FrozenTrial) -> None:
+        """Write best-so-far artifacts after each finished trial.
+
+        A ``--timeout`` or a crash after at least one complete trial leaves
+        ``hpo_trials.json`` and the best-so-far YAML behind, so a wrapped-up
+        round still has something to confirm on the full dev set.
+        """
+        if self.run_dir is None:
+            return
+        try:
+            _write_trial_rows(self.run_dir, self.metric_names, study.trials)
+            best = _best_trial(study)
+            if best is not None:
+                config = self._best_config_from_trial(best)
+                target = self.output_path or (self.run_dir / "candidate.yaml")
+                write_best_so_far(target, config)
+        except Exception as exc:  # a failed artifact must not kill the study
+            LOGGER.warning(f"Could not refresh the HPO artifacts: {exc}")
+
     def optimize(
         self,
         n_trials: int | None = None,
@@ -313,6 +531,8 @@ class HyperparameterOpt:
         target_limit = (
             limit if limit is not None else (self.hpo_config.limit or self.base_config.data.limit)
         )
+        # Copy a remote index before the first trial so no trial fetches it again.
+        self.local_index_for()
 
         directions = ["maximize"] * len(self.metric_names)
 
@@ -323,6 +543,15 @@ class HyperparameterOpt:
             load_if_exists=load_if_exists,
         )
 
+        # n_trials is the study's total budget, not this call's. A file-backed
+        # study that is restarted with the same --n-trials therefore continues
+        # where it stopped instead of running the whole budget again.
+        already_run = len(study.trials)
+        remaining = max(0, target_n_trials - already_run)
+        if remaining == 0:
+            LOGGER.info(
+                f"Study {self.study_name} already has {already_run} trials; nothing to run."
+            )
         study.optimize(
             lambda trial: self._objective(
                 trial=trial,
@@ -330,8 +559,9 @@ class HyperparameterOpt:
                 split=target_split,
                 limit=target_limit,
             ),
-            n_trials=target_n_trials,
+            n_trials=remaining,
             timeout=timeout,
+            callbacks=[self._record_trial],
         )
 
         # Build Pareto trials and configurations
@@ -353,7 +583,9 @@ class HyperparameterOpt:
             param_overrides: dict[str, Any] = {}
             for param_key, param_val in pt.params.items():
                 param_overrides[param_key] = param_val
-            p_config = apply_mutation(self.base_config, param_overrides)
+            p_config = apply_mutation(
+                self.base_config, {**self._base_overrides(), **param_overrides}
+            )
             pareto_configs.append(p_config)
 
         # Select representative best trial
@@ -369,6 +601,11 @@ class HyperparameterOpt:
             idx = pareto_trials.index(best_trial)
             best_config = pareto_configs[idx]
 
+        completed = len([t for t in study.trials if t.state == TrialState.COMPLETE])
+        trials_path: Path | None = None
+        if self.run_dir is not None:
+            trials_path = _write_trial_rows(self.run_dir, self.metric_names, study.trials)
+
         return HPOResult(
             study=study,
             base_config=self.base_config,
@@ -377,4 +614,10 @@ class HyperparameterOpt:
             pareto_configs=pareto_configs,
             best_trial=best_trial,
             best_config=best_config,
+            run_dir=self.run_dir,
+            trials_path=trials_path,
+            index_dir=self.local_index_dir,
+            index_cache_source=self.index_copy_source,
+            # A timeout can stop the study before the requested trial count.
+            stopped_early=timeout is not None and completed < target_n_trials,
         )

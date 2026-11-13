@@ -1,0 +1,314 @@
+"""HPO trials stay cheap and resumable: seeded subsample, timeout, local index.
+
+Trials here score the sample fixtures with a stub embedding model, so no
+network call and no live index are involved.
+"""
+
+import asyncio
+import json
+from pathlib import Path
+
+from llama_index.core.embeddings import MockEmbedding
+import optuna
+import pytest
+from typer.testing import CliRunner
+import yaml
+
+from deepfix_rag.cli.ui import EXIT_SUCCESS
+from deepfix_rag.config.hpo import HPOConfig, HPOSearchSpace
+from deepfix_rag.config.schema import (
+    DataLoaderConfig,
+    FusionMode,
+    RAGConfig,
+    RetrievalBackend,
+)
+from deepfix_rag.evaluation.runner import EvaluationRunner, resolve_eval_records
+from deepfix_rag.hpo import (
+    INDEX_CACHE_DIRNAME,
+    TRIALS_ARTIFACT_NAME,
+    HyperparameterOpt,
+    copy_index_tree,
+    index_cache_path,
+    is_remote_index_uri,
+)
+from deepfix_rag.main import app
+from deepfix_rag.pipeline import RAGWorkflow
+
+pytestmark = [pytest.mark.integration]
+
+EMBED_DIM = 16
+
+
+def _query_time_space(*, fixed: bool = False) -> HPOConfig:
+    """An HPO space with only query-time knobs and expansion pinned at 1."""
+    low, high = (3, 3) if fixed else (3, 5)
+    space = HPOSearchSpace.model_validate(
+        {
+            "hybrid": {
+                "top_k_min": low,
+                "top_k_max": high,
+                "query_expansion_num_min": 1,
+                "query_expansion_num_max": 1,
+                "bm25_k1_min": 1.5,
+                "bm25_k1_max": 1.5,
+                "bm25_b_min": 0.75,
+                "bm25_b_max": 0.75,
+                "dense_weight_min": 0.5,
+                "dense_weight_max": 0.5,
+                "fusion_modes": [FusionMode.RECIPROCAL_RANK.value],
+                "strategies": ["sentence"],
+            }
+        }
+    )
+    return HPOConfig(search_space=space)
+
+
+def _fixture_index(sample_corpus_path: Path, tmp_path: Path) -> Path:
+    index_dir = tmp_path / "base_index"
+    config = RAGConfig()
+    config.retrieval.lancedb_index_dir = str(index_dir)
+    config.retrieval.load_if_exists = False
+    config.data = DataLoaderConfig(path_or_repo=str(sample_corpus_path))
+
+    async def _build() -> None:
+        workflow = RAGWorkflow(config=config, embed_model=MockEmbedding(embed_dim=EMBED_DIM))
+        await workflow.run(ingest=True)
+
+    asyncio.run(_build())
+    return index_dir
+
+
+def _base_config(index_dir: Path, corpus_path: Path) -> RAGConfig:
+    config = RAGConfig()
+    config.retrieval.backend = RetrievalBackend.HYBRID
+    config.retrieval.lancedb_index_dir = str(index_dir)
+    config.retrieval.load_if_exists = True
+    config.retrieval.top_k = 3
+    config.retrieval_only = True
+    config.data = DataLoaderConfig(path_or_repo=str(corpus_path))
+    return config
+
+
+def _opt(
+    index_dir: Path,
+    corpus_path: Path,
+    *,
+    study_name: str = "hpo_test",
+    hpo_config: HPOConfig | None = None,
+    seed: int | None = None,
+    run_dir: Path | None = None,
+    output_path: Path | None = None,
+    storage_uri: str = "sqlite:///:memory:",
+) -> HyperparameterOpt:
+    return HyperparameterOpt(
+        base_config=_base_config(index_dir, corpus_path),
+        hpo_config=hpo_config or _query_time_space(),
+        study_name=study_name,
+        storage_uri=storage_uri,
+        seed=seed,
+        run_dir=run_dir,
+        output_path=output_path,
+        embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+        persist=False,
+    )
+
+
+def test_the_seed_reaches_every_trial_sample(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """A seeded trial scores the same rows as `deepfix eval --seed`.
+
+    The space is degenerate, so the only thing that can move a score is which
+    rows were sampled. The trial values therefore have to equal a direct
+    ``EvaluationRunner.run(seed=...)`` over the same config.
+    """
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    result = _opt(
+        index_dir,
+        sample_corpus_path,
+        hpo_config=_query_time_space(fixed=True),
+        seed=7,
+    ).optimize(n_trials=1, dataset_path=str(sample_qa_path), limit=2)
+
+    repeated = _opt(
+        index_dir,
+        sample_corpus_path,
+        study_name="hpo_test_repeat",
+        hpo_config=_query_time_space(fixed=True),
+        seed=7,
+    ).optimize(n_trials=1, dataset_path=str(sample_qa_path), limit=2)
+
+    cutoff = RAGConfig().eval.cutoff_k
+    direct = asyncio.run(
+        EvaluationRunner(
+            config=_base_config(index_dir, sample_corpus_path),
+            embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+            persist=False,
+        ).run(dataset_path=str(sample_qa_path), limit=2, seed=7)
+    )
+    direct_scores = [
+        HyperparameterOpt.extract_metric(direct.metrics, name, cutoff_k=cutoff)
+        for name in result.metric_names
+    ]
+
+    assert list(result.study.trials[0].values) == direct_scores
+    assert list(result.study.trials[0].values) == list(repeated.study.trials[0].values)
+
+
+def test_a_seed_picks_a_different_subsample_than_another_seed(sample_qa_path: Path) -> None:
+    """The seed is a real lever on the subsample, not a no-op flag."""
+    seeded_two = resolve_eval_records(str(sample_qa_path), None, split="dev", limit=1, seed=2)
+    seeded_zero = resolve_eval_records(str(sample_qa_path), None, split="dev", limit=1, seed=0)
+    assert [row.query_id for row in seeded_two] != [row.query_id for row in seeded_zero]
+    assert [row.query_id for row in seeded_two] == [
+        row.query_id
+        for row in resolve_eval_records(str(sample_qa_path), None, split="dev", limit=1, seed=2)
+    ]
+
+
+def test_the_run_directory_receives_trials_and_a_best_so_far_config(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    output = run_dir / "candidate.yaml"
+    result = _opt(
+        index_dir,
+        sample_corpus_path,
+        seed=0,
+        run_dir=run_dir,
+        output_path=output,
+    ).optimize(n_trials=2, dataset_path=str(sample_qa_path), limit=2)
+
+    trials_path = run_dir / TRIALS_ARTIFACT_NAME
+    assert trials_path.is_file()
+    rows = json.loads(trials_path.read_text(encoding="utf-8"))
+    assert len(rows) == 2
+    for row in rows:
+        assert set(row) >= {
+            "trial_number",
+            "state",
+            "params",
+            "values",
+            "metrics",
+            "user_attrs",
+        }
+        assert row["state"] == "COMPLETE"
+        assert row["metrics"]
+    assert output.is_file()
+    best = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert best["retrieval"]["backend"] == "hybrid"
+    assert result.trials_path == trials_path
+    assert result.best_config is not None
+
+
+def test_a_timeout_stops_the_study_and_keeps_the_artifacts(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    output = run_dir / "candidate.yaml"
+    result = _opt(
+        index_dir,
+        sample_corpus_path,
+        seed=0,
+        run_dir=run_dir,
+        output_path=output,
+    ).optimize(n_trials=12, dataset_path=str(sample_qa_path), limit=2, timeout=0.001)
+
+    complete = [t for t in result.study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    assert len(complete) < 12
+    assert result.stopped_early is True
+    assert (run_dir / TRIALS_ARTIFACT_NAME).is_file()
+    if complete:
+        assert output.is_file()
+
+
+def test_a_file_storage_uri_resumes_with_load_if_exists(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    study_db = run_dir / "hpo.db"
+    storage_uri = f"sqlite:///{study_db}"
+
+    first = _opt(
+        index_dir,
+        sample_corpus_path,
+        study_name="resume_study",
+        storage_uri=storage_uri,
+        seed=0,
+        run_dir=run_dir,
+    ).optimize(n_trials=1, dataset_path=str(sample_qa_path), limit=2)
+    assert len(first.study.trials) == 1
+    assert study_db.is_file()
+    first_params = dict(first.study.trials[0].params)
+
+    second = _opt(
+        index_dir,
+        sample_corpus_path,
+        study_name="resume_study",
+        storage_uri=storage_uri,
+        seed=0,
+        run_dir=run_dir,
+    ).optimize(n_trials=2, dataset_path=str(sample_qa_path), limit=2)
+    assert len(second.study.trials) == 2
+    assert dict(second.study.trials[0].params) == first_params
+    assert [t.number for t in second.study.trials] == [0, 1]
+
+
+def test_a_remote_index_is_copied_once_into_the_run_directory(
+    sample_corpus_path: Path,
+    tmp_path: Path,
+) -> None:
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    cache = run_dir / INDEX_CACHE_DIRNAME
+
+    assert is_remote_index_uri("s3://deepfix-index/optimization/runs/abc/input")
+    assert not is_remote_index_uri(str(index_dir))
+    copy_index_tree(str(index_dir), cache)
+    assert (cache / "deepfix_index.json").is_file()
+
+    config = RAGConfig()
+    config.retrieval.lancedb_index_dir = "s3://deepfix-index/optimization/runs/abc/input"
+    opt = HyperparameterOpt(
+        base_config=config,
+        hpo_config=_query_time_space(),
+        study_name="cache_test",
+        run_dir=run_dir,
+        index_dir=cache,
+        embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+        persist=False,
+    )
+    assert opt.local_index_for() == cache
+    # A second call in the same process does not copy again.
+    assert opt.local_index_for() == cache
+    overrides = opt._base_overrides()
+    assert overrides["retrieval.lancedb_index_dir"] == str(cache)
+    assert overrides["retrieval.load_if_exists"] is True
+
+
+def test_the_default_cache_location_is_under_the_run_directory() -> None:
+    """A remote base index copies to <run_dir>/idx-cache, not a shared volume path."""
+    run_dir = Path("/tmp/runs/abc")
+    assert index_cache_path(run_dir) == run_dir / "idx-cache"
+    assert run_dir in index_cache_path(run_dir).parents
+
+
+@pytest.mark.cli
+def test_hpo_help_lists_seed_timeout_and_the_index_flags(cli_runner: CliRunner) -> None:
+    result = cli_runner.invoke(app, ["hpo", "--help"])
+    assert result.exit_code == EXIT_SUCCESS
+    for flag in ("--seed", "--timeout", "--index-dir", "--run-dir"):
+        assert flag in result.stdout, flag
