@@ -2,6 +2,7 @@
 
 import importlib.util
 from pathlib import Path
+import tempfile
 
 import pytest
 import yaml
@@ -22,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 API_KEY = "a" * 32
 CHAT_KEY = "b" * 32
 MODEL = "fixture/hermes-model"
+_SCRATCH = Path(tempfile.mkdtemp(prefix="deepfix-sandbox-test-"))
 
 
 def _skills(tmp_path: Path) -> Path:
@@ -47,6 +49,9 @@ def _env(**overrides: str) -> dict[str, str]:
         "S3_ACCESS_KEY_ID": "hermes-optimizer",
         "S3_SECRET_ACCESS_KEY": "scoped-secret-value",
         "DEEPFIX_SKIP_TRACE_EXPERIMENT": "1",
+        # Boot writes the non-secret eval settings here. The image default is
+        # /opt/deepfix/eval-env, which a unit test cannot write.
+        "DEEPFIX_EVAL_ENV": str(_SCRATCH / "eval-env"),
     }
     env.update(overrides)
     return env
@@ -499,3 +504,42 @@ def test_compose_hermes_is_internal_and_limited() -> None:
     stack = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert "compose.hermes.yml" in stack
     assert "#  - compose.hermes.yml" not in stack
+
+
+def test_the_sandbox_writes_non_secret_eval_settings_for_the_shim(tmp_path: Path) -> None:
+    """Model ids reach `deepfix` through a root-owned file, not a command line."""
+    home = tmp_path / "data"
+    eval_env = tmp_path / "eval-env"
+    env = _env(
+        LLM_MODEL="fixture/answer-model",
+        LLM_JUDGE_MODEL="fixture/judge-model",
+        LLM_BASE_URL="https://openrouter.ai/api/v1",
+        EMBEDDING_MODEL="fixture/embed-model",
+        EMBEDDING_BASE_URL="https://openrouter.ai/api/v1",
+        COHERE_MODEL="cohere/rerank-4-fast",
+        COHERE_BASE_URL="https://openrouter.ai/api/v1",
+    )
+    boot.apply_sandbox(home, env, _skills(tmp_path), eval_env_path_override=eval_env)
+
+    body = eval_env.read_text(encoding="utf-8")
+    assert "LLM_MODEL=fixture/answer-model" in body
+    assert "LLM_JUDGE_MODEL=fixture/judge-model" in body
+    assert "EMBEDDING_MODEL=fixture/embed-model" in body
+    assert "COHERE_MODEL=cohere/rerank-4-fast" in body
+    assert "COHERE_BASE_URL=https://openrouter.ai/api/v1" in body
+    assert "API_KEY" not in body
+    assert "scoped-secret-value" not in body
+    # Root-owned and readable by the hermes user the shim runs as, so group and
+    # other may read it but nothing but root may write it.
+    assert (eval_env.stat().st_mode & 0o222) == 0o200
+
+    # The OpenRouter key stays in the sealed profile .env the shim reads.
+    dotenv = (home / ".env").read_text(encoding="utf-8")
+    assert "OPENROUTER_API_KEY=sk-or-test" in dotenv
+    assert "LLM_API_KEY" not in dotenv
+    assert (home / ".env").stat().st_mode & 0o077 == 0
+
+
+def test_the_eval_env_file_rejects_a_newline_value() -> None:
+    with pytest.raises(boot.SandboxBootError, match="LLM_MODEL"):
+        boot.eval_env({"LLM_MODEL": "fixture/model\ninjected"})

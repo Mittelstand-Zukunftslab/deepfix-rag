@@ -152,6 +152,19 @@ _S6_ENV_DIRS = (
     Path("/run/s6/container_environment"),
     Path("/var/run/s6/container_environment"),
 )
+# Non-secret model ids and endpoints the terminal scrub drops from a command.
+# The deepfix shim reads this root-owned file and re-injects the values into
+# the CLI child, so nothing has to appear on the command line.
+DEFAULT_EVAL_ENV_PATH = Path("/opt/deepfix/eval-env")
+EVAL_ENV_KEYS: tuple[str, ...] = (
+    "LLM_MODEL",
+    "LLM_JUDGE_MODEL",
+    "LLM_BASE_URL",
+    "EMBEDDING_MODEL",
+    "EMBEDDING_BASE_URL",
+    "COHERE_MODEL",
+    "COHERE_BASE_URL",
+)
 
 
 class SandboxBootError(ValueError):
@@ -693,10 +706,57 @@ def _install_trace_plugins(
     return experiment_id
 
 
+def eval_env(env: Mapping[str, str]) -> dict[str, str]:
+    """Non-secret settings `deepfix eval` and `deepfix hpo` read inside Hermes.
+
+    The terminal strips these from a command, so the sandbox writes them to a
+    root-owned file the ``deepfix`` shim reads and re-injects into the child.
+    Only model ids and endpoint URLs are here. Credentials stay in the sealed
+    ``.env`` the shim already reads.
+    """
+    settings_map: dict[str, str] = {}
+    for name in EVAL_ENV_KEYS:
+        value = env.get(name, "").strip()
+        if not value:
+            continue
+        if any(char in value for char in "\n\r\x00"):
+            raise SandboxBootError(f"{name} contains a newline or NUL")
+        settings_map[name] = value
+    return settings_map
+
+
+def write_eval_env(path: Path, env: Mapping[str, str]) -> Path:
+    """Write the non-secret eval settings as a root-owned ``KEY=value`` file."""
+    values = eval_env(env)
+    body = "".join(f"{key}={value}\n" for key, value in values.items())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o644)
+    try:
+        os.chown(path, 0, 0)
+    except OSError:
+        pass
+    return path
+
+
+def eval_env_path(env: Mapping[str, str], override: Path | None = None) -> Path:
+    """Where the sandbox writes the non-secret eval settings.
+
+    ``DEEPFIX_EVAL_ENV`` overrides the image default so a local run can put the
+    file somewhere it can write. Production keeps ``/opt/deepfix/eval-env``,
+    outside the Hermes home the agent can edit.
+    """
+    if override is not None:
+        return override
+    raw = env.get("DEEPFIX_EVAL_ENV", "").strip()
+    return Path(raw) if raw else DEFAULT_EVAL_ENV_PATH
+
+
 def apply_sandbox(
     home: Path,
     env: Mapping[str, str],
     skills_dir: Path,
+    eval_env_path_override: Path | None = None,
 ) -> None:
     """Write the optimization config and the stopped chat profile."""
     _reject_product_key(env)
@@ -737,6 +797,7 @@ def apply_sandbox(
     updates.update(scoped_s3_env(env))
     updates.update(mlflow_env(env))
     _upsert_env(home / ".env", updates, _STRIPPED_ENV_KEYS)
+    write_eval_env(eval_env_path(env, eval_env_path_override), env)
     _prepare_cli_log(home)
     experiment_id = _install_trace_plugins(home, config, env)
     if experiment_id:

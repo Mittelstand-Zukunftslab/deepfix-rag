@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 
 from deepfix_rag.hermes_sync import bucket_from_env, store_from_env
 from deepfix_rag.run_bundle import (
@@ -47,6 +48,30 @@ _SECRET_ENVS = (
     "HERMES_S3_SECRET_ACCESS_KEY",
     "LLM_API_KEY",
 )
+# Model ids and endpoint URLs the terminal scrub removes from a command. The
+# sandbox writes them at boot to a root-owned file; this shim puts them back
+# into the CLI child's environment. They are not secrets and never go on argv.
+EVAL_ENV_KEYS: tuple[str, ...] = (
+    "LLM_MODEL",
+    "LLM_JUDGE_MODEL",
+    "LLM_BASE_URL",
+    "EMBEDDING_MODEL",
+    "EMBEDDING_BASE_URL",
+    "COHERE_MODEL",
+    "COHERE_BASE_URL",
+)
+DEFAULT_EVAL_ENV_PATH = Path("/opt/deepfix/eval-env")
+DEFAULT_HERMES_HOME = Path("/opt/data")
+# The OpenRouter key is mapped into these slots only when the matching base URL
+# is OpenRouter's, so a non-OpenRouter endpoint never receives that key.
+_OPENROUTER_KEY_SLOTS: tuple[tuple[str, str], ...] = (
+    ("LLM_API_KEY", "LLM_BASE_URL"),
+    ("EMBEDDING_API_KEY", "EMBEDDING_BASE_URL"),
+    ("COHERE_API_KEY", "COHERE_BASE_URL"),
+)
+_DEFAULT_LLM_BASE_URL = "https://openrouter.ai/api/v1"
+_DEFAULT_EMBEDDING_BASE_URL = "https://openrouter.ai/api/v1"
+_DEFAULT_COHERE_BASE_URL = "https://openrouter.ai/api/v1"
 _MIN_SECRET_LENGTH = 8
 _RUN_IN_PATH = re.compile(r"(?:^|[\\/])runs[\\/]([A-Za-z0-9][A-Za-z0-9._-]{0,127})(?=[\\/]|$)")
 _RUN_IN_KEY = re.compile(r"(?:^|/)optimization/runs/([A-Za-z0-9][A-Za-z0-9._-]{0,127})(?=/|$)")
@@ -84,7 +109,10 @@ def main(argv: list[str] | None = None) -> int:
         return 127
     interval = _interval(os.environ)
     run_id = resolve_run_id(args, os.environ, Path.cwd())
-    secrets = _secret_bytes(os.environ)
+    child_env = injected_child_env(os.environ)
+    # The restored child env is the source of redaction too, so a key that came
+    # from the sealed profile ``.env`` is still scrubbed from the log.
+    secrets = _secret_bytes(child_env)
     mirror = _open_mirror()
     stdout_redactor = _Redactor(secrets)
     stderr_redactor = _Redactor(secrets)
@@ -93,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
             [real, *args],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=child_env,
         )
     except OSError:
         _write_stderr(b"deepfix: real CLI could not be started\n")
@@ -254,6 +283,98 @@ def _interval(env: Mapping[str, str]) -> float:
     return value
 
 
+def read_eval_env(path: Path | None = None) -> dict[str, str]:
+    """The non-secret eval settings the sandbox wrote at boot. Missing file is empty."""
+    target = path or _eval_env_path(os.environ)
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if key not in EVAL_ENV_KEYS:
+            continue
+        value = value.strip()
+        if value:
+            values[key] = value
+    return values
+
+
+def _eval_env_path(env: Mapping[str, str]) -> Path:
+    raw = env.get("DEEPFIX_EVAL_ENV", "").strip()
+    return Path(raw) if raw else DEFAULT_EVAL_ENV_PATH
+
+
+def _is_openrouter_base(base_url: str | None) -> bool:
+    text = (base_url or "").strip().rstrip("/").lower()
+    if not text:
+        return True
+    parts = urlsplit(text)
+    return parts.netloc == "openrouter.ai"
+
+
+def injected_child_env(
+    env: Mapping[str, str] | None = None,
+    eval_env_path: Path | None = None,
+) -> dict[str, str]:
+    """The CLI child's environment: model ids restored, OpenRouter key mapped.
+
+    The terminal scrub removes model ids and the OpenRouter key from a
+    command. The sandbox writes the model ids to a root-owned file at boot
+    and keeps the key in the sealed profile ``.env``. This restores both
+    without putting anything on the command line, and without reading s6's
+    ``container_environment`` directories.
+    """
+    source = dict(os.environ if env is None else env)
+    child = dict(source)
+    settings_values = read_eval_env(eval_env_path)
+    child.update(settings_values)
+
+    key = _openrouter_key(source)
+    if key:
+        child["OPENROUTER_API_KEY"] = key
+        for slot, base_env in _OPENROUTER_KEY_SLOTS:
+            if (child.get(slot) or "").strip():
+                continue
+            if not _is_openrouter_base(child.get(base_env, source.get(base_env))):
+                continue
+            child[slot] = key
+    return child
+
+
+def _openrouter_key(env: Mapping[str, str]) -> str | None:
+    """The OpenRouter key from the environment or the sealed profile ``.env``."""
+    direct = (env.get("OPENROUTER_API_KEY") or "").strip()
+    if direct:
+        return direct
+    if env.get("DEEPFIX_READ_PROFILE_ENV", "").strip() == "0":
+        return None
+    return _profile_env_value("OPENROUTER_API_KEY", env)
+
+
+def _profile_env_value(name: str, env: Mapping[str, str]) -> str | None:
+    home = Path(env.get("HERMES_HOME", "").strip() or DEFAULT_HERMES_HOME)
+    path = home / ".env"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("export "):
+            stripped = stripped[len("export ") :]
+        if not stripped.startswith(f"{name}="):
+            continue
+        value = stripped.split("=", 1)[1].strip().strip("'\"")
+        return value or None
+    return None
+
+
 def _is_run_id(value: str) -> bool:
     try:
         validate_run_id(value)
@@ -286,9 +407,9 @@ def _work_root(env: Mapping[str, str]) -> Path:
     return CONTAINER_WORK_ROOT
 
 
-def _secret_bytes(env: Mapping[str, str]) -> tuple[bytes, ...]:
+def _secret_bytes(env: Mapping[str, str], extra: tuple[str, ...] = ()) -> tuple[bytes, ...]:
     found: list[bytes] = []
-    for name in _SECRET_ENVS:
+    for name in (*_SECRET_ENVS, *extra):
         value = env.get(name, "").strip()
         if len(value) < _MIN_SECRET_LENGTH:
             continue

@@ -161,3 +161,175 @@ def test_redactor_catches_a_secret_split_across_chunks() -> None:
     tail = redactor.finish()
     assert first + second + tail == b"OUT [redacted]\n"
     assert secret not in first + second + tail
+
+
+EVAL_ENV_BODY = (
+    "LLM_MODEL=fixture/llm\n"
+    "LLM_JUDGE_MODEL=fixture/judge\n"
+    "EMBEDDING_MODEL=fixture/embed\n"
+    "COHERE_MODEL=cohere/rerank-4-fast\n"
+    "COHERE_BASE_URL=https://openrouter.ai/api/v1\n"
+    "NOT_AN_EVAL_KEY=ignored-value\n"
+)
+
+OPENROUTER_KEY = "sk-or-shim-secret-key"
+
+
+def _dump_child(path: Path) -> None:
+    """A child that prints the environment it received as JSON on stdout."""
+    path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            import json
+            import os
+            import sys
+            body = {
+                "argv": sys.argv[1:],
+                "env": dict(os.environ),
+            }
+            sys.stdout.write(json.dumps(body) + "\\n")
+            sys.stdout.flush()
+            """
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+
+def _scrubbed_env(tmp_path: Path, child: Path, **extra: str) -> dict[str, str]:
+    """The env the terminal leaves behind: no model ids, no OpenRouter key."""
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(tmp_path),
+        "DEEPFIX_REAL_BIN": str(child),
+        "DEEPFIX_WORK_ROOT": str(tmp_path / "work"),
+        "DEEPFIX_BUNDLE_ROOT": str(tmp_path / "objects"),
+        "DEEPFIX_CONTAINER_LOG": str(tmp_path / "logs" / "deepfix-cli.log"),
+        "DEEPFIX_EVAL_ENV": str(tmp_path / "eval-env"),
+        "HERMES_HOME": str(tmp_path / "data"),
+        "S3_URI": f"s3://{BUCKET}/dev",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    env.update(extra)
+    return env
+
+
+def _write_eval_env(tmp_path: Path) -> Path:
+    path = tmp_path / "eval-env"
+    path.write_text(EVAL_ENV_BODY, encoding="utf-8")
+    path.chmod(0o644)
+    return path
+
+
+def _write_sealed_dotenv(tmp_path: Path) -> Path:
+    home = tmp_path / "data"
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / ".env"
+    path.write_text(f"API_SERVER_KEY={'k' * 32}\nOPENROUTER_API_KEY={OPENROUTER_KEY}\n")
+    path.chmod(0o600)
+    return path
+
+
+def test_the_shim_restores_eval_env_without_putting_secrets_on_argv(tmp_path: Path) -> None:
+    child = tmp_path / "deepfix-real"
+    _dump_child(child)
+    _write_eval_env(tmp_path)
+    _write_sealed_dotenv(tmp_path)
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "deepfix_rag.deepfix_shim", "eval", "--json"],
+        env=_scrubbed_env(tmp_path, child),
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode()
+    body = json.loads(completed.stdout.decode())
+    child_env = body["env"]
+    assert child_env["LLM_MODEL"] == "fixture/llm"
+    assert child_env["LLM_JUDGE_MODEL"] == "fixture/judge"
+    assert child_env["EMBEDDING_MODEL"] == "fixture/embed"
+    assert child_env["COHERE_MODEL"] == "cohere/rerank-4-fast"
+    assert child_env["COHERE_BASE_URL"] == "https://openrouter.ai/api/v1"
+    assert child_env["OPENROUTER_API_KEY"] == OPENROUTER_KEY
+    # The OpenRouter key fills the slots the pipeline reads, and the child still
+    # has no product LLM key from the Hermes environment.
+    assert child_env["LLM_API_KEY"] == OPENROUTER_KEY
+    assert child_env["EMBEDDING_API_KEY"] == OPENROUTER_KEY
+    assert child_env["COHERE_API_KEY"] == OPENROUTER_KEY
+    assert "NOT_AN_EVAL_KEY" not in child_env
+    # Nothing secret on argv, and no model ids smuggled onto the command line.
+    argv = " ".join(body["argv"])
+    assert OPENROUTER_KEY not in argv
+    assert "fixture/llm" not in argv
+    # The mirrored container log still redacts the key the shim restored.
+    mirror = (tmp_path / "logs" / "deepfix-cli.log").read_bytes()
+    assert OPENROUTER_KEY.encode() not in mirror
+    assert b"[redacted]" in mirror
+
+
+def test_a_non_openrouter_base_does_not_receive_the_openrouter_key(tmp_path: Path) -> None:
+    from deepfix_rag.deepfix_shim import injected_child_env
+
+    eval_env = tmp_path / "eval-env"
+    eval_env.write_text(
+        "LLM_MODEL=fixture/llm\nLLM_BASE_URL=https://api.example.test/v1\n"
+        "COHERE_BASE_URL=https://api.example.test/v1\n",
+        encoding="utf-8",
+    )
+    child = injected_child_env(
+        {
+            "OPENROUTER_API_KEY": OPENROUTER_KEY,
+            "EMBEDDING_BASE_URL": "https://openrouter.ai/api/v1",
+        },
+        eval_env_path=eval_env,
+    )
+    assert child["LLM_MODEL"] == "fixture/llm"
+    assert "LLM_API_KEY" not in child
+    assert "COHERE_API_KEY" not in child
+    # Embedding is still on OpenRouter, so it gets the key.
+    assert child["EMBEDDING_API_KEY"] == OPENROUTER_KEY
+
+
+def test_an_existing_key_slot_is_not_overwritten(tmp_path: Path) -> None:
+    from deepfix_rag.deepfix_shim import injected_child_env
+
+    eval_env = tmp_path / "eval-env"
+    eval_env.write_text("LLM_MODEL=fixture/llm\n", encoding="utf-8")
+    child = injected_child_env(
+        {"OPENROUTER_API_KEY": OPENROUTER_KEY, "LLM_API_KEY": "already-set-key"},
+        eval_env_path=eval_env,
+    )
+    assert child["LLM_API_KEY"] == "already-set-key"
+
+
+def test_the_injection_path_never_reads_the_s6_env_dirs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The agent-facing workaround stays retired: no container_environment reads."""
+    from deepfix_rag import deepfix_shim
+
+    eval_env = _write_eval_env(tmp_path)
+    read_paths: list[str] = []
+    original_read_text = Path.read_text
+
+    def _record(self: Path, *args, **kwargs):  # noqa: ANN001 - Path API
+        read_paths.append(str(self))
+        if "container_environment" in str(self):
+            raise AssertionError(f"read of {self} is not allowed")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _record)
+
+    child = deepfix_shim.injected_child_env(
+        {"HERMES_HOME": str(tmp_path / "data")},
+        eval_env_path=eval_env,
+    )
+    assert child["LLM_MODEL"] == "fixture/llm"
+    assert read_paths == [str(eval_env), str(tmp_path / "data" / ".env")]
+    assert not any("/run/s6" in value for value in child.values())
+    assert not any("container_environment" in value for value in child.values())

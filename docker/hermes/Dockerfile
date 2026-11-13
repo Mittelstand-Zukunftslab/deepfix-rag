@@ -97,6 +97,7 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/deepfix/python \
     API_SERVER_HOST=0.0.0.0 \
     DEEPFIX_REAL_BIN=/opt/deepfix/.venv/bin/deepfix \
     DEEPFIX_PYTHON=/opt/deepfix/.venv/bin/python \
+    DEEPFIX_EVAL_ENV=/opt/deepfix/eval-env \
     DEEPFIX_CONTAINER_LOG=/opt/data/logs/deepfix-cli.log \
     DEEPFIX_TRACE_EXPERIMENT_ATTEMPTS=5 \
     DEEPFIX_TRACE_EXPERIMENT_DELAY_SECONDS=2 \
@@ -141,8 +142,7 @@ RUN set -eu; \
 
 COPY .agents/skills /opt/deepfix/skills
 COPY docker/hermes/sandbox_boot.py /opt/deepfix/sandbox_boot.py
-COPY docker/hermes/bin/deepfix /opt/deepfix/bin/deepfix
-COPY docker/hermes/deepfix_run_tag /opt/deepfix/plugins/deepfix-run-tag
+COPY docker/hermes/bin/deepfix /opt/deepfix/bin/deepfixCOPY docker/hermes/deepfix_run_tag /opt/deepfix/plugins/deepfix-run-tag
 COPY docker/hermes/s6/deepfix-cli-log /etc/s6-overlay/s6-rc.d/deepfix-cli-log
 COPY docker/hermes/seal_volume.py /opt/deepfix/seal_volume.py
 COPY docker/hermes/00-deepfix-volume /etc/cont-init.d/00-deepfix-volume
