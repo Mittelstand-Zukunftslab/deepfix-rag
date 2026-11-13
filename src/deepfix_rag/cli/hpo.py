@@ -207,6 +207,11 @@ def hpo_cmd(
                 json_output=json_output,
             )
 
+    # Keep the resolved config before the trial-only overrides. A candidate
+    # export is built from this one, so it carries the base dataset, split and
+    # index rather than the sweep's subsample and local cache.
+    export_base_config = base_config
+
     if effective_dataset != base_config.data.path_or_repo:
         overrides["data.path_or_repo"] = effective_dataset
     if effective_split != base_config.data.split:
@@ -244,6 +249,7 @@ def hpo_cmd(
             run_dir=effective_run_dir,
             index_dir=index_dir,
             output_path=effective_output,
+            export_base_config=export_base_config,
         )
         # With --json, MLflow prints "View run ..." on stdout. The agent parses
         # stdout as one JSON document, so keep that chatter on stderr.

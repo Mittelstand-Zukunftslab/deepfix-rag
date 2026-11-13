@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any
 
 import mlflow
@@ -28,6 +29,16 @@ from deepfix_rag.evaluation.runner import EvaluationRunner
 INDEX_CACHE_DIRNAME = "idx-cache"
 TRIALS_ARTIFACT_NAME = "hpo_trials.json"
 _REMOTE_SCHEMES = ("s3://", "gs://", "az://", "abfs://", "abfss://", "hdfs://", "gcs://")
+# Overrides that exist only so a trial can score a subsample. They must never
+# reach an exported candidate, which is re-scored on the full dev set.
+_TRIAL_ONLY_OVERRIDE_KEYS = frozenset(
+    {
+        "data.path_or_repo",
+        "data.limit",
+        "data.split",
+        "retrieval.lancedb_index_dir",
+    }
+)
 
 
 def is_remote_index_uri(uri: str) -> bool:
@@ -229,6 +240,7 @@ class HPOResult:
     index_cache_source: str | None = None
     stopped_early: bool = False
     failed_trials: int = 0
+    pruned_trials: int = 0
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert study trials to a structured DataFrame."""
@@ -286,6 +298,7 @@ class HPOResult:
             "best_config": self.best_config.model_dump() if self.best_config else None,
             "stopped_early": self.stopped_early,
             "failed_trials": self.failed_trials,
+            "pruned_trials": self.pruned_trials,
             "run_dir": str(self.run_dir) if self.run_dir is not None else None,
             "trials_path": str(self.trials_path) if self.trials_path is not None else None,
             "index_dir": str(self.index_dir) if self.index_dir is not None else None,
@@ -360,11 +373,18 @@ class HyperparameterOpt:
         run_dir: Path | str | None = None,
         index_dir: Path | str | None = None,
         output_path: Path | str | None = None,
+        export_base_config: RAGConfig | None = None,
         embed_model: Any = None,
         llm: Any = None,
         persist: bool = True,
     ) -> None:
         self.base_config = base_config
+        # The config an exported candidate is built from. Trials and exports
+        # differ: a trial carries the CLI's dataset, split, limit and local
+        # index path so it can score a subsample, but none of those belong in a
+        # candidate that will be re-scored on the full dev set. Exports use this
+        # config plus the sampled params, nothing else.
+        self.export_base_config = export_base_config or base_config
         self.hpo_config = hpo_config or HPOConfig(search_space=search_space or HPOSearchSpace())
         if search_space is not None:
             self.hpo_config.search_space = search_space
@@ -611,9 +631,26 @@ class HyperparameterOpt:
                 except Exception as e:
                     LOGGER.debug(f"Failed to cleanup temp dir {temp_dir}: {e}")
 
+    def _export_overrides(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Overrides for an exported candidate: the tuned params and nothing else.
+
+        ``retrieval.lancedb_index_dir`` and ``data.path_or_repo`` never travel
+        into a candidate. A trial points them at the local index cache and the
+        CLI's dataset so it can score a subsample; the candidate is re-scored by
+        ``deepfix eval`` on the index and dataset its own config names, and a
+        ``<run_dir>/idx-cache`` path does not exist on the API host.
+        """
+        return {
+            key: value for key, value in params.items() if key not in _TRIAL_ONLY_OVERRIDE_KEYS
+        }
+
+    def _export_config_for(self, params: dict[str, Any]) -> RAGConfig:
+        """The base config plus the tuned params, with no trial-only overrides."""
+        return apply_mutation(self.export_base_config, self._export_overrides(params))
+
     def _best_config_from_trial(self, trial: FrozenTrial) -> RAGConfig:
-        """The base config with one trial's sampled parameters applied."""
-        return apply_mutation(self.base_config, {**self._base_overrides(), **dict(trial.params)})
+        """The exported candidate for one trial."""
+        return self._export_config_for(dict(trial.params))
 
     def _record_trial(self, study: optuna.Study, trial: FrozenTrial) -> None:
         """Write best-so-far artifacts after each finished trial.
@@ -665,39 +702,53 @@ class HyperparameterOpt:
             load_if_exists=load_if_exists,
         )
 
-        # n_trials is the study's total budget, not this call's. A file-backed
-        # study that is restarted with the same --n-trials therefore continues
-        # where it stopped instead of running the whole budget again.
-        already_run = len(study.trials)
-        remaining = max(0, target_n_trials - already_run)
-        if remaining == 0:
-            LOGGER.info(
-                f"Study {self.study_name} already has {already_run} trials; nothing to run."
+        # n_trials is the number of *evaluated* trials the study should hold.
+        # A pruned duplicate costs no evaluation, so the loop keeps going until
+        # enough trials completed or the wall clock runs out.
+        deadline = None if timeout is None else time.monotonic() + timeout
+        max_attempts = target_n_trials + max(target_n_trials * 4, 20)
+        while True:
+            completed_count = len([t for t in study.trials if t.state == TrialState.COMPLETE])
+            if completed_count >= target_n_trials:
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            if len(study.trials) >= max_attempts:
+                LOGGER.info(
+                    f"Stopping after {len(study.trials)} attempts: the search space has "
+                    f"no configuration left to try ({completed_count} completed)."
+                )
+                break
+            before = len(study.trials)
+            study.optimize(
+                lambda trial: self._objective(
+                    trial=trial,
+                    dataset_path=target_dataset,
+                    split=target_split,
+                    limit=target_limit,
+                ),
+                n_trials=1,
+                timeout=(None if deadline is None else max(1e-6, deadline - time.monotonic())),
+                callbacks=[self._record_trial],
+                # A trial whose cases all errored measures nothing. Record it
+                # FAILED and keep sweeping instead of aborting the whole study,
+                # then fail loudly below if nothing ever completed.
+                catch=(TrialEvaluationError,),
             )
-        study.optimize(
-            lambda trial: self._objective(
-                trial=trial,
-                dataset_path=target_dataset,
-                split=target_split,
-                limit=target_limit,
-            ),
-            n_trials=remaining,
-            timeout=timeout,
-            callbacks=[self._record_trial],
-            # A trial whose cases all errored measures nothing. Record it FAILED
-            # and keep sweeping instead of aborting the whole study, then fail
-            # loudly below if no trial ever completed.
-            catch=(TrialEvaluationError,),
-        )
+            if len(study.trials) == before:
+                # The timeout expired before Optuna could start a trial.
+                break
 
-        completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
-        if not completed:
+        completed_trials = [t for t in study.trials if t.state == TrialState.COMPLETE]
+        if not completed_trials:
             failures = [t for t in study.trials if t.state == TrialState.FAIL]
-            reason = failures[0].user_attrs.get("error") if failures else None
-            raise TrialEvaluationError(
-                0,
-                "no trial completed, so nothing was measured" + (f". {reason}" if reason else "."),
-            )
+            if failures:
+                reason = failures[0].user_attrs.get("error")
+                raise TrialEvaluationError(
+                    0,
+                    "no trial completed, so nothing was measured"
+                    + (f". {reason}" if reason else "."),
+                )
 
         # Build Pareto trials and configurations
         pareto_trials: list[FrozenTrial] = []
@@ -715,12 +766,7 @@ class HyperparameterOpt:
                 pareto_trials = []
 
         for pt in pareto_trials:
-            param_overrides: dict[str, Any] = {}
-            for param_key, param_val in pt.params.items():
-                param_overrides[param_key] = param_val
-            p_config = apply_mutation(
-                self.base_config, {**self._base_overrides(), **param_overrides}
-            )
+            p_config = self._export_config_for(dict(pt.params))
             pareto_configs.append(p_config)
 
         # Select representative best trial
@@ -736,8 +782,9 @@ class HyperparameterOpt:
             idx = pareto_trials.index(best_trial)
             best_config = pareto_configs[idx]
 
-        completed_count = len([t for t in study.trials if t.state == TrialState.COMPLETE])
+        final_completed = len([t for t in study.trials if t.state == TrialState.COMPLETE])
         failed_count = len([t for t in study.trials if t.state == TrialState.FAIL])
+        pruned_count = len([t for t in study.trials if t.state == TrialState.PRUNED])
         trials_path: Path | None = None
         if self.run_dir is not None:
             trials_path = _write_trial_rows(self.run_dir, self.metric_names, study.trials)
@@ -756,5 +803,6 @@ class HyperparameterOpt:
             index_cache_source=self.index_copy_source,
             failed_trials=failed_count,
             # A timeout, or a trial that failed, can leave the budget unspent.
-            stopped_early=completed_count < target_n_trials,
+            pruned_trials=pruned_count,
+            stopped_early=final_completed < target_n_trials,
         )
