@@ -455,3 +455,33 @@ def test_a_missing_base_config_names_the_file(cli_runner: CliRunner, tmp_path: P
     assert result.exit_code == EXIT_VALIDATION_ERROR, result.output
     payload = json.loads(result.stdout)
     assert "missing.yaml" in payload["error"]
+
+
+def test_an_explicit_index_dir_is_filled_from_the_remote_base(
+    sample_corpus_path: Path,
+    tmp_path: Path,
+) -> None:
+    """--index-dir that a test wrote an index into is reused without a copy."""
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    explicit = run_dir / "my-idx"
+
+    config = RAGConfig()
+    config.retrieval.lancedb_index_dir = "s3://deepfix-index/optimization/runs/abc/input"
+    opt = HyperparameterOpt(
+        base_config=config,
+        hpo_config=_query_time_space(),
+        study_name="explicit_dir_test",
+        run_dir=run_dir,
+        index_dir=explicit,
+        embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+        persist=False,
+    )
+    copy_index_tree(str(index_dir), explicit)
+
+    # A populated explicit directory is used as-is: no remote fetch is attempted,
+    # and the overrides point every trial at it.
+    assert opt.local_index_for() == explicit
+    assert opt.index_copy_source is None
+    assert opt._base_overrides()["retrieval.lancedb_index_dir"] == str(explicit)

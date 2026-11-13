@@ -35,6 +35,14 @@ def is_remote_index_uri(uri: str) -> bool:
     return str(uri).strip().lower().startswith(_REMOTE_SCHEMES)
 
 
+def _index_dir_populated(path: Path) -> bool:
+    """True when the directory already holds a LanceDB index, so no copy is needed."""
+    try:
+        return path.is_dir() and any(path.iterdir())
+    except OSError:
+        return False
+
+
 def copy_index_tree(source: str, target: Path) -> Path:
     """Copy a directory or a remote object prefix into ``target``.
 
@@ -394,15 +402,23 @@ class HyperparameterOpt:
         A remote ``retrieval.lancedb_index_dir`` is copied once into
         ``<run_dir>/idx-cache`` (or the explicit ``--index-dir``) before the
         first trial. Later trials in this process reuse that copy, so the
-        object store is not fetched again per trial.
+        object store is not fetched again per trial. An explicit
+        ``--index-dir`` that does not yet hold the index is filled from the
+        remote base, so the agent never has to copy it by hand.
         """
-        configured = self.index_dir
-        if configured is not None:
-            return configured
         if self.local_index_dir is not None:
             return self.local_index_dir
         base_uri = str(self.base_config.retrieval.lancedb_index_dir)
-        if not is_remote_index_uri(base_uri):
+        remote_base = is_remote_index_uri(base_uri)
+        configured = self.index_dir
+        if configured is not None:
+            self.local_index_dir = configured
+            if remote_base and not _index_dir_populated(configured):
+                LOGGER.info(f"Copying the index from {base_uri} into {configured}")
+                copy_index_tree(base_uri, configured)
+                self.index_copy_source = base_uri
+            return configured
+        if not remote_base:
             return None
         self.local_index_dir = self._copy_remote_index(base_uri)
         self.index_copy_source = base_uri
