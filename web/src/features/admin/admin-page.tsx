@@ -18,11 +18,11 @@ import {
 import { formatDateTime } from "@/lib/format";
 import type { OptimizationStatus } from "@/services/optimization-service";
 
-const OPENHANDS_UNAVAILABLE =
-  "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.";
+const HERMES_UNAVAILABLE =
+  "Hermes is not set up on this server, so a run cannot start. The schedule and history are still shown.";
 
 function unavailableMessage(status: OptimizationStatus): string {
-  return status.agent_unavailable_message || OPENHANDS_UNAVAILABLE;
+  return status.agent_unavailable_message || HERMES_UNAVAILABLE;
 }
 
 const STATUS_LABEL: Record<OptimizationStatus["runs"][number]["status"], string> = {

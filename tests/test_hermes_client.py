@@ -840,17 +840,19 @@ def test_event_preview_redacts_the_bearer_token() -> None:
 
 
 def test_route_handlers_do_not_call_hermes() -> None:
+    """Only the optimization loop talks to Hermes; routes and the agent child do not."""
     api = REPO / "src" / "deepfix_rag" / "api"
     for path in api.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         assert "hermes_client" not in text
         assert "HermesClient" not in text
         assert "/v1/runs" not in text
-    agent = (REPO / "src" / "deepfix_rag" / "agent_process.py").read_text(encoding="utf-8")
-    assert "HermesClient" not in agent
-    assert "hermes_client" not in agent
     loop = (REPO / "src" / "deepfix_rag" / "optimization.py").read_text(encoding="utf-8")
     assert "from deepfix_rag.hermes_client import" in loop
+    # US-010 removed the OpenHands child, so nothing else in the package may
+    # start an agent subprocess.
+    for path in (REPO / "src" / "deepfix_rag").rglob("*.py"):
+        assert "openhands_runner" not in path.read_text(encoding="utf-8"), path
 
 
 class _Grab(logging.Handler):

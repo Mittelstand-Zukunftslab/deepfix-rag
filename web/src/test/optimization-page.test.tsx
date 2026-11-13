@@ -17,7 +17,7 @@ import type { OptimizationStatus } from "@/services/optimization-service";
 
 function status(overrides: Partial<OptimizationStatus> = {}): OptimizationStatus {
   return {
-    agent: "openhands",
+    agent: "hermes",
     agent_available: true,
     agent_unavailable_message: null,
     champion_config_path: "/workspace/configs/champion.yaml",

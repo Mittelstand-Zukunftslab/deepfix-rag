@@ -12,10 +12,10 @@ import threading
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from deepfix_rag.agent_process import AgentUnavailable
 from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.optimization import (
+    AgentUnavailable,
     OptimizationSettings,
     RunInProgress,
     agent_status,
@@ -59,7 +59,7 @@ class ScheduleView:
     timezone: str
     enabled: bool
     next_run_at: str | None
-    agent: Literal["openhands", "hermes"]
+    agent: Literal["hermes"]
     agent_available: bool
     agent_unavailable_message: str | None
 
@@ -170,9 +170,7 @@ class OptimizationScheduler:
             nxt = self._next
         options = self._options_for()
         available, message = agent_status(options)
-        agent: Literal["openhands", "hermes"] = (
-            "hermes" if options.agent == "hermes" else "openhands"
-        )
+        agent: Literal["hermes"] = "hermes"
         return ScheduleView(
             cron=cron,
             timezone=self._timezone,

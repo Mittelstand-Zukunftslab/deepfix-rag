@@ -22,7 +22,6 @@ FIXTURE_RERANKER_MODEL = "fixture/reranker-test"
 FIXTURE_LLM_MODEL = "fixture/generation-test"
 FIXTURE_JUDGE_MODEL = "fixture/judge-test"
 FIXTURE_HERMES_MODEL = "fixture/hermes-test"
-FIXTURE_AGENT_MODEL = "fixture/agent-test"
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -40,7 +39,6 @@ def _fixture_model_env() -> None:
         "EMBEDDING_MODEL": FIXTURE_EMBEDDING_MODEL,
         "COHERE_MODEL": FIXTURE_RERANKER_MODEL,
         "HERMES_MODEL": FIXTURE_HERMES_MODEL,
-        "DEEPFIX_LLM_MODEL_NAME": FIXTURE_AGENT_MODEL,
     }
     previous = {name: getattr(settings, name) for name in defaults}
     for name, value in defaults.items():

@@ -12,13 +12,15 @@ import pytest
 from deepfix_rag.config.settings import Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# Model ids the API package reads. DEEPFIX_LLM_MODEL_NAME is deliberately absent:
+# after US-010 it configures the diagnostic-agent, which does not import this
+# package, so the API has no such setting.
 MODEL_ENV_NAMES = (
     "LLM_MODEL",
     "LLM_JUDGE_MODEL",
     "HERMES_MODEL",
     "EMBEDDING_MODEL",
     "COHERE_MODEL",
-    "DEEPFIX_LLM_MODEL_NAME",
 )
 # Model ids that used to be compiled into the package. None may reappear.
 RETIRED_LITERALS = (

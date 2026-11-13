@@ -75,7 +75,7 @@ include = [
     "pyproject.toml",
     "src/**/*.py",
     "tests/**/*.py",
-    "scripts/openhands_runner.py",
+    "scripts/register_prompt.py",
     "docker/hermes/sandbox_boot.py",
     "docker/hermes/bin/deepfix",
     "docker/hermes/deepfix_run_tag/__init__.py",

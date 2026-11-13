@@ -2,10 +2,10 @@
 
 The same function starts a scheduled run and a manual one. It exports a feedback
 snapshot, skips when too little is labeled, and otherwise launches one agent.
-``OPTIMIZATION_AGENT=openhands`` (the default) starts the OpenHands child.
-``hermes`` stages the run bundle, submits it with ``HermesClient``, and follows
-``GET /v1/runs/{id}/events`` plus a status poll. ``output/result.json`` is copied
-back before ``finish_run``. Holdout scoring and promotion stay in this process.
+``OPTIMIZATION_AGENT=hermes`` (the default, and the only agent) stages the run
+bundle, submits it with ``HermesClient``, and follows ``GET /v1/runs/{id}/events``
+plus a status poll. ``output/result.json`` is copied back before ``finish_run``.
+Holdout scoring and promotion stay in this process.
 """
 
 from collections.abc import Callable, Mapping
@@ -25,12 +25,6 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from deepfix_rag.agent_process import (
-    AGENT_UNAVAILABLE_MESSAGE,
-    AgentUnavailable,
-    interpreter_imports_agent,
-    run_agent_job,
-)
 from deepfix_rag.config.settings import LOGGER, ModelNotConfigured, Settings
 from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.feedback import export_feedback
@@ -66,9 +60,13 @@ from deepfix_rag.storage import connect
 
 
 class OptimizationAgent(StrEnum):
-    """Which sandbox ``start_optimization_run`` launches. The default is OpenHands."""
+    """Which sandbox ``start_optimization_run`` launches.
 
-    OPENHANDS = "openhands"
+    Only ``hermes`` exists. The enum stays so a stored schedule row or an API
+    payload written before US-010 fails validation with a readable message
+    instead of silently starting something else.
+    """
+
     HERMES = "hermes"
 
 
@@ -92,14 +90,12 @@ _SECRET_ENVS = (
     "LLM_API_KEY",
 )
 HERMES_UNAVAILABLE_MESSAGE = "Hermes is not set up on this server, so a run cannot start."
-OPENHANDS_STATUS_MESSAGE = (
-    "OpenHands is not set up on this server, so a run cannot start. "
-    "The schedule and history are still shown."
-)
-OPENHANDS_MODEL_MISSING_MESSAGE = (
-    "DEEPFIX_LLM_MODEL_NAME is not set, so an OpenHands run cannot start. "
-    "Set it in the server environment to the OpenRouter model id the agent runs."
-)
+
+
+class AgentUnavailable(Exception):
+    """The selected optimization agent cannot be started on this server."""
+
+
 HERMES_STATUS_MESSAGE = (
     "Hermes is not set up on this server, so a run cannot start. "
     "The schedule and history are still shown."
@@ -173,24 +169,16 @@ class OptimizationRun:
 
 @dataclass(frozen=True)
 class OptimizationSettings:
-    """Thresholds and the child-process inputs for one attempt."""
+    """Thresholds and the Hermes inputs for one attempt."""
 
     min_dev_questions: int = 50
     min_new_dev_questions: int = 10
     min_holdout_questions: int = 15
     min_primary_delta: float = 0.025
     timeout_seconds: float = 3 * 60 * 60
-    goal_rounds: int = 3
-    interpreter: Path | None = None
-    # No code default: settings_from copies DEEPFIX_LLM_MODEL_NAME through openrouter_settings.
-    model: str = ""
-    base_url: str | None = "https://openrouter.ai/api/v1"
-    api_key: str | None = None
-    runner_script: Path | None = None
     source_env: Mapping[str, str] | None = None
-    api_bin: Path | None = None
     private_paths: tuple[str, ...] = ()
-    agent: OptimizationAgent = OptimizationAgent.OPENHANDS
+    agent: OptimizationAgent = OptimizationAgent.HERMES
     hermes_base_url: str = "http://hermes:8642"
     hermes_api_key: str | None = None
     hermes_status_poll_seconds: float = HERMES_STATUS_POLL_SECONDS
@@ -203,22 +191,13 @@ def settings_from(
     settings: Settings, source_env: Mapping[str, str] | None = None
 ) -> OptimizationSettings:
     """Copy the server thresholds and hide the product database from the agent."""
-    from deepfix_rag.agent_process import openrouter_settings
-
     env = os.environ if source_env is None else source_env
-    model, base_url, api_key = openrouter_settings(env)
-    raw_interpreter = settings.OPENHANDS_PYTHON
     return OptimizationSettings(
         min_dev_questions=settings.OPTIMIZATION_MIN_DEV_QUESTIONS,
         min_new_dev_questions=settings.OPTIMIZATION_MIN_NEW_DEV_QUESTIONS,
         min_holdout_questions=settings.OPTIMIZATION_MIN_HOLDOUT_QUESTIONS,
         min_primary_delta=settings.OPTIMIZATION_MIN_PRIMARY_DELTA,
         timeout_seconds=settings.OPTIMIZATION_RUN_TIMEOUT_HOURS * 60 * 60,
-        goal_rounds=settings.OPTIMIZATION_GOAL_ROUNDS,
-        interpreter=Path(raw_interpreter) if raw_interpreter else None,
-        model=model,
-        base_url=base_url,
-        api_key=api_key,
         source_env=env,
         private_paths=(str(settings.PRODUCT_DATA_DIR), str(settings.product_db_path)),
         agent=OptimizationAgent(settings.OPTIMIZATION_AGENT),
@@ -1629,18 +1608,9 @@ _wakes: dict[str, threading.Event] = {}
 
 
 def _launch_blocked_message(options: OptimizationSettings) -> str:
-    if options.agent is OptimizationAgent.HERMES:
-        if not _hermes_model_configured():
-            return HERMES_MODEL_MISSING_MESSAGE
-        return HERMES_UNAVAILABLE_MESSAGE
-    if _openhands_model_missing(options):
-        return OPENHANDS_MODEL_MISSING_MESSAGE
-    return AGENT_UNAVAILABLE_MESSAGE
-
-
-def _openhands_model_missing(options: OptimizationSettings) -> bool:
-    """True when the interpreter exists but no model id was configured."""
-    return _interpreter_ready(options.interpreter) and not options.model.strip()
+    if not _hermes_model_configured():
+        return HERMES_MODEL_MISSING_MESSAGE
+    return HERMES_UNAVAILABLE_MESSAGE
 
 
 def _hermes_model_configured() -> bool:
@@ -1663,71 +1633,16 @@ def _start_thread(
     holdout_queries: tuple[str, ...] = (),
     holdout_query_ids: tuple[str, ...] = (),
 ) -> None:
-    if options.agent is OptimizationAgent.HERMES:
-        _start_hermes_thread(
-            db_path,
-            workspace,
-            run_id,
-            dev_path,
-            options,
-            coordinator,
-            holdout_queries=holdout_queries,
-            holdout_query_ids=holdout_query_ids,
-        )
-        return
-    interpreter = options.interpreter
-    if interpreter is None:
-        raise AgentUnavailable(AGENT_UNAVAILABLE_MESSAGE)
-
-    def _target() -> None:
-        try:
-            outcome = run_agent_job(
-                workspace,
-                run_id,
-                prompt=optimization_prompt(
-                    run_id=run_id,
-                    workspace=workspace,
-                    dev_path=dev_path,
-                    min_primary_delta=options.min_primary_delta,
-                ),
-                model=options.model,
-                base_url=options.base_url,
-                api_key=options.api_key,
-                interpreter=interpreter,
-                goal_rounds=options.goal_rounds,
-                timeout_seconds=options.timeout_seconds,
-                runner_script=options.runner_script,
-                source_env=options.source_env,
-                api_bin=options.api_bin,
-                private_paths=options.private_paths,
-                on_start=lambda pid: _set_pid(db_path, run_id, pid),
-            )
-        except Exception as exc:
-            _finish(
-                db_path, run_id, status="failed", reason=str(exc) or "The agent runner failed."
-            )
-            return
-        try:
-            finish_run(
-                db_path,
-                workspace,
-                run_id,
-                runner_error=outcome.error,
-                timed_out=outcome.timed_out,
-                coordinator=coordinator,
-                min_primary_delta=options.min_primary_delta,
-                private_paths=options.private_paths,
-            )
-        except Exception as exc:
-            LOGGER.exception("Optimization run %s failed while finishing", run_id)
-            _finish(
-                db_path, run_id, status="failed", reason=str(exc) or "The agent runner failed."
-            )
-
-    thread = threading.Thread(target=_target, name=f"optimization-{run_id}", daemon=True)
-    with _threads_lock:
-        _threads[run_id] = thread
-    thread.start()
+    _start_hermes_thread(
+        db_path,
+        workspace,
+        run_id,
+        dev_path,
+        options,
+        coordinator,
+        holdout_queries=holdout_queries,
+        holdout_query_ids=holdout_query_ids,
+    )
 
 
 def _skip_reason(
@@ -1752,56 +1667,23 @@ def _skip_reason(
     return "Skipped: " + ". ".join(parts) + "."
 
 
-def _interpreter_ready(interpreter: Path | None) -> bool:
-    return interpreter is not None and interpreter.is_file()
-
-
 def _can_launch(options: OptimizationSettings) -> bool:
     """True when this process can start the agent the run will use."""
-    if options.agent is OptimizationAgent.HERMES:
-        return _hermes_model_configured() and agent_available(options)
-    if not _interpreter_ready(options.interpreter):
-        return False
-    if not options.api_key or not options.base_url or not options.model:
-        return False
-    if options.runner_script is not None:
-        return options.runner_script.is_file()
-    assert options.interpreter is not None
-    return interpreter_imports_agent(options.interpreter)
-
-
-_import_cache: dict[str, bool] = {}
+    return _hermes_model_configured() and agent_available(options)
 
 
 def agent_status(options: OptimizationSettings) -> tuple[bool, str | None]:
     """Whether a run can start, and the admin sentence when it cannot."""
     if agent_available(options):
         return True, None
-    if options.agent is OptimizationAgent.HERMES:
-        if not _hermes_model_configured():
-            return False, HERMES_MODEL_MISSING_MESSAGE
-        return False, HERMES_STATUS_MESSAGE
-    if _openhands_model_missing(options):
-        return False, OPENHANDS_MODEL_MISSING_MESSAGE
-    return False, OPENHANDS_STATUS_MESSAGE
+    if not _hermes_model_configured():
+        return False, HERMES_MODEL_MISSING_MESSAGE
+    return False, HERMES_STATUS_MESSAGE
 
 
 def agent_available(options: OptimizationSettings) -> bool:
-    """True when the selected agent can be started.
-
-    OpenHands checks the interpreter, and that import check is cached.
-    Hermes is true when ``API_SERVER_KEY`` is set and ``GET /health`` succeeds.
-    """
-    if options.agent is OptimizationAgent.HERMES:
-        return hermes_agent_available(options.hermes_base_url, options.hermes_api_key)
-    if not _interpreter_ready(options.interpreter) or options.interpreter is None:
-        return False
-    if not options.api_key or not options.base_url or not options.model:
-        return False
-    key = str(options.interpreter)
-    if key not in _import_cache:
-        _import_cache[key] = interpreter_imports_agent(options.interpreter)
-    return _import_cache[key]
+    """True when Hermes can accept a run: ``API_SERVER_KEY`` set and healthy."""
+    return hermes_agent_available(options.hermes_base_url, options.hermes_api_key)
 
 
 def _running_id(conn: sqlite3.Connection) -> str | None:

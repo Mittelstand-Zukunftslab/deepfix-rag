@@ -5,7 +5,6 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from deepfix_rag.agent_process import AgentUnavailable
 from deepfix_rag.api.deps import get_settings, require_admin
 from deepfix_rag.api.errors import (
     BAD_REQUEST,
@@ -25,6 +24,7 @@ from deepfix_rag.api.schemas import (
     UpdateOptimizationRequest,
 )
 from deepfix_rag.optimization import (
+    AgentUnavailable,
     OptimizationRun,
     RunInProgress,
     RunNotRunning,

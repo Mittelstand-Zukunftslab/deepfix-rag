@@ -20,7 +20,6 @@ import mlflow
 from pydantic import ValidationError
 import pytest
 
-from deepfix_rag.agent_process import AGENT_UNAVAILABLE_MESSAGE
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.config.settings import Settings, settings
@@ -36,7 +35,6 @@ from deepfix_rag.optimization import (
     HERMES_STATUS_POLL_SECONDS,
     HERMES_UNAVAILABLE_MESSAGE,
     INTERRUPTED_REASON,
-    OPENHANDS_STATUS_MESSAGE,
     STALE_REASON,
     OptimizationAgent,
     OptimizationSettings,
@@ -64,19 +62,6 @@ _NULL_RESULT = {
     "mlflow_run_id": None,
     "metrics": {"ndcg": 0.5, "recall": 0.8, "precision": 0.4},
 }
-_OPENHANDS_RUNNER = """
-import json, sys
-from pathlib import Path
-run_id = sys.argv[1]
-out = Path("runs") / run_id
-(out / "result.json").write_text(json.dumps({
-    "candidate_config_path": None,
-    "primary_metric": "ndcg",
-    "summary": "No change.",
-    "mlflow_run_id": None,
-    "metrics": {"ndcg": 0.5, "recall": 0.8, "precision": 0.4},
-}), encoding="utf-8")
-"""
 
 
 def _tracking(tmp_path: Path) -> None:
@@ -132,9 +117,6 @@ def _hermes_options(tmp_path: Path, api: HermesApi) -> OptimizationSettings:
         min_new_dev_questions=0,
         min_holdout_questions=0,
         timeout_seconds=5,
-        interpreter=None,
-        api_key=None,
-        agent=OptimizationAgent.HERMES,
         hermes_base_url=api.base_url,
         hermes_api_key=api.api_key,
         hermes_status_poll_seconds=0.05,
@@ -157,39 +139,37 @@ def _bodies(store: DirectoryObjectStore, run_id: str) -> list[bytes]:
 
 
 @pytest.mark.unit
-def test_the_flag_defaults_to_openhands_and_rejects_other_names() -> None:
-    assert Settings.model_fields["OPTIMIZATION_AGENT"].default == "openhands"
+def test_the_flag_defaults_to_hermes_and_rejects_other_names() -> None:
+    """US-010: Hermes is the only agent, and a stale flag is a startup error."""
+    assert Settings.model_fields["OPTIMIZATION_AGENT"].default == "hermes"
     assert Settings.model_fields["OPTIMIZATION_HEARTBEAT_STALL_MINUTES"].default == 5
     assert OptimizationSettings().heartbeat_stall_seconds == 5 * 60
     assert stall_reason(5 * 60) == "Stalled: no heartbeat for 5 minutes."
-    assert OptimizationSettings().agent is OptimizationAgent.OPENHANDS
+    assert OptimizationSettings().agent is OptimizationAgent.HERMES
     assert OptimizationSettings().hermes_status_poll_seconds == HERMES_STATUS_POLL_SECONDS
     copied = settings_from(
         Settings(
-            OPTIMIZATION_AGENT="hermes",
             HERMES_BASE_URL="http://hermes:8642/",
             API_SERVER_KEY=API_KEY,
-            OPENHANDS_PYTHON=None,
         ),
         source_env={},
     )
     assert copied.agent is OptimizationAgent.HERMES
     assert copied.hermes_base_url == "http://hermes:8642"
     assert copied.hermes_api_key == API_KEY
-    plain = settings_from(Settings(OPENHANDS_PYTHON=None, API_SERVER_KEY=None), source_env={})
-    assert plain.agent is OptimizationAgent.OPENHANDS
-    with pytest.raises(ValidationError):
-        Settings(OPTIMIZATION_AGENT="both")
+    plain = settings_from(Settings(API_SERVER_KEY=None), source_env={})
+    assert plain.agent is OptimizationAgent.HERMES
+    for name in ("both", "openhands"):
+        with pytest.raises(ValidationError):
+            Settings(OPTIMIZATION_AGENT=name)
 
 
 @pytest.mark.unit
 def test_hermes_is_available_only_when_health_succeeds_and_the_key_is_set() -> None:
     with HermesApi() as api:
         ready = OptimizationSettings(
-            agent=OptimizationAgent.HERMES,
             hermes_base_url=api.base_url,
             hermes_api_key=api.api_key,
-            interpreter=None,
         )
         assert agent_available(ready) is True
         health = [call for call in api.calls if call.path.split("?", 1)[0] == "/health"]
@@ -199,10 +179,8 @@ def test_hermes_is_available_only_when_health_succeeds_and_the_key_is_set() -> N
         assert API_KEY.encode() not in health[0].body
 
         blank = OptimizationSettings(
-            agent=OptimizationAgent.HERMES,
             hermes_base_url=api.base_url,
             hermes_api_key=None,
-            interpreter=None,
         )
         before = len(api.calls)
         assert agent_available(blank) is False
@@ -212,45 +190,27 @@ def test_hermes_is_available_only_when_health_succeeds_and_the_key_is_set() -> N
         assert agent_available(ready) is False
 
     refused = OptimizationSettings(
-        agent=OptimizationAgent.HERMES,
         hermes_base_url="http://127.0.0.1:1",
         hermes_api_key=API_KEY,
-        interpreter=None,
     )
     assert agent_available(refused) is False
 
     with HermesApi() as api:
-        openhands = OptimizationSettings(
-            agent=OptimizationAgent.OPENHANDS,
-            interpreter=None,
+        # Hermes is the only agent, so a healthy Hermes means available.
+        healthy = OptimizationSettings(
             hermes_base_url=api.base_url,
             hermes_api_key=api.api_key,
         )
-        assert agent_available(openhands) is False
-        assert api.calls == []
+        assert agent_available(healthy) is True
 
 
 @pytest.mark.unit
-def test_an_openhands_run_without_a_model_names_the_variable(tmp_path: Path) -> None:
-    """An empty DEEPFIX_LLM_MODEL_NAME blocks the launch and says which variable it is."""
-    from deepfix_rag.optimization import OPENHANDS_MODEL_MISSING_MESSAGE, agent_status
-
-    script = tmp_path / "runner.py"
-    script.write_text(_OPENHANDS_RUNNER, encoding="utf-8")
-    options = OptimizationSettings(
-        min_dev_questions=0,
-        min_new_dev_questions=0,
-        min_holdout_questions=0,
-        interpreter=Path(sys.executable),
-        model="",
-        base_url="https://openrouter.ai/api/v1",
-        api_key="test-key",
-        runner_script=script,
-    )
-    available, message = agent_status(options)
-    assert available is False
-    assert message == OPENHANDS_MODEL_MISSING_MESSAGE
-    assert "DEEPFIX_LLM_MODEL_NAME" in (message or "")
+def test_openhands_is_no_longer_a_selectable_agent() -> None:
+    """US-010 removed the OpenHands path; the enum has one member and the field rejects it."""
+    assert [agent.value for agent in OptimizationAgent] == ["hermes"]
+    assert not hasattr(OptimizationAgent, "OPENHANDS")
+    with pytest.raises(ValidationError):
+        Settings(OPTIMIZATION_AGENT="openhands")
 
 
 @pytest.mark.unit
@@ -265,8 +225,6 @@ def test_a_hermes_run_without_a_model_names_the_variable(
     settings.HERMES_MODEL = ""
     try:
         options = OptimizationSettings(
-            agent=OptimizationAgent.HERMES,
-            interpreter=None,
             hermes_base_url="http://127.0.0.1:1",
             hermes_api_key=API_KEY,
         )
@@ -276,15 +234,6 @@ def test_a_hermes_run_without_a_model_names_the_variable(
     assert available is False
     assert message == HERMES_MODEL_MISSING_MESSAGE
     assert "HERMES_MODEL" in (message or "")
-
-
-@pytest.mark.unit
-def test_settings_from_copies_the_agent_model_from_the_environment() -> None:
-    copied = settings_from(
-        Settings(OPENHANDS_PYTHON=None, API_SERVER_KEY=None),
-        source_env={"DEEPFIX_LLM_MODEL_NAME": "deepseek/fixture-optimizer"},
-    )
-    assert copied.model == "deepseek/fixture-optimizer"
 
 
 @pytest.mark.unit
@@ -306,44 +255,6 @@ def test_download_result_writes_the_output_object_and_ignores_a_missing_one(
     store.put(BUCKET, "optimization/runs/run-1/output/result.json", b'{"ok": true}\n')
     assert download_result(store, bucket=BUCKET, run_id="run-1", destination=destination) is True
     assert destination.read_bytes() == b'{"ok": true}\n'
-
-
-def test_unset_flag_keeps_the_openhands_child(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    _tracking(tmp_path)
-    caplog.set_level(logging.DEBUG)
-    workspace = tmp_path / "workspace"
-    db_path = tmp_path / "private" / "product.db"
-    script = tmp_path / "runner.py"
-    script.write_text(_OPENHANDS_RUNNER, encoding="utf-8")
-    with HermesApi() as api:
-        options = OptimizationSettings(
-            min_dev_questions=0,
-            min_new_dev_questions=0,
-            min_holdout_questions=0,
-            timeout_seconds=30,
-            interpreter=Path(sys.executable),
-            model="openai/gpt-6-luna-pro",
-            base_url="https://openrouter.ai/api/v1",
-            api_key="test-key",
-            runner_script=script,
-            source_env={"PATH": "/usr/bin:/bin"},
-            hermes_base_url=api.base_url,
-            hermes_api_key=api.api_key,
-        )
-        assert options.agent is OptimizationAgent.OPENHANDS
-        run = start_optimization_run(db_path, workspace, trigger="manual", options=options)
-        wait_for_run(run.run_id)
-        assert api.calls == []
-    finished = get_run(db_path, run.run_id)
-    assert finished.status == "succeeded"
-    assert finished.reason == "No change."
-    assert finished.hermes_run_id is None
-    job = workspace / "runs" / run.run_id / "job.json"
-    assert job.is_file()
-    assert "holdout" not in job.read_text(encoding="utf-8").lower()
-    assert API_KEY not in caplog.text
 
 
 def test_hermes_null_candidate_succeeds_from_the_downloaded_file(
@@ -604,34 +515,21 @@ def test_a_bundle_that_contains_holdout_text_is_not_submitted(tmp_path: Path) ->
     assert not any(call.path.startswith("/v1/runs") for call in calls)
 
 
-def test_admin_status_text_follows_the_flag(tmp_path: Path, identity: IdentityIssuer) -> None:
+def test_admin_status_text_reports_hermes_availability(
+    tmp_path: Path, identity: IdentityIssuer
+) -> None:
     _tracking(tmp_path)
     common = {
         "PRODUCT_DATA_DIR": tmp_path / "private",
         "WORKSPACE_DIR": tmp_path / "workspace",
         "WEB_ORIGIN": "http://localhost:8080",
         "MLFLOW_TRACKING_URI": f"sqlite:///{tmp_path / 'mlflow.db'}",
-        "OPENHANDS_PYTHON": None,
         "OPTIMIZATION_MIN_DEV_QUESTIONS": 0,
         "OPTIMIZATION_MIN_NEW_DEV_QUESTIONS": 0,
         "OPTIMIZATION_MIN_HOLDOUT_QUESTIONS": 0,
     }
-    open_settings = Settings(**common, OPTIMIZATION_AGENT="openhands", API_SERVER_KEY=None)
-    with TestClient(create_app(open_settings, token_verifier=identity.verifier())) as client:
-        identity.sign_in(client, "admin@example.com", "admin")
-        status = client.get("/admin/optimization")
-        assert status.status_code == 200, status.text
-        body = status.json()
-        assert body["agent"] == "openhands"
-        assert body["agent_available"] is False
-        assert body["agent_unavailable_message"] == OPENHANDS_STATUS_MESSAGE
-        started = client.post("/admin/optimization/run", json={})
-        assert started.status_code == 503
-        assert started.json()["detail"] == AGENT_UNAVAILABLE_MESSAGE
-
     hermes_settings = Settings(
         **common,
-        OPTIMIZATION_AGENT="hermes",
         HERMES_BASE_URL="http://127.0.0.1:1",
         API_SERVER_KEY=None,
     )
@@ -650,7 +548,6 @@ def test_admin_status_text_follows_the_flag(tmp_path: Path, identity: IdentityIs
     with HermesApi() as api:
         live = Settings(
             **common,
-            OPTIMIZATION_AGENT="hermes",
             HERMES_BASE_URL=api.base_url,
             API_SERVER_KEY=api.api_key,
         )
@@ -675,7 +572,6 @@ def test_startup_still_fails_a_running_row_when_the_flag_is_hermes(
         WORKSPACE_DIR=tmp_path / "workspace",
         WEB_ORIGIN="http://localhost:8080",
         MLFLOW_TRACKING_URI=f"sqlite:///{tmp_path / 'mlflow.db'}",
-        OPENHANDS_PYTHON=None,
         OPTIMIZATION_AGENT="hermes",
         API_SERVER_KEY=None,
     )
@@ -715,7 +611,6 @@ def _hermes_settings(tmp_path: Path, api: HermesApi, **overrides: object) -> Set
         "WORKSPACE_DIR": tmp_path / "workspace",
         "WEB_ORIGIN": "http://localhost:8080",
         "MLFLOW_TRACKING_URI": f"sqlite:///{tmp_path / 'mlflow.db'}",
-        "OPENHANDS_PYTHON": None,
         "OPTIMIZATION_AGENT": "hermes",
         "HERMES_BASE_URL": api.base_url,
         "API_SERVER_KEY": api.api_key,
@@ -1041,7 +936,6 @@ def test_startup_resolves_unknown_and_an_unreachable_hermes_stays_running(
         WORKSPACE_DIR=tmp_path / "dark-workspace",
         WEB_ORIGIN="http://localhost:8080",
         MLFLOW_TRACKING_URI=f"sqlite:///{tmp_path / 'mlflow.db'}",
-        OPENHANDS_PYTHON=None,
         OPTIMIZATION_AGENT="hermes",
         HERMES_BASE_URL="http://127.0.0.1:1",
         API_SERVER_KEY=API_KEY,

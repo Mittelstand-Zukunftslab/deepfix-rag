@@ -1184,11 +1184,8 @@
         "description": "Schedule, champion diff, and the 20 most recent runs.",
         "properties": {
           "agent": {
-            "default": "openhands",
-            "enum": [
-              "openhands",
-              "hermes"
-            ],
+            "const": "hermes",
+            "default": "hermes",
             "title": "Agent",
             "type": "string"
           },

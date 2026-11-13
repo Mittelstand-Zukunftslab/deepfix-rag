@@ -54,7 +54,6 @@ def test_a_due_schedule_starts_the_same_job_and_a_pause_stops_it(tmp_path: Path)
         PRODUCT_DATA_DIR=tmp_path / "private",
         WORKSPACE_DIR=tmp_path / "workspace",
         MLFLOW_TRACKING_URI=f"sqlite:///{tmp_path / 'mlflow.db'}",
-        OPENHANDS_PYTHON=None,
     )
     scheduler = OptimizationScheduler(
         settings.product_db_path,
@@ -87,7 +86,6 @@ def test_schedule_edits_survive_a_restart_and_reject_a_bad_cron(
         WORKSPACE_DIR=tmp_path / "workspace",
         WEB_ORIGIN="http://localhost:8080",
         MLFLOW_TRACKING_URI=f"sqlite:///{tmp_path / 'mlflow.db'}",
-        OPENHANDS_PYTHON=None,
     )
     with TestClient(create_app(settings, token_verifier=identity.verifier())) as client:
         identity.sign_in(client, "ada@example.com")

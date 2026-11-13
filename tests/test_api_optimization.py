@@ -30,7 +30,6 @@ def settings(tmp_path) -> Settings:
         WORKSPACE_DIR=tmp_path / "workspace",
         WEB_ORIGIN="http://localhost:8080",
         MLFLOW_TRACKING_URI=f"sqlite:///{tmp_path / 'mlflow.db'}",
-        OPENHANDS_PYTHON=None,
     )
 
 

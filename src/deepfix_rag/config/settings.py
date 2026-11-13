@@ -100,23 +100,20 @@ class Settings(BaseSettings):
     WEB_ORIGIN: str = "http://localhost:8080"
     PRODUCT_DATA_DIR: Path = Path.home() / ".deepfix" / "product"
     WORKSPACE_DIR: Path = Path.home() / ".deepfix" / "workspace"
-    OH_SESSION_HOST: str | None = None
     # Identity tokens come from Better Auth in the web app. Issuer and audience default to
     # WEB_ORIGIN, which must match BETTER_AUTH_URL there.
     AUTH_JWKS_URL: str | None = None
     AUTH_ISSUER: str | None = None
     AUTH_AUDIENCE: str | None = None
     MAX_DISPLAYED_HITS: int = 10
-    # OpenRouter credentials for the OpenHands child. The key is never the product LLM key.
-    DEEPFIX_LLM_API_KEY: str | None = None
-    DEEPFIX_LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
-    DEEPFIX_LLM_MODEL_NAME: str = ""
-    # Omit sampling params the provider rejects. Claude Haiku 5.5 allows only temperature=1.
+    # Omit sampling params the provider rejects. Claude Haiku 5.5 allows only
+    # temperature=1. Read by llm.py for every LiteLLM completion, not only the
+    # optimization agent, so it stays after OpenHands was removed.
     DEEPFIX_LLM_DROP_PARAMS: bool = True
-    OPENHANDS_PYTHON: str | None = None
-    # openhands keeps the child process. hermes submits to HERMES_BASE_URL.
-    # The default stays openhands until a Hermes run is proven.
-    OPTIMIZATION_AGENT: Literal["openhands", "hermes"] = "openhands"
+    # Hermes is the only optimization agent. The key stays so a stale
+    # OPTIMIZATION_AGENT=openhands in a server env file fails at startup naming
+    # the variable rather than being silently ignored.
+    OPTIMIZATION_AGENT: Literal["hermes"] = "hermes"
     HERMES_BASE_URL: str = "http://hermes:8642"
     # Bearer token for the Hermes API. Empty leaves the hermes agent unavailable.
     API_SERVER_KEY: str | None = None
@@ -129,7 +126,6 @@ class Settings(BaseSettings):
     # No non-keepalive Hermes event and no fresh output/heartbeat.json for this
     # many minutes fails the row. SSE ": keepalive" comments do not count.
     OPTIMIZATION_HEARTBEAT_STALL_MINUTES: float = 5
-    OPTIMIZATION_GOAL_ROUNDS: int = 3
     # Seconds for `deepfix index`. 0 disables the workflow timeout. The class
     # default of 600 killed a 2,000-document index. Query workflows stay at 600.
     DEEPFIX_INDEX_TIMEOUT_SECONDS: float = 0

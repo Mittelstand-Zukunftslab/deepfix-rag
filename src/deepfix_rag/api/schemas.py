@@ -197,7 +197,7 @@ class OptimizationStatusResponse(ApiModel):
     timezone: str
     enabled: bool
     next_run_at: str | None = None
-    agent: Literal["openhands", "hermes"] = "openhands"
+    agent: Literal["hermes"] = "hermes"
     agent_available: bool
     agent_unavailable_message: str | None = None
     champion_config_path: str

@@ -654,7 +654,7 @@ export type OptimizationStatusResponse = {
     /**
      * Agent
      */
-    agent: 'openhands' | 'hermes';
+    agent: 'hermes';
     /**
      * Agent Available
      */

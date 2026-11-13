@@ -3,14 +3,12 @@
 #   MEMGRAPH_USERNAME, MEMGRAPH_PASSWORD
 #   FALKORDB_PASSWORD
 #   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
-#   OH_SESSION_API_KEY, OH_SECRET_KEY, OPENHANDS_PORT
 #   API_SERVER_KEY, OPENROUTER_API_KEY, HERMES_CHAT_API_SERVER_KEY
 #   OPTIMIZATION_AGENT, HERMES_BASE_URL
 #   HERMES_S3_ACCESS_KEY_ID, HERMES_S3_SECRET_ACCESS_KEY
 #   MLFLOW_BACKEND_STORE_URI,
 #   MLFLOW_SERVER_ALLOWED_HOSTS, MLFLOW_SERVER_CORS_ALLOWED_ORIGINS
-#   OPENHANDS_PYTHON, MLFLOW_EXPERIMENT_ID, MLFLOW_DEV_RAG_EXPERIMENT
-#   DEEPFIX_LLM_API_KEY, DEEPFIX_LLM_BASE_URL, DEEPFIX_LLM_MODEL_NAME, DEEPFIX_LLM_DROP_PARAMS, etc.
+#   MLFLOW_EXPERIMENT_ID, MLFLOW_DEV_RAG_EXPERIMENT
 #   DEEPFIX_SERVER_DATABASE_URL
 #   BETTER_AUTH_SECRET, WEB_ORIGIN, API_INTERNAL_URL, AUTH_JWKS_URL, ALLOWED_EMAIL_DOMAINS
 #   LLM_API_KEY, EMBEDDING_API_KEY, COHERE_API_KEY
@@ -23,8 +21,7 @@
 include:
   - compose.hermes.yml
   - compose.graphdb.yml
-  - compose.openhands.yml
-  
+
 services:
 
   rustfs:
@@ -65,8 +62,8 @@ services:
       MLFLOW_BACKEND_STORE_URI: sqlite:////opt/mlflow/data/mlflow.db
       # MLflow 3.x matches the Host header exactly (hostname and hostname:port
       # are different entries). Setting this replaces the localhost defaults.
-      MLFLOW_SERVER_ALLOWED_HOSTS: "${MLFLOW_SERVER_ALLOWED_HOSTS:-hermes,openhands,localhost,diagnostic-agent,mlflow,mlflow:5000,localhost:5000,127.0.0.1,127.0.0.1:5000,backend-api,deepfix-mlflow.mittelstand-zukunftslab.de}"
-      MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: "${MLFLOW_SERVER_CORS_ALLOWED_ORIGINS:-http://hermes,http://openhands,http://localhost,http://diagnostic-agent,http://mlflow:5000,http://backend-api:8000,https://deepfix-mlflow.mittelstand-zukunftslab.de}"
+      MLFLOW_SERVER_ALLOWED_HOSTS: "${MLFLOW_SERVER_ALLOWED_HOSTS:-hermes,localhost,diagnostic-agent,mlflow,mlflow:5000,localhost:5000,127.0.0.1,127.0.0.1:5000,backend-api,deepfix-mlflow.mittelstand-zukunftslab.de}"
+      MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: "${MLFLOW_SERVER_CORS_ALLOWED_ORIGINS:-http://hermes,http://localhost,http://diagnostic-agent,http://mlflow:5000,http://backend-api:8000,https://deepfix-mlflow.mittelstand-zukunftslab.de}"
     mem_limit: 2G
     command: mlflow server --host 0.0.0.0 --port 5000 --workers 1 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/
     healthcheck:
@@ -163,7 +160,6 @@ services:
       MLFLOW_EXPERIMENT_ID: ${MLFLOW_EXPERIMENT_ID:-}
       MLFLOW_DEV_RAG_EXPERIMENT: ${MLFLOW_DEV_RAG_EXPERIMENT:-dev_rag_experiment}
       DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-http://diagnostic-agent:8844}
-      OH_SESSION_HOST: ${OH_SESSION_HOST:-http://openhands:8000}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
       # Model ids come from .env. There is no code default: `deepfix eval` and
@@ -180,7 +176,6 @@ services:
       DEEPFIX_LLM_API_KEY: ${DEEPFIX_LLM_API_KEY:-}
       DEEPFIX_LLM_BASE_URL: ${DEEPFIX_LLM_BASE_URL:-https://openrouter.ai/api/v1}
       DEEPFIX_LLM_MODEL_NAME: ${DEEPFIX_LLM_MODEL_NAME:-}
-      OPENHANDS_PYTHON: ${OPENHANDS_PYTHON:-/opt/openhands-agent/.venv/bin/python}
       OPTIMIZATION_MIN_DEV_QUESTIONS: ${OPTIMIZATION_MIN_DEV_QUESTIONS:-50}
       OPTIMIZATION_MIN_NEW_DEV_QUESTIONS: ${OPTIMIZATION_MIN_NEW_DEV_QUESTIONS:-10}
       OPTIMIZATION_MIN_HOLDOUT_QUESTIONS: ${OPTIMIZATION_MIN_HOLDOUT_QUESTIONS:-15}
@@ -188,8 +183,7 @@ services:
       OPTIMIZATION_SECONDARY_TOLERANCE: ${OPTIMIZATION_SECONDARY_TOLERANCE:--0.01}
       OPTIMIZATION_RUN_TIMEOUT_HOURS: ${OPTIMIZATION_RUN_TIMEOUT_HOURS:-3}
       OPTIMIZATION_HEARTBEAT_STALL_MINUTES: ${OPTIMIZATION_HEARTBEAT_STALL_MINUTES:-5}
-      OPTIMIZATION_GOAL_ROUNDS: ${OPTIMIZATION_GOAL_ROUNDS:-3}
-      OPTIMIZATION_AGENT: ${OPTIMIZATION_AGENT:-openhands}
+      OPTIMIZATION_AGENT: ${OPTIMIZATION_AGENT:-hermes}
       HERMES_BASE_URL: ${HERMES_BASE_URL:-http://hermes:8642}
       # The API posts this id on POST /v1/runs. It must match the sandbox's model.
       HERMES_MODEL: ${HERMES_MODEL:-}
@@ -225,7 +219,6 @@ volumes:
   falkordb_data:
   rustfs_data:
   hermes_data:
-  openhands_data:
   mlflow_artifacts:
   deepfix_tool_data:
   deepfix_server_data:
