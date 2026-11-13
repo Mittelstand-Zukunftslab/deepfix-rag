@@ -371,7 +371,16 @@ deepfix export --config <best_config.yaml> --output <dist_path> [--include-meta]
 Execute multi-paradigm hyperparameter optimization study using Optuna.
 ```bash
 deepfix hpo --config <hpo_config.yaml> [--n-trials <N>] [--storage-uri <uri>] [--paradigm <dense|hybrid|graph>] [--output <best.yaml>] [--json]
+deepfix hpo --config configs/hpo_retrieval_small.yaml --retrieval-only --limit 20 --seed 0 \
+  --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db \
+  --output <run_dir>/candidate.yaml --run-dir <run_dir> --json
 ```
+
+`--seed` draws a deterministic sample of `--limit` rows for every trial (the same semantics as `deepfix eval --seed`). `--timeout` caps the study wall clock. `--run-dir` keeps `hpo_trials.json` and the best-so-far YAML fresh after every trial, so a timeout or a crash still leaves a usable candidate. When the base config names an `s3://` index, HPO copies it once into `<run_dir>/idx-cache` (or the `--index-dir` you pass) and every trial reads that local copy.
+
+A trial where every case errored is recorded `FAIL` rather than scored `0.0`, so a broken lever cannot look like a worse one. If no trial completes, the command exits 2 with the first trial's error.
+
+`configs/hpo_retrieval_small.yaml` is the shipped query-time space: rerank on/off with `top_n` 5 or 10, `top_k` 10/20/50, and the three fusion modes that read their weights. It excludes `bm25_k1`, `bm25_b`, query expansion above 1, and every chunking key. `.agents/skills/hpo-search/SKILL.md` is the procedure a Hermes round follows with it.
 ---
 ## Configuration Schema
 Configurations are validated against Pydantic models in `src/deepfix_rag/config/schema.py`:
