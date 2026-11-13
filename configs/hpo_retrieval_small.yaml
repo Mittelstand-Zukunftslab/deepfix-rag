@@ -16,8 +16,10 @@ version: "1.0"
 base_config: configs/champion.yaml
 
 study_name: hermes_hpo_retrieval_small
-# The agent overrides both of these with a run-directory path and a budget.
-storage_uri: "sqlite:///:memory:"
+# The study is file-backed so a restart resumes with load_if_exists. The agent
+# overrides this with sqlite:///<run_dir>/hpo.db; a local manual run that passes
+# --run-dir gets <run_dir>/hpo.db too.
+storage_uri: "sqlite:///hpo.db"
 n_trials: 12
 tune_chunking: false
 retrieval_only: true

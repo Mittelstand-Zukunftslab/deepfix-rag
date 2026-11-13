@@ -22,6 +22,28 @@ from deepfix_rag.config.schema import RetrievalBackend
 from deepfix_rag.hpo import TRIALS_ARTIFACT_NAME, HyperparameterOpt
 
 
+def _resolve_storage_uri(storage_uri: str, run_dir: Path | None) -> str:
+    """Keep the study next to the run's other artifacts when it is relative.
+
+    ``sqlite:///hpo.db`` means "in the current directory" to SQLAlchemy. An
+    agent round must not drop a database into the workspace root, and a
+    ``:memory:`` study cannot be resumed. Both land under ``<run_dir>`` when a
+    run directory is known; otherwise the value is left alone.
+    """
+    if run_dir is None:
+        return storage_uri
+    if storage_uri in ("sqlite://", "sqlite:///:memory:") or not storage_uri.startswith(
+        "sqlite:///"
+    ):
+        return storage_uri
+    relative = storage_uri[len("sqlite:///") :]
+    if not relative or Path(relative).is_absolute():
+        return storage_uri
+    resolved = Path(run_dir) / relative
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{resolved}"
+
+
 def hpo_cmd(
     config: Path = typer.Option(
         Path("configs/hpo.yaml"),
@@ -171,6 +193,7 @@ def hpo_cmd(
         effective_run_dir = Path(effective_output).resolve().parent
     effective_seed = seed if seed is not None else hpo_config.seed
     effective_timeout = timeout if timeout is not None else hpo_config.timeout
+    effective_storage_uri = _resolve_storage_uri(effective_storage_uri, effective_run_dir)
 
     overrides: dict[str, Any] = {}
     if paradigm is not None:

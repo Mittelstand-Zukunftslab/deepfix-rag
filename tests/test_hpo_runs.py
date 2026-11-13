@@ -531,3 +531,30 @@ def test_hpo_json_stdout_is_one_json_document(
     payload = json.loads(result.stdout)
     assert payload["status"] == "error"
     assert "View run" not in result.stdout
+
+
+@pytest.mark.unit
+def test_a_relative_storage_uri_lands_in_the_run_directory() -> None:
+    """The shipped `sqlite:///hpo.db` must not drop a database in the workspace root."""
+    from deepfix_rag.cli.hpo import _resolve_storage_uri
+
+    run_dir = Path("/tmp/runs/abc")
+    assert _resolve_storage_uri("sqlite:///hpo.db", run_dir) == "sqlite:////tmp/runs/abc/hpo.db"
+    assert _resolve_storage_uri("sqlite:///hpo.db", None) == "sqlite:///hpo.db"
+    # An absolute file, an in-memory study and a non-sqlite URI are left alone.
+    assert (
+        _resolve_storage_uri("sqlite:////var/tmp/hpo.db", run_dir) == "sqlite:////var/tmp/hpo.db"
+    )
+    assert _resolve_storage_uri("sqlite:///:memory:", run_dir) == "sqlite:///:memory:"
+    assert _resolve_storage_uri("postgresql://host/db", run_dir) == "postgresql://host/db"
+
+
+def test_the_shipped_space_is_file_backed() -> None:
+    """A study that cannot resume loses every trial on a restart."""
+    from deepfix_rag.config.hpo import load_hpo_config
+
+    config = load_hpo_config(
+        Path(__file__).resolve().parents[1] / "configs" / "hpo_retrieval_small.yaml"
+    )
+    assert config.storage_uri != "sqlite:///:memory:"
+    assert config.storage_uri.startswith("sqlite:///")
