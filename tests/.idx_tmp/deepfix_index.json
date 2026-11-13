@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.1",
+  "signature": {
+    "chunking": {
+      "strategy": "sentence",
+      "size": 1024,
+      "overlap": 64,
+      "semantic_buffer_size": 1,
+      "semantic_breakpoint_percentile": 95,
+      "hierarchical_chunk_sizes": null
+    },
+    "backend": "hybrid",
+    "vector_store": "lancedb",
+    "bit_width": 4,
+    "embedding_model": "octen-embedding-8b",
+    "corpus_sha256": "5628c4e966db3161a5af583dd784eb69629cfdf0a44223d2632b0037a4acc28b",
+    "graph_store": "none",
+    "graph_extraction_schema": "default",
+    "graph_max_paths_per_chunk": 5
+  },
+  "signature_hash": "dbe617d3285aef595c1b8c7e57b4ded06b86b7f88a8643d8f87827fef21fdfc4",
+  "embedding_model": "octen-embedding-8b",
+  "corpus_sha256": "5628c4e966db3161a5af583dd784eb69629cfdf0a44223d2632b0037a4acc28b",
+  "built_at": "2026-11-13T06:24:17.934962+00:00"
+}

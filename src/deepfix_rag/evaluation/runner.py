@@ -37,6 +37,7 @@ from deepfix_rag.config.schema import (
     DataLoaderConfig,
     GenerationMetricType,
     RAGConfig,
+    RetrievalBackend,
     RetrievalMetricType,
 )
 from deepfix_rag.config.settings import LOGGER, require_model, settings
@@ -649,6 +650,22 @@ class EvaluationRunner:
             )
         return self.generation_evaluator
 
+    def _require_query_expansion_llm(self) -> None:
+        """Fail before scoring when the config would call an LLM to expand a query.
+
+        Query expansion is the only retrieval-time LLM call. Checking it here
+        keeps every case from erroring one at a time, and keeps the error type
+        ``missing_model`` on the CLI boundary. A retrieval-only run with
+        ``retrieval.query_expansion_num <= 1`` needs no generation model.
+        """
+        expansion_backend = self.config.retrieval.backend in (
+            RetrievalBackend.HYBRID,
+            RetrievalBackend.MIXED,
+        )
+        if not expansion_backend or self.config.retrieval.query_expansion_num <= 1:
+            return
+        require_model("LLM_MODEL")
+
     async def _execute_case(
         self,
         qa: QARecord,
@@ -753,6 +770,7 @@ class EvaluationRunner:
             self.config = apply_mutation(self.config, overrides)
 
         self._ensure_generation_evaluator()
+        self._require_query_expansion_llm()
 
         qa_pairs = resolve_eval_records(
             dataset_path,

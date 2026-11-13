@@ -14,6 +14,7 @@ from llama_index.core import (
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
+from llama_index.core.base.llms.types import LLMMetadata
 from llama_index.core.graph_stores.types import GraphStore, PropertyGraphStore
 from llama_index.core.indices.base import BaseIndex
 from llama_index.core.indices.property_graph import (
@@ -21,6 +22,7 @@ from llama_index.core.indices.property_graph import (
     SchemaLLMPathExtractor,
     VectorContextRetriever,
 )
+from llama_index.core.llms.llm import LLM
 from llama_index.core.node_parser import NodeParser, get_leaf_nodes
 from llama_index.core.response_synthesizers import (
     CompactAndRefine,
@@ -66,7 +68,7 @@ from deepfix_rag.config.schema import (
     RetrievalBackend,
     VectorStoreType,
 )
-from deepfix_rag.config.settings import LOGGER, require_model, settings
+from deepfix_rag.config.settings import LOGGER, ModelNotConfigured, require_model, settings
 from deepfix_rag.data import DataLoader, build_node_parser
 from deepfix_rag.index_manifest import write_index_manifest
 from deepfix_rag.llm import litellm_additional_kwargs, resolve_litellm_model
@@ -122,6 +124,51 @@ class IndexBuildMetadata(BaseModel):
     paradigm: str = Field(..., description="Retrieval backend used for the build.")
     embedding_model: str = Field(..., description="Embedding model identifier.")
     reranker_model: str = Field(..., description="Configured re-ranker model identifier.")
+
+
+class _QueryExpansionUnavailableLLM(LLM):
+    """Stand-in LLM for fusion retrieval that never expands a query.
+
+    ``QueryFusionRetriever`` only needs an LLM when ``num_queries > 1``. Passing
+    ``None`` makes it fall back to ``Settings.llm``, which builds an OpenAI
+    client. This object keeps that fallback away from a retrieval-only run
+    while still failing by name if anything ever asks it for a completion.
+    """
+
+    @property
+    def metadata(self) -> LLMMetadata:
+        return LLMMetadata(model_name="query-expansion-unavailable")
+
+    def _missing(self) -> ModelNotConfigured:
+        return ModelNotConfigured(
+            "LLM_MODEL is not set. Set it in the environment (see example.env) to a model id "
+            "your endpoint serves. It is only needed for query expansion "
+            "(retrieval.query_expansion_num > 1) or answer generation."
+        )
+
+    def chat(self, messages: Any, **kwargs: Any) -> Any:
+        raise self._missing()
+
+    def complete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> Any:
+        raise self._missing()
+
+    def stream_chat(self, messages: Any, **kwargs: Any) -> Any:
+        raise self._missing()
+
+    def stream_complete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> Any:
+        raise self._missing()
+
+    async def achat(self, messages: Any, **kwargs: Any) -> Any:
+        raise self._missing()
+
+    async def acomplete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> Any:
+        raise self._missing()
+
+    async def astream_chat(self, messages: Any, **kwargs: Any) -> Any:
+        raise self._missing()
+
+    async def astream_complete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> Any:
+        raise self._missing()
 
 
 class CustomLiteLLM(LiteLLM):
@@ -537,6 +584,17 @@ class RAGWorkflow(Workflow):
                 f"PropertyGraphIndex or active graph store required for Graph retrieval, got {type(index)}"
             )
 
+    def _query_expansion_llm(self) -> BaseLLM:
+        """LLM for ``QueryFusionRetriever``, which only expands above one query.
+
+        At ``retrieval.query_expansion_num <= 1`` the fusion retriever never
+        calls an LLM, so ``LLM_MODEL`` is not required. Above one it does, and
+        ``_get_llm`` keeps failing by naming ``LLM_MODEL``.
+        """
+        if self.config.retrieval.query_expansion_num <= 1:
+            return _QueryExpansionUnavailableLLM()
+        return self._get_llm()
+
     def _build_retriever(
         self,
         index: BaseIndex,
@@ -562,7 +620,7 @@ class RAGWorkflow(Workflow):
 
             retriever = QueryFusionRetriever(
                 [dense_retriever, bm25_retriever],
-                llm=self._get_llm(),
+                llm=self._query_expansion_llm(),
                 retriever_weights=[
                     self.config.retrieval.dense_weight,
                     self.config.retrieval.bm25_weight,
@@ -596,7 +654,7 @@ class RAGWorkflow(Workflow):
 
             retriever = QueryFusionRetriever(
                 [dense_retriever, bm25_retriever, graph_retriever],
-                llm=self._get_llm(),
+                llm=self._query_expansion_llm(),
                 retriever_weights=[w_dense, w_bm25, w_graph],
                 mode=fusion_mode_enum,
                 num_queries=self.config.retrieval.query_expansion_num,
