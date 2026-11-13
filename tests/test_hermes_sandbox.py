@@ -543,3 +543,39 @@ def test_the_sandbox_writes_non_secret_eval_settings_for_the_shim(tmp_path: Path
 def test_the_eval_env_file_rejects_a_newline_value() -> None:
     with pytest.raises(boot.SandboxBootError, match="LLM_MODEL"):
         boot.eval_env({"LLM_MODEL": "fixture/model\ninjected"})
+
+
+def test_the_skill_write_path_is_writable_and_the_shipped_tree_is_not(tmp_path: Path) -> None:
+    """A post-turn skill review must not write into the read-only shipped skills.
+
+    HPO-007 ended with a PermissionError: the background review fork tried to
+    write under /opt/deepfix/skills, which is root-owned mode 0444 on purpose.
+    """
+    home = tmp_path / "data"
+    skills = _skills(tmp_path)
+    boot.apply_sandbox(home, _env(), skills)
+
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    create_dir = Path(config["skills"]["create_dir"])
+    assert create_dir.is_dir()
+    assert create_dir.is_relative_to(home)
+    assert create_dir != skills
+    # The write target is a real, writable place for the runtime user.
+    assert (create_dir.stat().st_mode & 0o200) == 0o200
+    # The read path is unchanged and still not writable by group or other.
+    assert config["skills"]["external_dirs"] == [str(skills)]
+    for path in (skills, *skills.rglob("*")):
+        assert not (path.stat().st_mode & 0o022)
+
+
+def test_automatic_background_review_is_disabled(tmp_path: Path) -> None:
+    """The review fork is what raised the PermissionError, so it is off."""
+    home = tmp_path / "data"
+    boot.apply_sandbox(home, _env(), _skills(tmp_path))
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert config["auxiliary"]["background_review"]["enabled"] is False
+
+
+def test_skill_create_dir_stays_under_the_hermes_home(tmp_path: Path) -> None:
+    assert boot.skill_create_dir(tmp_path) == tmp_path / boot.SKILL_CREATE_DIRNAME
+    assert boot.skill_create_dir() == boot.DEFAULT_HERMES_HOME / boot.SKILL_CREATE_DIRNAME

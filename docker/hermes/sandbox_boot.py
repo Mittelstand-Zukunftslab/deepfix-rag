@@ -77,6 +77,22 @@ DENY_PATTERNS: tuple[str, ...] = (
 # ships ``agent.max_turns: 500`` (``HERMES_MAX_ITERATIONS``). The gateway
 # bridges this key into that env var for the launch profile.
 AGENT_MAX_TURNS = 40
+# Where the agent may create a new skill. The shipped skills are read-only, so a
+# write has to land somewhere the runtime user owns: under the data volume.
+SKILL_CREATE_DIRNAME = Path("agent-skills")
+
+
+def skill_create_dir(home: Path | None = None) -> Path:
+    """Writable directory for skills the agent creates, under the Hermes home.
+
+    ``/opt/deepfix/skills`` stays root-owned mode 0444 by design, and
+    ``$HERMES_HOME`` (the ``hermes_data`` volume) is the runtime user's. A skill
+    write therefore has a writable target that is not the shipped tree.
+    """
+    base = home if home is not None else DEFAULT_HERMES_HOME
+    return base / SKILL_CREATE_DIRNAME
+
+
 # GET /v1/toolsets on nousresearch/hermes-agent v0.22.7 lists
 # hermes_cli/tools_config.py CONFIGURABLE_TOOLSETS and sets ``enabled`` from
 # platform_toolsets.api_server. Names below are that tag's configurable
@@ -256,6 +272,7 @@ def optimization_config_patch(
     base_url: str = MODEL_BASE_URL,
     provider: str = MODEL_PROVIDER,
     model: str = "",
+    home: Path | None = None,
 ) -> dict[str, Any]:
     """Config keys this sandbox owns. Other seeded keys are left in place."""
     return {
@@ -274,7 +291,18 @@ def optimization_config_patch(
             "deny": list(DENY_PATTERNS),
         },
         "skills": {
+            # Read path: the shipped, root-owned 0444 skills. Never writable.
             "external_dirs": [str(skills_dir)],
+            # Write path for anything the agent creates. Inside the writable
+            # data volume, so a skill write never lands in /opt/deepfix/skills.
+            "create_dir": str(skill_create_dir(home)),
+        },
+        "auxiliary": {
+            # The post-turn skill/memory review writes skill files in a daemon
+            # thread. The shipped skills are read-only on purpose, so that fork
+            # raised PermissionError after every run. Automatic reviews are off;
+            # a user-directed /refine still works.
+            "background_review": {"enabled": False},
         },
         "agent": {
             "max_turns": AGENT_MAX_TURNS,
@@ -286,7 +314,7 @@ def optimization_config_patch(
             "tools": {
                 "sequential_call": TOOL_DEADLINE_SECONDS,
                 "concurrent_batch": TOOL_DEADLINE_SECONDS,
-            }
+            },
         },
     }
 
@@ -773,12 +801,19 @@ def apply_sandbox(
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     _chown_hermes(workspace)
+    # The write target for agent-created skills. It exists and is owned by the
+    # runtime user, so a skill write never reaches the read-only shipped tree.
+    agent_skills = skill_create_dir(home)
+    agent_skills.mkdir(parents=True, exist_ok=True)
+    _chown_hermes(agent_skills)
 
     config_path = home / "config.yaml"
     config = _load_yaml(config_path)
     _merge(
         config,
-        optimization_config_patch(skills_dir, base_url=base_url, provider=provider, model=model),
+        optimization_config_patch(
+            skills_dir, base_url=base_url, provider=provider, model=model, home=home
+        ),
     )
     _dump_yaml(config_path, config)
     _chown_hermes(config_path)
