@@ -27,6 +27,7 @@ from deepfix_rag.hpo import (
     INDEX_CACHE_DIRNAME,
     TRIALS_ARTIFACT_NAME,
     HyperparameterOpt,
+    TrialEvaluationError,
     copy_index_tree,
     index_cache_path,
     is_remote_index_uri,
@@ -312,3 +313,66 @@ def test_hpo_help_lists_seed_timeout_and_the_index_flags(cli_runner: CliRunner) 
     assert result.exit_code == EXIT_SUCCESS
     for flag in ("--seed", "--timeout", "--index-dir", "--run-dir"):
         assert flag in result.stdout, flag
+
+
+class _BrokenRerank:
+    """A rerank model id that resolves but whose endpoint is unreachable.
+
+    Every case errors, which is what a stripped key or a 404 on a rerank base
+    URL looks like. The trial must be FAILED, not scored 0.0.
+    """
+
+    def __init__(self) -> None:
+        from deepfix_rag.config import settings as settings_module
+
+        self.settings = settings_module.settings
+
+    def __enter__(self) -> "_BrokenRerank":
+        self.previous = (
+            self.settings.COHERE_MODEL,
+            self.settings.COHERE_BASE_URL,
+            self.settings.OPENROUTER_API_KEY,
+            self.settings.COHERE_API_KEY,
+        )
+        self.settings.COHERE_MODEL = "cohere/rerank-4-fast"
+        # A closed port: the request fails before any ranking happens.
+        self.settings.COHERE_BASE_URL = "http://127.0.0.1:9/v1"
+        self.settings.OPENROUTER_API_KEY = "sk-or-unreachable-test"
+        self.settings.COHERE_API_KEY = None
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        (
+            self.settings.COHERE_MODEL,
+            self.settings.COHERE_BASE_URL,
+            self.settings.OPENROUTER_API_KEY,
+            self.settings.COHERE_API_KEY,
+        ) = self.previous
+
+
+def test_a_trial_whose_cases_all_errored_fails_instead_of_scoring_zero(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """A broken rerank endpoint never becomes a 0.0 trial that loses to rerank-off."""
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    space = _query_time_space()
+    space.search_space.hybrid.rerank_choices = [True]
+    space.search_space.hybrid.rerank_top_n_choices = [5]
+    space.search_space.hybrid.top_k_choices = [10]
+    space.search_space.hybrid.fusion_modes = [space.search_space.hybrid.fusion_modes[0]]
+
+    with _BrokenRerank(), pytest.raises(TrialEvaluationError, match="no trial completed"):
+        _opt(
+            index_dir,
+            sample_corpus_path,
+            hpo_config=space,
+            seed=0,
+            run_dir=run_dir,
+        ).optimize(n_trials=1, dataset_path=str(sample_qa_path), limit=1)
+
+    rows = json.loads((run_dir / TRIALS_ARTIFACT_NAME).read_text(encoding="utf-8"))
+    assert rows and all(row["state"] == "FAIL" for row in rows)
+    assert "errored" in rows[0]["user_attrs"]["error"]

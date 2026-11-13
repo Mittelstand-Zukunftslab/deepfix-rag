@@ -256,6 +256,22 @@ class HPOResult:
                 mlflow.log_table(data=df, artifact_file="hpo_study_trials.json")
 
 
+class TrialEvaluationError(RuntimeError):
+    """Every case in one HPO trial errored, so the trial measured nothing.
+
+    A retrieval-only trial whose rerank endpoint 404s or whose embedding call
+    fails would otherwise report 0.0 and read as a worse configuration. That
+    silently turns "the lever is broken" into "the lever does not help", which
+    is the failure this feature exists to prevent. The trial is marked FAILED
+    and never becomes the best trial.
+    """
+
+    def __init__(self, trial_number: int, message: str) -> None:
+        self.trial_number = trial_number
+        self.message = message
+        super().__init__(f"trial {trial_number}: {message}")
+
+
 class HyperparameterOpt:
     """Multi-paradigm Hyperparameter Optimization engine using Optuna."""
 
@@ -344,7 +360,12 @@ class HyperparameterOpt:
         run_name: str,
         seed: int | None = None,
     ) -> dict[str, float]:
-        """Execute EvaluationRunner asynchronously for a single trial."""
+        """Execute EvaluationRunner asynchronously for a single trial.
+
+        A trial where every case errored measured nothing, so it raises rather
+        than returning zeros: Optuna then records FAIL, the trial cannot win,
+        and the error text reaches the caller and ``hpo_trials.json``.
+        """
         runner = EvaluationRunner(
             config=trial_config,
             embed_model=self.embed_model,
@@ -358,6 +379,13 @@ class HyperparameterOpt:
             limit=limit,
             seed=seed,
         )
+        if summary.scored and summary.errors >= summary.scored:
+            first_error = summary.error_details[0].get("error") if summary.error_details else None
+            raise TrialEvaluationError(
+                -1,
+                f"all {summary.errors} cases errored, nothing was measured. "
+                f"First error: {first_error}",
+            )
         return summary.metrics
 
     def local_index_for(self) -> Path | None:
@@ -401,6 +429,37 @@ class HyperparameterOpt:
             overrides["retrieval.load_if_exists"] = True
         return overrides
 
+    def _failed_trial_error(self, trial: optuna.Trial, message: str) -> TrialEvaluationError:
+        """Build the error that marks a trial FAILED instead of scoring it 0.0."""
+        return TrialEvaluationError(trial.number, message)
+
+    def _run_trial_evaluation(
+        self,
+        *,
+        trial_config: RAGConfig,
+        dataset_path: Path | str,
+        split: str,
+        limit: int | None,
+        run_name: str,
+    ) -> dict[str, float]:
+        """Run one trial's evaluation in a clean event loop."""
+        kwargs = {
+            "trial_config": trial_config,
+            "dataset_path": dataset_path,
+            "split": split,
+            "limit": limit,
+            "run_name": run_name,
+            "seed": self.seed,
+        }
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                return executor.submit(asyncio.run, self._evaluate_trial(**kwargs)).result()
+        return asyncio.run(self._evaluate_trial(**kwargs))
+
     def _objective(
         self,
         trial: optuna.Trial,
@@ -432,36 +491,18 @@ class HyperparameterOpt:
 
         run_name = f"hpo_{self.study_name}_trial_{trial.number}"
         try:
-            # Run async evaluation in clean loop
             try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None and loop.is_running():
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    metrics = executor.submit(
-                        asyncio.run,
-                        self._evaluate_trial(
-                            trial_config=trial_config,
-                            dataset_path=dataset_path,
-                            split=split,
-                            limit=limit,
-                            run_name=run_name,
-                            seed=self.seed,
-                        ),
-                    ).result()
-            else:
-                metrics = asyncio.run(
-                    self._evaluate_trial(
-                        trial_config=trial_config,
-                        dataset_path=dataset_path,
-                        split=split,
-                        limit=limit,
-                        run_name=run_name,
-                        seed=self.seed,
-                    )
+                metrics = self._run_trial_evaluation(
+                    trial_config=trial_config,
+                    dataset_path=dataset_path,
+                    split=split,
+                    limit=limit,
+                    run_name=run_name,
                 )
+            except TrialEvaluationError as exc:
+                error = TrialEvaluationError(trial.number, exc.message)
+                trial.set_user_attr("error", error.message)
+                raise error from exc
 
             cutoff_k = trial_config.eval.cutoff_k or trial_config.retrieval.top_k
             # 4. Extract scores for target metrics
@@ -562,7 +603,20 @@ class HyperparameterOpt:
             n_trials=remaining,
             timeout=timeout,
             callbacks=[self._record_trial],
+            # A trial whose cases all errored measures nothing. Record it FAILED
+            # and keep sweeping instead of aborting the whole study, then fail
+            # loudly below if no trial ever completed.
+            catch=(TrialEvaluationError,),
         )
+
+        completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
+        if not completed:
+            failures = [t for t in study.trials if t.state == TrialState.FAIL]
+            reason = failures[0].user_attrs.get("error") if failures else None
+            raise TrialEvaluationError(
+                0,
+                "no trial completed, so nothing was measured" + (f". {reason}" if reason else "."),
+            )
 
         # Build Pareto trials and configurations
         pareto_trials: list[FrozenTrial] = []
@@ -601,7 +655,7 @@ class HyperparameterOpt:
             idx = pareto_trials.index(best_trial)
             best_config = pareto_configs[idx]
 
-        completed = len([t for t in study.trials if t.state == TrialState.COMPLETE])
+        completed_count = len([t for t in study.trials if t.state == TrialState.COMPLETE])
         trials_path: Path | None = None
         if self.run_dir is not None:
             trials_path = _write_trial_rows(self.run_dir, self.metric_names, study.trials)
@@ -618,6 +672,6 @@ class HyperparameterOpt:
             trials_path=trials_path,
             index_dir=self.local_index_dir,
             index_cache_source=self.index_copy_source,
-            # A timeout can stop the study before the requested trial count.
-            stopped_early=timeout is not None and completed < target_n_trials,
+            # A timeout, or a trial that failed, can stop the study short.
+            stopped_early=completed_count < target_n_trials,
         )
