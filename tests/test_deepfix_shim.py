@@ -104,32 +104,114 @@ def test_shim_heartbeats_forwards_stdio_and_redacts_the_container_log(tmp_path: 
     assert SECRET not in uploaded.read_text(encoding="utf-8")
 
 
-def test_marker_file_supplies_the_run_id_when_argv_has_none(tmp_path: Path) -> None:
+def _run_env(tmp_path: Path, child: Path, **extra: str) -> dict[str, str]:
+    """The environment a run sees, with no inherited run id unless asked for."""
+    env = _env(tmp_path, child)
+    env.pop("DEEPFIX_RUN_ID", None)
+    env.update(extra)
+    return env
+
+
+def test_help_does_not_heartbeat_or_borrow_a_previous_runs_marker(tmp_path: Path) -> None:
+    """HPO-007 printed the previous run id for `deepfix hpo --help`.
+
+    `deepfix-sync download` leaves .deepfix-run-id at the work root, so a marker
+    lookup from the workspace root returned the run before this one.
+    """
     child = tmp_path / "deepfix-real"
     _child(child, sleep="0")
     work = tmp_path / "work"
-    work.mkdir()
-    (work / ".deepfix-run-id").write_text("run-marker\n", encoding="utf-8")
+    runs = work / "runs"
+    runs.mkdir(parents=True)
+    (work / ".deepfix-run-id").write_text("0d825ba73fcb43ae8e8936607c4a6a24\n", encoding="utf-8")
+
     completed = subprocess.run(
-        [sys.executable, "-m", "deepfix_rag.deepfix_shim", "--help"],
-        env=_env(tmp_path, child, DEEPFIX_HEARTBEAT_INTERVAL_SECONDS="30"),
+        [sys.executable, "-m", "deepfix_rag.deepfix_shim", "hpo", "--help"],
+        env=_run_env(tmp_path, child, DEEPFIX_HEARTBEAT_INTERVAL_SECONDS="0.2"),
         cwd=work,
         capture_output=True,
         timeout=60,
         check=False,
     )
+
     assert completed.returncode == 3
-    uploaded = (
-        tmp_path
-        / "objects"
-        / BUCKET
-        / "optimization"
-        / "runs"
-        / "run-marker"
-        / "output"
-        / "heartbeat.json"
+    assert b"deepfix-heartbeat" not in completed.stderr
+    assert b"0d825ba73fcb43ae8e8936607c4a6a24" not in completed.stderr
+    # Nothing was written locally or uploaded for a run that is not active.
+    assert not (work / "runs").exists() or not any((work / "runs").iterdir())
+    assert not (tmp_path / "objects").exists()
+
+
+def test_a_marker_gives_the_run_id_only_inside_that_run(tmp_path: Path) -> None:
+    """A command that names no run still heartbeats when it is inside one."""
+    child = tmp_path / "deepfix-real"
+    _child(child, sleep="0.6")
+    work = tmp_path / "work"
+    run_dir = work / "runs" / "run-inside"
+    (run_dir / "input").mkdir(parents=True)
+    (work / ".deepfix-run-id").write_text("run-inside\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "deepfix_rag.deepfix_shim", "eval"],
+        env=_run_env(tmp_path, child, DEEPFIX_HEARTBEAT_INTERVAL_SECONDS="0.15"),
+        cwd=run_dir / "input",
+        capture_output=True,
+        timeout=60,
+        check=False,
     )
-    assert json.loads(uploaded.read_text(encoding="utf-8"))["run_id"] == "run-marker"
+
+    assert completed.returncode == 3
+    assert b"deepfix-heartbeat run_id=run-inside" in completed.stderr
+    local = run_dir / "output" / "heartbeat.json"
+    assert json.loads(local.read_text(encoding="utf-8"))["run_id"] == "run-inside"
+
+
+def test_a_marker_at_the_work_root_is_not_a_run_for_a_workspace_cwd(tmp_path: Path) -> None:
+    """Standing in the workspace root is not standing in a run."""
+    child = tmp_path / "deepfix-real"
+    _child(child, sleep="0")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".deepfix-run-id").write_text("stale-run\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "deepfix_rag.deepfix_shim", "eval"],
+        env=_run_env(tmp_path, child, DEEPFIX_HEARTBEAT_INTERVAL_SECONDS="30"),
+        cwd=work,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 3
+    assert b"deepfix-heartbeat" not in completed.stderr
+    assert b"stale-run" not in completed.stderr
+
+
+def test_the_current_run_env_wins_over_a_stale_marker(tmp_path: Path) -> None:
+    """DEEPFIX_RUN_ID from the launcher is the run; a marker never overrides it."""
+    child = tmp_path / "deepfix-real"
+    _child(child, sleep="0.6")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".deepfix-run-id").write_text("stale-run\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "deepfix_rag.deepfix_shim", "eval"],
+        env=_run_env(
+            tmp_path,
+            child,
+            DEEPFIX_RUN_ID="current-run",
+            DEEPFIX_HEARTBEAT_INTERVAL_SECONDS="0.15",
+        ),
+        cwd=work,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert b"deepfix-heartbeat run_id=current-run" in completed.stderr
+    assert b"stale-run" not in completed.stderr
 
 
 def test_a_direct_interpreter_call_does_not_write_a_heartbeat(tmp_path: Path) -> None:

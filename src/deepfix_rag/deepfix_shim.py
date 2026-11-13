@@ -167,8 +167,33 @@ def main(argv: list[str] | None = None) -> int:
     return return_code
 
 
+# Flags that print help or a version and never touch the run. They carry no run
+# context, so the shim must not publish a heartbeat for them.
+_NO_RUN_FLAGS = frozenset({"--help", "-h", "--version", "-V"})
+
+
+def is_run_less_invocation(argv: list[str]) -> bool:
+    """True for a command that cannot belong to a run, such as ``--help``."""
+    return any(argument in _NO_RUN_FLAGS for argument in argv)
+
+
 def resolve_run_id(argv: list[str], env: Mapping[str, str], cwd: Path) -> str | None:
-    """The DeepFix run id this command belongs to, or None."""
+    """The DeepFix run id this command belongs to, or None.
+
+    Only the *current* run context supplies an id: the environment the launcher
+    set, a ``--run-id`` value, or a ``runs/<id>/`` path in the arguments. A
+    marker file is consulted last, and only when the command names a run
+    directory it is standing in.
+
+    The marker is deliberately not a general fallback. ``deepfix-sync download``
+    leaves ``.deepfix-run-id`` at the work root, so a marker lookup from the
+    workspace root returned the *previous* run's id: HPO-007 printed
+    ``deepfix-heartbeat run_id=0d825ba7...`` for a plain ``deepfix hpo --help``
+    before any of that run's work had started. A help or version call has no run
+    at all, so it gets None and the shim skips the heartbeat.
+    """
+    if is_run_less_invocation(argv):
+        return None
     explicit = env.get("DEEPFIX_RUN_ID", "").strip()
     if _is_run_id(explicit):
         return explicit
@@ -181,13 +206,22 @@ def resolve_run_id(argv: list[str], env: Mapping[str, str], cwd: Path) -> str | 
         match = pattern.search(joined)
         if match and _is_run_id(match.group(1)):
             return match.group(1)
+    # A command that names no run may still be inside one: only a marker whose
+    # run directory the working directory is actually inside counts.
     marked = _marker_run_id(cwd)
-    if marked:
+    if marked and _run_scoped(cwd, marked):
         return marked
-    raw_root = env.get("DEEPFIX_WORK_ROOT", "").strip()
-    if raw_root:
-        return _marker_run_id(Path(raw_root))
-    return _marker_run_id(CONTAINER_WORK_ROOT)
+    return None
+
+
+def _run_scoped(cwd: Path, marker_run: str) -> bool:
+    """True when ``cwd`` is that run's directory or below it."""
+    parts = cwd.resolve().parts
+    try:
+        index = parts.index("runs")
+    except ValueError:
+        return False
+    return index + 1 < len(parts) and parts[index + 1] == marker_run
 
 
 def publish_heartbeat(
@@ -238,10 +272,18 @@ def _emit_heartbeat(
     mirror: object,
     secrets: tuple[bytes, ...],
 ) -> None:
-    if run_id:
-        publish_heartbeat(run_id=run_id, pid=pid, elapsed_s=elapsed_s)
+    """Publish and log one heartbeat, or nothing when no run is active.
+
+    A command with no run context (``--help``, a version print, anything
+    outside a run directory) must not write ``output/heartbeat.json`` and must
+    not print a ``deepfix-heartbeat`` line: an empty or borrowed run id there
+    is worse than silence, because the API reads that line.
+    """
+    if not run_id:
+        return
+    publish_heartbeat(run_id=run_id, pid=pid, elapsed_s=elapsed_s)
     line = (
-        f"deepfix-heartbeat run_id={run_id or ''} pid={pid} elapsed_s={elapsed_s} argv0={_ARGV0}\n"
+        f"deepfix-heartbeat run_id={run_id} pid={pid} elapsed_s={elapsed_s} argv0={_ARGV0}\n"
     ).encode()
     _write_stderr(line)
     _write_mirror(mirror, line, secrets)
