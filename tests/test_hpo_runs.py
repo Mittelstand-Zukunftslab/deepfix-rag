@@ -28,10 +28,9 @@ from deepfix_rag.hpo import (
     TRIALS_ARTIFACT_NAME,
     HyperparameterOpt,
     TrialEvaluationError,
-    copy_index_tree,
     index_cache_path,
-    is_remote_index_uri,
 )
+from deepfix_rag.index_cache import copy_index_tree, is_remote_index_uri
 from deepfix_rag.main import app
 from deepfix_rag.pipeline import RAGWorkflow
 
@@ -750,3 +749,141 @@ def test_n_trials_counts_evaluated_trials_not_attempts(
     completed = [t for t in result.study.trials if t.state.name == "COMPLETE"]
     assert len(completed) == 3
     assert result.to_dict()["completed_trials"] == 3
+
+
+def test_canonical_key_ignores_parameters_the_config_does_not_read() -> None:
+    """Two configs that rank identically must share a key."""
+    from deepfix_rag.hpo import canonical_config_key
+
+    base = RAGConfig()
+    base.retrieval.fusion_mode = FusionMode.RECIPROCAL_RANK
+    base.retrieval.dense_weight = 0.3
+    base.rerank.enabled = False
+    base.rerank.top_n = 5
+
+    other = base.model_copy(deep=True)
+    # reciprocal_rerank ignores the weights and rerank is off, so top_n is unused.
+    other.retrieval.dense_weight = 0.7
+    other.rerank.top_n = 10
+    assert canonical_config_key(base) == canonical_config_key(other)
+
+    # Under a fusion mode that reads them, the weight does matter.
+    scoring = base.model_copy(deep=True)
+    scoring.retrieval.fusion_mode = FusionMode.RELATIVE_SCORE
+    scoring_weighted = scoring.model_copy(deep=True)
+    scoring_weighted.retrieval.dense_weight = 0.7
+    assert canonical_config_key(scoring) != canonical_config_key(scoring_weighted)
+
+    # With rerank on, top_n matters.
+    reranked = base.model_copy(deep=True)
+    reranked.rerank.enabled = True
+    reranked_top = reranked.model_copy(deep=True)
+    reranked_top.rerank.top_n = 10
+    assert canonical_config_key(reranked) != canonical_config_key(reranked_top)
+
+
+def test_canonical_key_matches_across_the_derived_weight_key() -> None:
+    """The sampled dict has no `bm25_weight`; the derived one has it.
+
+    That asymmetry is what let trial 12 re-run trial 6 in HPO-007: the old
+    dedup compared a trial's stored params against the overrides dict, which
+    carries the derived complementary weight, so weighted trials never matched.
+    """
+    from deepfix_rag.hpo import canonical_config_key
+
+    config = RAGConfig()
+    config.retrieval.fusion_mode = FusionMode.RELATIVE_SCORE
+    config.retrieval.dense_weight = 0.7
+    config.retrieval.bm25_weight = 0.3
+    mirrored = config.model_copy(deep=True)
+    # Floating point from 1 - 0.7 is not exactly 0.3.
+    mirrored.retrieval.bm25_weight = 1.0 - 0.7
+    assert canonical_config_key(config) == canonical_config_key(mirrored)
+
+
+def test_a_redrawn_parameter_set_is_pruned_even_with_derived_keys(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """The reported shape: trial 12 repeated trial 6, trial 13 repeated 11.
+
+    Both were fully evaluated because the old dedup compared a trial's stored
+    params against an overrides dict carrying a derived complementary weight, so
+    a weighted trial never matched its own repeat. The space below has exactly
+    one effective config, so every draw after the first must be pruned.
+    """
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    space = _query_time_space(fixed=True)
+    space.search_space.hybrid.top_k_choices = [10]
+    space.search_space.hybrid.fusion_modes = [FusionMode.RELATIVE_SCORE]
+    space.search_space.hybrid.dense_weight_choices = [0.7]
+    space.search_space.hybrid.rerank_choices = [False]
+
+    result = _opt(index_dir, sample_corpus_path, hpo_config=space, seed=0).optimize(
+        n_trials=1, dataset_path=str(sample_qa_path), limit=2
+    )
+
+    # One evaluation is the whole space; the study stops once it is done.
+    assert len([t for t in result.study.trials if t.state.name == "COMPLETE"]) == 1
+    first = next(t for t in result.study.trials if t.state.name == "COMPLETE")
+    # The derived complementary weight is applied to the config but never stored
+    # as a sampled param, which is why the old comparison missed the repeat.
+    assert "retrieval.bm25_weight" not in first.params
+    assert first.user_attrs["effective_config_key"]
+
+    # Recomputing the key from the stored params would be wrong: they have no
+    # complementary weight, so the ratio would read 0.583 instead of 0.7. The
+    # recorded key is what keeps a redraw comparable, so a second run on the
+    # same study prunes rather than re-evaluating.
+    opt = _opt(
+        index_dir,
+        sample_corpus_path,
+        study_name=result.study.study_name,
+        hpo_config=space,
+        seed=0,
+    )
+    recomputed = opt._effective_config_key(dict(first.params))
+    assert recomputed != tuple(first.user_attrs["effective_config_key"])
+
+
+def _dist(key: str, value: object):  # noqa: ANN201
+    import optuna
+
+    if isinstance(value, bool):
+        return optuna.distributions.CategoricalDistribution([value])
+    if isinstance(value, int):
+        return optuna.distributions.IntDistribution(value, value)
+    if isinstance(value, float):
+        return optuna.distributions.FloatDistribution(value, value)
+    return optuna.distributions.CategoricalDistribution([value])
+
+
+def test_a_parameter_the_config_ignores_does_not_make_a_new_trial(
+    sample_corpus_path: Path,
+    tmp_path: Path,
+) -> None:
+    """Under reciprocal_rerank the weight is unused, so two weights are one config."""
+    import optuna
+
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    opt = _opt(index_dir, sample_corpus_path, seed=0)
+    study = optuna.create_study(
+        study_name="ignored_weight_test", storage=opt.storage, directions=["maximize", "maximize"]
+    )
+    first_params = {
+        "retrieval.top_k": 10,
+        "retrieval.fusion_mode": FusionMode.RECIPROCAL_RANK.value,
+        "retrieval.dense_weight": 0.3,
+        "rerank.enabled": False,
+    }
+    trial = study.ask()
+    for key, value in first_params.items():
+        trial.suggest_categorical(key, [value])
+    study.tell(trial, [1.0, 1.0])
+
+    later = study.ask()
+    for key, value in first_params.items():
+        later.suggest_categorical(key, [value])
+
+    assert opt._duplicate_of(later, {**first_params, "retrieval.dense_weight": 0.7}) == 0

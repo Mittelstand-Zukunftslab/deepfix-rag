@@ -35,6 +35,10 @@ from deepfix_rag.index_cache import (
 
 INDEX_CACHE_DIRNAME = "idx-cache"
 TRIALS_ARTIFACT_NAME = "hpo_trials.json"
+# The effective-config key a completed trial was scored under. Kept as a user
+# attribute so a later redraw with a different sampled key set still compares
+# equal: the derived complementary weight is the reason this is needed.
+_EFFECTIVE_KEY_ATTR = "effective_config_key"
 # Overrides that exist only so a trial can score a subsample. They must never
 # reach an exported candidate, which is re-scored on the full dev set.
 _TRIAL_ONLY_OVERRIDE_KEYS = frozenset(
@@ -45,6 +49,84 @@ _TRIAL_ONLY_OVERRIDE_KEYS = frozenset(
         "retrieval.lancedb_index_dir",
     }
 )
+
+
+# Config fields that change what a query returns. Index-time keys are absent on
+# purpose: every trial reads the same index, so they cannot differ between two
+# trials of one study.
+_QUERY_TIME_FIELDS = (
+    "retrieval.top_k",
+    "retrieval.fusion_mode",
+    "retrieval.dense_weight",
+    "retrieval.bm25_weight",
+    "retrieval.bm25_k1",
+    "retrieval.bm25_b",
+    "retrieval.query_expansion_num",
+    "retrieval.language",
+    "rerank.enabled",
+    "rerank.top_n",
+    "eval.cutoff_k",
+)
+_WEIGHT_READING_FUSION_MODES = frozenset({"relative_score", "dist_based_score"})
+
+
+def canonical_config_key(config: RAGConfig) -> tuple[str, ...]:
+    """A hashable key for the query-time behaviour of ``config``.
+
+    Parameters the config does not read are dropped, so two configs that rank
+    identically produce the same key:
+
+    * the fusion weights only when the fusion mode reads them;
+      ``reciprocal_rerank`` and ``simple`` ignore them;
+    * ``rerank.top_n`` only when rerank is enabled;
+    * every BM25 saturation parameter only when a lexical retriever is in play.
+
+    The two weights are also normalised to the single ratio the fusion retriever
+    uses, so ``0.7/0.3`` and ``0.35/0.15`` collide and a config that set only
+    ``dense_weight`` does not look different from one that set both. Floats are
+    rounded so a sampled ``0.30000000000000004`` matches a stored ``0.3``.
+    """
+    values: list[str] = []
+    retrieval = config.retrieval
+    fusion_mode = str(getattr(retrieval.fusion_mode, "value", retrieval.fusion_mode))
+    reads_weights = fusion_mode in _WEIGHT_READING_FUSION_MODES
+    uses_lexical = str(getattr(retrieval.backend, "value", retrieval.backend)) in {
+        "bm25",
+        "hybrid",
+        "mixed",
+    }
+    owners = {"retrieval": retrieval, "rerank": config.rerank, "eval": config.eval}
+    for dotted in _QUERY_TIME_FIELDS:
+        section, name = dotted.split(".", 1)
+        if name in {"dense_weight", "bm25_weight"}:
+            # Emitted once, below, as the normalised ratio.
+            continue
+        if name == "top_n" and not config.rerank.enabled:
+            continue
+        if name in {"bm25_k1", "bm25_b"} and not uses_lexical:
+            continue
+        value = getattr(owners[section], name, None)
+        if isinstance(value, float):
+            value = round(value, 6)
+        values.append(f"{dotted}={value}")
+    if reads_weights:
+        values.append(
+            f"fusion_weight_ratio={_weight_ratio(retrieval.dense_weight, retrieval.bm25_weight)}"
+        )
+    return tuple(values)
+
+
+def _weight_ratio(dense_weight: float, bm25_weight: float) -> float:
+    """The dense share of the fusion weights, which is all the retriever uses.
+
+    Both weights are normalised to sum to 1 before fusion, so only their ratio
+    matters. A zero total falls back to the equal split the retriever would use
+    rather than raising here.
+    """
+    total = float(dense_weight) + float(bm25_weight)
+    if total <= 0:
+        return 0.5
+    return round(float(dense_weight) / total, 6)
 
 
 def write_best_so_far(path: Path | str, config: RAGConfig) -> Path:
@@ -449,21 +531,51 @@ class HyperparameterOpt:
                 return executor.submit(asyncio.run, self._evaluate_trial(**kwargs)).result()
         return asyncio.run(self._evaluate_trial(**kwargs))
 
-    @staticmethod
-    def _duplicate_of(trial: optuna.Trial, params: dict[str, Any]) -> int | None:
-        """The earlier trial with the same parameters, or None.
+    def _effective_config_key(self, overrides: dict[str, Any]) -> tuple[str, ...]:
+        """A stable key for the config a trial will actually score.
 
-        Optuna's TPE sampler can redraw a parameter set it has already scored
-        when the space is small and discrete, which spends a full eval for no
-        information. This compares against the study's earlier trials.
+        The sampled overrides are not comparable on their own:
+
+        * some parameters only exist conditionally, so an absent
+          ``retrieval.dense_weight`` and one that the fusion mode ignores are
+          the same configuration;
+        * the space derives keys Optuna never records (``retrieval.bm25_weight``
+          from ``dense_weight``), so a trial's stored ``params`` and the dict the
+          objective applies have different key sets;
+        * float rounding differs between the sampled and stored values.
+
+        The key is therefore the *effective* config: apply the overrides, drop
+        the knobs the resulting config does not read, and dump the canonical
+        query-time fields. Equivalent configs collide whatever route produced
+        them.
         """
+        config = apply_mutation(self.base_config, {**self._base_overrides(), **overrides})
+        return canonical_config_key(config)
+
+    def _duplicate_of(self, trial: optuna.Trial, overrides: dict[str, Any]) -> int | None:
+        """The earlier trial that scores the same effective config, or None.
+
+        Optuna's TPE sampler can redraw a configuration it has already scored
+        when the space is small and discrete, which spends a full eval for no
+        information. The comparison is on the effective config, so a redraw that
+        differs only in a parameter the config ignores still collides.
+        """
+        wanted = self._effective_config_key(overrides)
         study = trial.study
         for earlier in study.trials:
             if earlier.number >= trial.number:
                 break
             if earlier.state != TrialState.COMPLETE:
                 continue
-            if dict(earlier.params) == dict(params):
+            # A completed trial recorded the key it scored under, so a redraw
+            # with a different key set still compares equal.
+            recorded = earlier.user_attrs.get(_EFFECTIVE_KEY_ATTR)
+            earlier_key = (
+                tuple(recorded)
+                if isinstance(recorded, (list, tuple))
+                else self._effective_config_key(dict(earlier.params))
+            )
+            if earlier_key == wanted:
                 return earlier.number
         return None
 
@@ -534,7 +646,10 @@ class HyperparameterOpt:
                 for m in self.metric_names
             ]
 
-            # Save diagnostic info to trial attributes
+            # Save diagnostic info to trial attributes. The effective-config
+            # key is recorded so a later redraw compares on the config that was
+            # actually scored, not on the sampled key set.
+            trial.set_user_attr(_EFFECTIVE_KEY_ATTR, list(self._effective_config_key(overrides)))
             for k in ("retrieval_induced_error_rate", "deflection_rate"):
                 if k in metrics:
                     trial.set_user_attr(k, float(metrics[k]))
