@@ -43,13 +43,48 @@ def _index_dir_populated(path: Path) -> bool:
         return False
 
 
-def copy_index_tree(source: str, target: Path) -> Path:
+def _split_s3_uri(uri: str) -> tuple[str, str]:
+    """Bucket and key prefix for an ``s3://bucket/key`` URI.
+
+    The bucket is *not* part of the key. Passing a bare key to pyarrow makes it
+    treat the first path segment as the bucket, which is how
+    ``s3://deepfix-index/optimization/runs/x/index`` turned into a lookup for a
+    bucket named ``optimization``.
+    """
+    remainder = uri[len("s3://") :]
+    bucket, _, key = remainder.partition("/")
+    if not bucket:
+        raise ValueError(f"S3 URI has no bucket: {uri}")
+    return bucket, key.strip("/")
+
+
+def _s3_filesystem() -> Any:
+    """pyarrow S3 filesystem for the RustFS endpoint the rest of the CLI uses."""
+    from pyarrow import fs
+
+    endpoint = str(settings.S3_ENDPOINT_URL or "").strip()
+    return fs.S3FileSystem(
+        endpoint_override=endpoint or None,
+        access_key=settings.S3_ACCESS_KEY_ID or None,
+        secret_key=settings.S3_SECRET_ACCESS_KEY or None,
+        region=settings.S3_REGION or None,
+        scheme="http" if endpoint.startswith("http://") else "https",
+    )
+
+
+def copy_index_tree(
+    source: str,
+    target: Path,
+    *,
+    filesystem: Any = None,
+) -> Path:
     """Copy a directory or a remote object prefix into ``target``.
 
     A local directory is copied with ``copytree``. A remote ``s3://bucket/key``
     prefix is walked with pyarrow's S3 filesystem, which reads the same
-    ``S3_*`` settings LanceDB already uses. No full-object download is repeated
-    once the files are on disk.
+    ``S3_*`` settings LanceDB already uses. The bucket stays the bucket and the
+    key stays the key, so the copy lands the index's own files under
+    ``target``. No full-object download is repeated once the files are on disk.
     """
     target.mkdir(parents=True, exist_ok=True)
     if not is_remote_index_uri(source):
@@ -58,35 +93,63 @@ def copy_index_tree(source: str, target: Path) -> Path:
             raise FileNotFoundError(f"Index directory does not exist: {source}")
         shutil.copytree(source_path, target, dirs_exist_ok=True)
         return target
-    _copy_object_prefix(source, target)
+    if not str(source).lower().startswith("s3://"):
+        raise ValueError(f"Only s3:// index URIs can be copied: {source}")
+    _copy_object_prefix(source, target, filesystem=filesystem)
     return target
 
 
-def _copy_object_prefix(uri: str, target: Path) -> None:
+def _s3_object_prefix(uri: str) -> str:
+    """The ``bucket/key`` prefix pyarrow addresses objects by.
+
+    pyarrow's S3 paths always include the bucket: a selector base of
+    ``optimization/runs/x/index`` is read as bucket ``optimization`` with key
+    ``runs/x/index``. Every prefix this module hands to pyarrow, and every
+    prefix it strips from a returned path, has to include the bucket.
+    """
+    bucket, key = _split_s3_uri(uri)
+    return f"{bucket}/{key}" if key else bucket
+
+
+def _relative_key(path: str, object_prefix: str) -> str:
+    """The part of ``path`` below ``object_prefix``, with no leading separator.
+
+    ``object_prefix`` is a full ``bucket/key`` prefix, matching what pyarrow
+    returns from ``get_file_info``.
+    """
+    trimmed = str(path).lstrip("/")
+    prefix = object_prefix.strip("/")
+    if not prefix:
+        return trimmed
+    if trimmed == prefix:
+        return ""
+    if trimmed.startswith(prefix + "/"):
+        return trimmed[len(prefix) + 1 :]
+    return trimmed
+
+
+def _copy_object_prefix(uri: str, target: Path, *, filesystem: Any = None) -> None:
     from pyarrow import fs
 
-    bucket, _, prefix = uri[len("s3://") :].partition("/")
-    filesystem = fs.S3FileSystem(
-        endpoint_override=settings.S3_ENDPOINT_URL or None,
-        access_key=settings.S3_ACCESS_KEY_ID or None,
-        secret_key=settings.S3_SECRET_ACCESS_KEY or None,
-        region=settings.S3_REGION or None,
-        scheme="http" if str(settings.S3_ENDPOINT_URL or "").startswith("http://") else "https",
-    )
-    selector = fs.FileSelector(prefix.rstrip("/"), recursive=True)
-    infos = filesystem.get_file_info(selector)
+    object_prefix = _s3_object_prefix(uri)
+    s3 = filesystem if filesystem is not None else _s3_filesystem()
+    selector = fs.FileSelector(object_prefix, recursive=True)
+    infos = s3.get_file_info(selector)
     copied = 0
     for info in infos:
         if info.type != fs.FileType.File:
             continue
-        relative = info.path[len(prefix.rstrip("/")) :].lstrip("/")
+        relative = _relative_key(info.path, object_prefix)
+        if not relative:
+            continue
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with filesystem.open_input_stream(info.path) as reader:
+        with s3.open_input_stream(info.path) as reader:
             destination.write_bytes(reader.read())
         copied += 1
     if copied == 0:
         raise FileNotFoundError(f"No index files found under {uri}")
+    LOGGER.info(f"Copied {copied} index files from {uri} into {target}")
 
 
 def write_best_so_far(path: Path | str, config: RAGConfig) -> Path:
