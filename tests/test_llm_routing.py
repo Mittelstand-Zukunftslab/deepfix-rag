@@ -12,6 +12,7 @@ from deepfix_rag.evaluation.llm import ProxyJudgeLLM
 from deepfix_rag.evaluation.runner import GenerationEvaluator
 from deepfix_rag.llm import resolve_litellm_model
 from deepfix_rag.pipeline import RAGWorkflow
+from deepfix_rag.rerank import OpenRouterReranker, rerank_endpoint
 
 _OPENROUTER = "https://openrouter.ai/api/v1"
 _HAIKU = "anthropic/claude-haiku-5.5"
@@ -110,16 +111,23 @@ def test_judge_keeps_the_openai_provider_off_openrouter() -> None:
 
 @pytest.mark.unit
 def test_embeddings_and_reranker_keep_their_own_model_ids() -> None:
-    workflow = RAGWorkflow(config=RAGConfig(rerank={"enabled": True}))
-    embed = workflow._get_embed_model()
-    assert embed.model_name == settings.EMBEDDING_MODEL
-    assert embed.api_base == settings.EMBEDDING_BASE_URL
+    previous_key = settings.OPENROUTER_API_KEY
+    settings.OPENROUTER_API_KEY = "sk-or-unit-test"
+    try:
+        workflow = RAGWorkflow(config=RAGConfig(rerank={"enabled": True}))
+        embed = workflow._get_embed_model()
+        assert embed.model_name == settings.EMBEDDING_MODEL
+        assert embed.api_base == settings.EMBEDDING_BASE_URL
 
-    reranker = workflow._get_reranker()
-    assert reranker is not None
+        reranker = workflow._get_reranker()
+    finally:
+        settings.OPENROUTER_API_KEY = previous_key
+
+    assert isinstance(reranker, OpenRouterReranker)
     assert reranker.model == settings.COHERE_MODEL
-    # The Cohere client holds the endpoint; the public field stays at its default.
-    assert reranker._client._client_wrapper._base_url == settings.COHERE_BASE_URL
+    # OpenRouter rerank, never the Cohere SDK's /v2/rerank suffix.
+    assert reranker.endpoint == rerank_endpoint(settings.COHERE_BASE_URL)
+    assert not reranker.endpoint.endswith("/v2/rerank")
 
 
 @pytest.mark.unit

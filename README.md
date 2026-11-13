@@ -213,11 +213,11 @@ EMBEDDING_API_KEY=
 EMBEDDING_MODEL=octen-embedding-8b
 
 # ------------------------------------------------------------------------------
-# Reranker Configuration (Cohere-compatible API)
+# Reranker Configuration (OpenRouter rerank API)
+# Rerank posts to POST <COHERE_BASE_URL>/rerank with OPENROUTER_API_KEY.
 # ------------------------------------------------------------------------------
-COHERE_BASE_URL=https://api.aisc.hpi.de
-COHERE_API_KEY=
-COHERE_MODEL=qwen3-reranker-4b
+COHERE_BASE_URL=https://openrouter.ai/api/v1
+COHERE_MODEL=cohere/rerank-4-fast
 
 # ------------------------------------------------------------------------------
 # Memgraph Graph Database

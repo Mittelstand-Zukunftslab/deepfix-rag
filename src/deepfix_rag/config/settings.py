@@ -66,7 +66,8 @@ class Settings(BaseSettings):
     EMBEDDING_BASE_URL: str = "https://openrouter.ai/api/v1"
     EMBEDDING_API_KEY: str | None = None
 
-    # Reranker (Cohere-compatible)
+    # Reranker (OpenRouter rerank API; the model id comes from COHERE_MODEL)
+    OPENROUTER_API_KEY: str | None = None
     COHERE_API_KEY: str | None = None
     COHERE_MODEL: str = ""
     COHERE_BASE_URL: str = "https://openrouter.ai/api/v1"

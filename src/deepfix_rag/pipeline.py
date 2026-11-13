@@ -52,7 +52,6 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.graph_stores.falkordb import FalkorDBGraphStore, FalkorDBPropertyGraphStore
 from llama_index.graph_stores.memgraph import MemgraphPropertyGraphStore
 from llama_index.llms.litellm import LiteLLM
-from llama_index.postprocessor.cohere_rerank import CohereRerank
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.vector_stores.lancedb import LanceDBVectorStore
 from pydantic import BaseModel, Field
@@ -72,6 +71,7 @@ from deepfix_rag.config.settings import LOGGER, ModelNotConfigured, require_mode
 from deepfix_rag.data import DataLoader, build_node_parser
 from deepfix_rag.index_manifest import write_index_manifest
 from deepfix_rag.llm import litellm_additional_kwargs, resolve_litellm_model
+from deepfix_rag.rerank import OpenRouterReranker, rerank_api_key
 
 
 class RetrieverEvent(Event):
@@ -272,13 +272,19 @@ class RAGWorkflow(Workflow):
             additional_kwargs=litellm_additional_kwargs(),
         )
 
-    def _get_reranker(self) -> CohereRerank | None:
+    def _get_reranker(self) -> OpenRouterReranker | None:
         if not self.config.rerank.enabled:
             return None
-        return CohereRerank(
+        api_key = rerank_api_key()
+        if not api_key:
+            raise ModelNotConfigured(
+                "OPENROUTER_API_KEY is not set. Rerank calls OpenRouter's /rerank endpoint "
+                "with that key; COHERE_API_KEY is not used."
+            )
+        return OpenRouterReranker(
             model=require_model("COHERE_MODEL"),
             top_n=self.config.rerank.top_n,
-            api_key=settings.COHERE_API_KEY,
+            api_key=api_key,
             base_url=settings.COHERE_BASE_URL,
         )
 
@@ -810,7 +816,7 @@ class RAGWorkflow(Workflow):
 
     @step
     async def rerank(self, ctx: Context, ev: RetrieverEvent) -> RerankEvent:
-        """Rerank candidate nodes using CohereRerank with custom base_url."""
+        """Rerank candidate nodes through OpenRouter's rerank endpoint."""
         query = await ctx.store.get("query")
         nodes = ev.nodes
         reranker = self._get_reranker()

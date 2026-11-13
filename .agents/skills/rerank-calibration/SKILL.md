@@ -16,7 +16,7 @@ cli_actions:
 
 Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Re-ranking is query-time: do not re-index for `rerank.*` or `retrieval.top_k`, and do not pass `--index-dir` (the candidate reuses the champion's index).
 
-The agent environment passes the Cohere settings (`COHERE_BASE_URL`, `COHERE_API_KEY`, `COHERE_MODEL`) through, so rerank works. If an eval exits 2 with `COHERE_API_KEY` in the message, every case errored: rerank is unavailable. STOP, write `result.json` with a null candidate, report the cause in `summary`, and finish.
+The rerank settings come from the environment (`COHERE_BASE_URL`, `COHERE_MODEL`) and rerank authorizes with `OPENROUTER_API_KEY`. If an eval exits 2 with `OPENROUTER_API_KEY` in the message, every case errored: rerank is unavailable. STOP, write `result.json` with a null candidate, report the cause in `summary`, and finish.
 
 ## When not to use
 
@@ -66,6 +66,6 @@ legal-rag-bench, 30-query retrieval-only eval:
 
 ## Pitfalls
 
-- Cohere rerank appends `/v2/rerank` to `COHERE_BASE_URL`. A base URL ending in `/v1` returns 404s that show up as per-query errors or as empty retrieval. This is an environment fault: stop and report it, do not edit the environment.
+- Rerank posts to OpenRouter: `POST <COHERE_BASE_URL>/rerank`, which with the default `https://openrouter.ai/api/v1` base is `https://openrouter.ai/api/v1/rerank`. The Authorization header is `Bearer <OPENROUTER_API_KEY>`. A base URL ending in `/v1` used to be a 404 because the Cohere SDK appended `/v2/rerank`; the DeepFix client never does, and no Cohere key is involved. Native Cohere (`https://api.cohere.com`) is not a supported base. A 404 or 401 here is an environment fault: stop and report it, do not edit the environment.
 - Confirm hybrid is actually active. If eval stderr contains `falling back to dense`, the loaded index docstore was empty and BM25 was skipped.
 - `top_k` above 100 fails validation (`mutate-config` exits 1).
