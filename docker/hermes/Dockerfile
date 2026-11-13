@@ -146,7 +146,8 @@ COPY .agents/skills /opt/deepfix/skills
 # a space without a repository checkout.
 COPY configs/hpo_retrieval_small.yaml /opt/deepfix/configs/hpo_retrieval_small.yaml
 COPY docker/hermes/sandbox_boot.py /opt/deepfix/sandbox_boot.py
-COPY docker/hermes/bin/deepfix /opt/deepfix/bin/deepfixCOPY docker/hermes/deepfix_run_tag /opt/deepfix/plugins/deepfix-run-tag
+COPY docker/hermes/bin/deepfix /opt/deepfix/bin/deepfix
+COPY docker/hermes/deepfix_run_tag /opt/deepfix/plugins/deepfix-run-tag
 COPY docker/hermes/s6/deepfix-cli-log /etc/s6-overlay/s6-rc.d/deepfix-cli-log
 COPY docker/hermes/seal_volume.py /opt/deepfix/seal_volume.py
 COPY docker/hermes/00-deepfix-volume /etc/cont-init.d/00-deepfix-volume

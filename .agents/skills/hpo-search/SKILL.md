@@ -13,7 +13,7 @@ trigger_conditions:
   - "The lever is query-time (rerank.*, retrieval.top_k, retrieval.fusion_mode, fusion weights), so no re-index is needed"
 cli_actions:
   - "deepfix hpo --config <run_dir>/input/hpo_retrieval_small.yaml --base-config <run_dir>/input/champion.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json"
-  - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
+  - "deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --json"
   - "deepfix gate --compare <run_dir>/compare.json --primary ndcg --json"
 ---
 
@@ -75,10 +75,10 @@ Subsample HPO scores are **not** a recommendation. Never put an HPO metric into 
 
 ### 5. Confirmation on the full dev set
 
-No `--limit`. The candidate is query-time only, so no re-index and no `--index-dir`.
+No `--limit`. The candidate is query-time only, so no re-index and no `--index-dir`. The baseline is the champion snapshot from the bundle, `<run_dir>/input/champion.yaml`, never `configs/champion.yaml`: the sandbox has no repository checkout, so that path does not exist here.
 
 ```
-deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
+deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
 
 ```
