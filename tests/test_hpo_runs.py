@@ -14,7 +14,7 @@ import pytest
 from typer.testing import CliRunner
 import yaml
 
-from deepfix_rag.cli.ui import EXIT_SUCCESS
+from deepfix_rag.cli.ui import EXIT_SUCCESS, EXIT_VALIDATION_ERROR
 from deepfix_rag.config.hpo import HPOConfig, HPOSearchSpace
 from deepfix_rag.config.schema import (
     DataLoaderConfig,
@@ -376,3 +376,82 @@ def test_a_trial_whose_cases_all_errored_fails_instead_of_scoring_zero(
     rows = json.loads((run_dir / TRIALS_ARTIFACT_NAME).read_text(encoding="utf-8"))
     assert rows and all(row["state"] == "FAIL" for row in rows)
     assert "errored" in rows[0]["user_attrs"]["error"]
+
+
+@pytest.mark.cli
+def test_base_config_overrides_the_space_files_base_config(
+    cli_runner: CliRunner,
+    sample_corpus_path: Path,
+    tmp_path: Path,
+) -> None:
+    """The agent passes the champion from the run bundle; the space file need not name it.
+
+    The space's own ``base_config`` points at a file that does not exist. The
+    run therefore only gets past config resolution when ``--base-config`` was
+    honoured, and the failure it reaches is about the dataset, not that path.
+    """
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    champion_path = tmp_path / "champion.yaml"
+    champion_path.write_text(_base_config(index_dir, sample_corpus_path).to_yaml())
+
+    space_path = tmp_path / "space.yaml"
+    space = _query_time_space(fixed=True)
+    space_path.write_text(
+        yaml.safe_dump(
+            {
+                "base_config": "does/not/exist.yaml",
+                "study_name": "base_config_override",
+                "storage_uri": "sqlite:///:memory:",
+                "n_trials": 1,
+                "retrieval_only": True,
+                "limit": 2,
+                "seed": 0,
+                "search_space": space.search_space.model_dump(mode="json"),
+            }
+        )
+    )
+    # A row without query_id: this path only fails after the base config resolved.
+    bad_dataset = tmp_path / "bad_dev.jsonl"
+    bad_dataset.write_text('{"doc_id": "doc_de_001"}\n', encoding="utf-8")
+
+    result = cli_runner.invoke(
+        app,
+        [
+            "hpo",
+            "--config",
+            str(space_path),
+            "--base-config",
+            str(champion_path),
+            "--dataset",
+            str(bad_dataset),
+            "--retrieval-only",
+            "--n-trials",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code != EXIT_SUCCESS
+    payload = json.loads(result.stdout)
+    assert "does/not/exist.yaml" not in payload["error"]
+    assert "query_id" in payload["error"]
+
+
+@pytest.mark.cli
+def test_a_missing_base_config_names_the_file(cli_runner: CliRunner, tmp_path: Path) -> None:
+    space_path = tmp_path / "space.yaml"
+    space_path.write_text(yaml.safe_dump({"base_config": "configs/default.yaml", "n_trials": 1}))
+    result = cli_runner.invoke(
+        app,
+        [
+            "hpo",
+            "--config",
+            str(space_path),
+            "--base-config",
+            str(tmp_path / "missing.yaml"),
+            "--json",
+        ],
+    )
+    assert result.exit_code == EXIT_VALIDATION_ERROR, result.output
+    payload = json.loads(result.stdout)
+    assert "missing.yaml" in payload["error"]

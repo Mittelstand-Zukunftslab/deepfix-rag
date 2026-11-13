@@ -20,6 +20,7 @@ from deepfix_rag.hermes_client import HERMES_MAX_TURNS
 from deepfix_rag.indexing import index_time_signature
 from deepfix_rag.main import app
 from deepfix_rag.promotion import _ALLOWED_BACKENDS, _HIGHER_IS_BETTER
+from deepfix_rag.run_bundle import HPO_SPACE_FILENAME
 
 pytestmark = [pytest.mark.unit]
 
@@ -422,7 +423,8 @@ def test_the_hpo_skill_is_the_query_time_path_and_stays_bounded() -> None:
     """`hpo-search` is the one sweep; it confirms on the full dev set and never promotes."""
     text = _read(HPO_SKILL)
     assert "deepfix hpo" in text
-    assert "configs/hpo_retrieval_small.yaml" in text
+    assert "<run_dir>/input/hpo_retrieval_small.yaml" in text
+    assert "--base-config <run_dir>/input/champion.yaml" in text
     assert "--n-trials 12" in text
     assert "--limit 20" in text
     assert "--seed 0" in text
@@ -469,9 +471,11 @@ def test_the_hpo_skill_example_is_a_real_hpo_invocation(cli_runner: CliRunner) -
     flags = re.findall(r"(?<!\S)(--[a-z-]+)", command)
     assert not [flag for flag in flags if flag not in help_text]
 
-    config_path = Path(command.split("--config", 1)[1].split()[0])
-    assert config_path == Path("configs/hpo_retrieval_small.yaml")
-    config = load_hpo_config(Path(__file__).resolve().parents[1] / config_path)
+    # The container has no repository checkout, so the space comes from the bundle.
+    assert command.split("--config", 1)[1].split()[0] == "<run_dir>/input/hpo_retrieval_small.yaml"
+    assert command.split("--base-config", 1)[1].split()[0] == "<run_dir>/input/champion.yaml"
+    assert "--base-config" in help_text
+    config = load_hpo_config(Path(__file__).resolve().parents[1] / "configs" / HPO_SPACE_FILENAME)
     assert config.n_trials == 12
     assert config.retrieval_only is True
     assert config.search_space.hybrid.top_k_choices == [10, 20, 50]

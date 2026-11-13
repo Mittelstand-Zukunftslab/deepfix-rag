@@ -141,6 +141,10 @@ RUN set -eu; \
     chown -R root:root /opt/deepfix/otel /opt/deepfix/hermes-otel-package "$site/deepfix-otel.pth"
 
 COPY .agents/skills /opt/deepfix/skills
+# The shipped query-time HPO search space. The agent passes the copy from its
+# run bundle; this one is here so a manual `deepfix hpo` inside the sandbox has
+# a space without a repository checkout.
+COPY configs/hpo_retrieval_small.yaml /opt/deepfix/configs/hpo_retrieval_small.yaml
 COPY docker/hermes/sandbox_boot.py /opt/deepfix/sandbox_boot.py
 COPY docker/hermes/bin/deepfix /opt/deepfix/bin/deepfixCOPY docker/hermes/deepfix_run_tag /opt/deepfix/plugins/deepfix-run-tag
 COPY docker/hermes/s6/deepfix-cli-log /etc/s6-overlay/s6-rc.d/deepfix-cli-log

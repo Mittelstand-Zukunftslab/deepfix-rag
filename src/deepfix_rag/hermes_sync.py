@@ -26,6 +26,7 @@ from botocore.exceptions import ClientError
 
 from deepfix_rag.run_bundle import (
     CONTAINER_WORK_ROOT,
+    HPO_SPACE_FILENAME,
     DirectoryObjectStore,
     ObjectStore,
     RecordingObjectStore,
@@ -272,6 +273,7 @@ def describe_download(bucket: str, run_id: str, work_dir: Path) -> str:
         f"dev_file={work_dir / _INPUT_DIR / 'feedback_dev.jsonl'}",
         f"corpus={work_dir / _INPUT_DIR / 'corpus'}",
         f"champion_index={work_dir / _INPUT_DIR / 'champion-index'}",
+        f"hpo_space={work_dir / _INPUT_DIR / HPO_SPACE_FILENAME}",
         f"candidate_index_uri={candidate_index_uri(bucket, run_id)}",
     )
     return "\n".join(lines) + "\n"

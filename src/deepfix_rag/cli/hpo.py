@@ -75,6 +75,15 @@ def hpo_cmd(
             "(size, overlap, semantic buffer/percentile) across trials."
         ),
     ),
+    base_config_path: Path | None = typer.Option(
+        None,
+        "--base-config",
+        help=(
+            "Base RAG config for every trial, overriding the HPO file's base_config. "
+            "The agent passes the champion snapshot from the run bundle here, so the "
+            "search space file does not have to name a workspace path."
+        ),
+    ),
     output: Path | None = typer.Option(
         None,
         "--output",
@@ -132,6 +141,10 @@ def hpo_cmd(
 
     try:
         hpo_config = load_hpo_config(config)
+        if base_config_path is not None:
+            if not base_config_path.is_file():
+                raise FileNotFoundError(f"Base config file not found: {base_config_path}")
+            hpo_config.base_config = str(base_config_path)
         base_config = hpo_config.resolve_base_config(base_dir=config.parent)
     except Exception as e:
         emit_error(

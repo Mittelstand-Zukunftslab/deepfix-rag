@@ -2,9 +2,10 @@ version: "1.0"
 
 # Query-time retrieval search for one API-driven Hermes round.
 #
-# Twelve trials on 20 seeded questions, then one full-dev confirmation. The
-# agent points --config at this file; `base_config` is replaced at call time by
-# the champion config the run prompt names.
+# Twelve trials on 20 seeded questions, then one full-dev confirmation. In an
+# API-driven round the agent passes this file as `--config` and the champion
+# snapshot from the run bundle as `--base-config`, so the `base_config` below
+# (a local manual-use default) is not what an agent round uses.
 #
 # In scope (everything here is query-time, so no trial re-indexes):
 #   rerank.enabled, rerank.top_n, retrieval.top_k, retrieval.fusion_mode and,

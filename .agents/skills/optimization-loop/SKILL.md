@@ -17,7 +17,7 @@ trigger_conditions:
   - "eval --compare JSON is available and the candidate must be recommended or discarded"
 cli_actions:
   - "deepfix eval --config configs/champion.yaml --dataset <dev_path> --retrieval-only --limit 30 --seed 0 --json"
-  - "deepfix hpo --config configs/hpo_retrieval_small.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json"
+  - "deepfix hpo --config <run_dir>/input/hpo_retrieval_small.yaml --base-config <run_dir>/input/champion.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json"
   - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
   - "deepfix index --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx --force --json"
   - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
@@ -76,7 +76,7 @@ Before choosing, read `<workspace>/runs/ledger.jsonl` if it exists. Skip a hypot
 3. Produce `<run_dir>/candidate.yaml`. **Query-time** (`hpo-search`, routing rows 3 and 5): one bounded sweep writes it.
 
 ```
-deepfix hpo --config configs/hpo_retrieval_small.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json
+deepfix hpo --config <run_dir>/input/hpo_retrieval_small.yaml --base-config <run_dir>/input/champion.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json
 ```
 
 Write a provisional `result.json` as soon as that call reports a best trial, then continue to the confirmation. **Index-time** (`chunking-tuning`, `retrieval-backend-selection`): one `mutate-config`. An unknown `--set` key exits 1 with `error_type` `unknown_key` and writes nothing. On success, confirm `diffs` is non-empty. `ignored_keys` is always empty. `index_time_changed` tells you whether step 4 must rebuild.
@@ -141,7 +141,7 @@ A pass here is a recommendation, not a promotion. Do not recommend when `pass` i
 
 `retrieval.load_if_exists` defaults to true, so an existing index hides index-time edits. `deepfix index` writes `<index_dir>/deepfix_index.json`. `eval` exits 1 with `error_type` `stale_index` when that manifest does not match the config. `index --if-changed` returns `skipped: true` when the hash matches. The API treats these keys as index-time (`indexing.index_time_signature`, also listed by `deepfix schema --json`) and builds its own index when they differ from the champion: `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, and `retrieval.graph_max_paths_per_chunk`.
 
-Query-time (no re-index; the existing index is reused): `retrieval.language`, `retrieval.top_k`, `retrieval.fusion_mode`, `retrieval.dense_weight`, `retrieval.bm25_weight`, `retrieval.bm25_k1`, `retrieval.bm25_b`, `rerank.enabled`, `rerank.top_n`. Everything the shipped `configs/hpo_retrieval_small.yaml` samples is in this list, so a sweep and its confirmation reuse the champion's index without `--index-dir`.
+Query-time (no re-index; the existing index is reused): `retrieval.language`, `retrieval.top_k`, `retrieval.fusion_mode`, `retrieval.dense_weight`, `retrieval.bm25_weight`, `retrieval.bm25_k1`, `retrieval.bm25_b`, `rerank.enabled`, `rerank.top_n`. Everything the shipped `<run_dir>/input/hpo_retrieval_small.yaml` samples is in this list, so a sweep and its confirmation reuse the champion's index without `--index-dir`.
 
 - `retrieval.top_k` only moves the scores through reranking (it is the pool the reranker sees) or, slightly, through hybrid fusion (each retriever returns `top_k` candidates before they are fused). With rerank off, a `top_k` above `eval.cutoff_k` does not change the dense or bm25 scores: on a 60-document test corpus the top 5 was identical for 10 of 10 queries on dense and on bm25, and changed for 2 of 10 on hybrid. A `top_k`-only candidate is not a useful hypothesis.
 - Any `chunking.*` change needs `deepfix index` into `<run_dir>/idx` before the compare.

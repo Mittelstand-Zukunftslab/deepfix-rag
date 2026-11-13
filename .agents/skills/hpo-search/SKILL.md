@@ -12,7 +12,7 @@ trigger_conditions:
   - "optimization-loop routing row 3 (recall >= 0.8 and ndcg < recall - 0.15) or row 5 (retrieval_miss > 0 with recall >= 0.8 on a hybrid champion)"
   - "The lever is query-time (rerank.*, retrieval.top_k, retrieval.fusion_mode, fusion weights), so no re-index is needed"
 cli_actions:
-  - "deepfix hpo --config configs/hpo_retrieval_small.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json"
+  - "deepfix hpo --config <run_dir>/input/hpo_retrieval_small.yaml --base-config <run_dir>/input/champion.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json"
   - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
   - "deepfix gate --compare <run_dir>/compare.json --primary ndcg --json"
 ---
@@ -30,7 +30,7 @@ This skill replaces a single hand-written `mutate-config` hypothesis with **one*
 
 ## The search space is fixed
 
-`configs/hpo_retrieval_small.yaml` ships the v1 space. Do not edit it:
+`hpo_retrieval_small.yaml` ships the v1 space. `deepfix-sync download` puts it in the run bundle at `<run_dir>/input/hpo_retrieval_small.yaml`. Do not edit it:
 
 - `rerank.enabled`: false, true. When it is on, `rerank.top_n`: 5 or 10, always <= that trial's `retrieval.top_k`.
 - `retrieval.top_k`: 10, 20, 50.
@@ -52,10 +52,10 @@ Every trial reads a local index. When the champion's `retrieval.lancedb_index_di
 
 ### 3. One HPO call
 
-Replace `<run_dir>` with the real path. The shipped YAML already sets `base_config: configs/champion.yaml`, which resolves to this workspace's champion; do not override it and do not copy the champion to another path.
+Replace `<run_dir>` with the real path. `--base-config` points every trial at the champion snapshot in the bundle, so the search-space file does not have to name a workspace path.
 
 ```
-deepfix hpo --config configs/hpo_retrieval_small.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json
+deepfix hpo --config <run_dir>/input/hpo_retrieval_small.yaml --base-config <run_dir>/input/champion.yaml --retrieval-only --limit 20 --seed 0 --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db --output <run_dir>/candidate.yaml --run-dir <run_dir> --json
 ```
 
 Notes:
@@ -105,6 +105,7 @@ Fill in `mlflow_run_id` from the compare JSON's candidate side, restate baseline
 - Running HPO twice in one round. The budget is 40 turns and the gate is decided by the full-dev confirmation, not by a second sweep.
 - Comparing the HPO subsample score with the baseline smoke (30 questions, different seed). Only the full-dev compare counts.
 - Passing `--limit` to the confirmation. The gate needs every dev question.
-- Editing `configs/hpo_retrieval_small.yaml`. The space is fixed for this release; a wider one needs a code change.
+- Editing `<run_dir>/input/hpo_retrieval_small.yaml`. The space is fixed for this release; a wider one needs a code change.
+- Reaching for `configs/...` inside the container. The sandbox has no repository checkout: the search space and the champion both come from `input/` in the run bundle.
 - Expecting `retrieval.dense_weight` to matter under `reciprocal_rerank`. The space does not sample it there for that reason.
 - Treating an HPO trial error as a retrieval miss. Read `hpo_trials.json`: a failed trial state means the pipeline, not the ranking.

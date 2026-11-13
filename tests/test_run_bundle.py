@@ -20,15 +20,23 @@ from deepfix_rag.hermes_iam import (
     authorize,
     hermes_prefix_policy,
 )
-from deepfix_rag.hermes_sync import download_input, download_result, main, upload_output
+from deepfix_rag.hermes_sync import (
+    describe_download,
+    download_input,
+    download_result,
+    main,
+    upload_output,
+)
 from deepfix_rag.index_manifest import write_index_manifest
 from deepfix_rag.promotion import apply_candidate
 from deepfix_rag.run_bundle import (
+    HPO_SPACE_FILENAME,
     DirectoryObjectStore,
     RecordingObjectStore,
     RunBundleError,
     candidate_index_uri,
     clear_index_prefix,
+    hpo_space_container_path,
     index_object_prefix,
     plan_run_bundle,
     reject_holdout_leaks,
@@ -103,11 +111,21 @@ def test_plan_writes_the_run_prefix_and_rewrites_champion_paths(tmp_path: Path) 
     assert f"{prefix}/input/corpus/statute.json" in keys
     assert f"{prefix}/input/corpus/notes/a.txt" in keys
     assert f"{prefix}/input/ledger.jsonl" in keys
+    assert f"{prefix}/input/{HPO_SPACE_FILENAME}" in keys
     assert f"{prefix}/input/champion-index/documents.lance/data.arrow" in keys
     assert not any("feedback_holdout" in key or "holdout" in key for key in keys)
     assert plan.candidate_index_uri == (f"s3://{BUCKET}/optimization/runs/{RUN_A}/candidate-index")
     assert plan.champion_index_dir.endswith(f"/runs/{RUN_A}/input/champion-index")
     assert plan.corpus_path.endswith(f"/runs/{RUN_A}/input/corpus")
+
+    space_key = f"{prefix}/input/{HPO_SPACE_FILENAME}"
+    space = next(obj.body for obj in plan.objects if obj.key == space_key).decode("utf-8")
+    assert "search_space" in space
+    assert "rerank_choices" in space
+    assert str(workspace) not in space
+    assert hpo_space_container_path(RUN_A).endswith(f"/runs/{RUN_A}/input/{HPO_SPACE_FILENAME}")
+    described = describe_download(BUCKET, RUN_A, Path(f"/opt/data/workspace/runs/{RUN_A}"))
+    assert f"hpo_space=/opt/data/workspace/runs/{RUN_A}/input/{HPO_SPACE_FILENAME}" in described
 
     champion = next(obj.body for obj in plan.objects if obj.key.endswith("champion.yaml"))
     text = champion.decode("utf-8")

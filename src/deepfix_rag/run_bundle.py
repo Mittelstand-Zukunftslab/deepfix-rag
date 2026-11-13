@@ -32,6 +32,21 @@ from botocore.exceptions import ClientError
 from deepfix_rag.config.schema import DataSourceType, RAGConfig
 
 CONTAINER_WORK_ROOT = Path("/opt/data/workspace")
+# The shipped query-time HPO space, copied into the run bundle so the sandbox
+# (which has no repository checkout) can pass it to `deepfix hpo --config`.
+HPO_SPACE_FILENAME = "hpo_retrieval_small.yaml"
+
+
+def default_hpo_space_path() -> Path:
+    """The repository copy of the shipped HPO search space."""
+    return Path(__file__).resolve().parents[2] / "configs" / HPO_SPACE_FILENAME
+
+
+def hpo_space_container_path(run_id: str, root: Path = CONTAINER_WORK_ROOT) -> str:
+    """In-container path of the shipped HPO search space for one run."""
+    return str(container_work_dir(run_id, root) / "input" / HPO_SPACE_FILENAME)
+
+
 RUN_PREFIX = "optimization/runs"
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
@@ -334,6 +349,16 @@ def plan_run_bundle(
     ledger = workspace / "runs" / "ledger.jsonl"
     if ledger.is_file():
         objects.append(BundleObject(f"{prefix}/input/ledger.jsonl", ledger.read_bytes()))
+    # The shipped query-time HPO space. The Hermes image has no repository
+    # checkout, so the sweep's --config path has to travel with the bundle.
+    hpo_space = default_hpo_space_path()
+    if hpo_space.is_file():
+        objects.append(
+            BundleObject(
+                f"{prefix}/input/{HPO_SPACE_FILENAME}",
+                hpo_space.read_bytes(),
+            )
+        )
     objects.extend(
         BundleObject(f"{prefix}/input/champion-index/{rel}", path.read_bytes())
         for rel, path in index_files
