@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from llama_index.core.embeddings import MockEmbedding
-import optuna
+from optuna.trial import TrialState
 import pytest
 from typer.testing import CliRunner
 import yaml
@@ -183,12 +183,15 @@ def test_the_run_directory_receives_trials_and_a_best_so_far_config(
         seed=0,
         run_dir=run_dir,
         output_path=output,
+        # A space wide enough that both trials sample different parameters.
+        hpo_config=_query_time_space(),
     ).optimize(n_trials=2, dataset_path=str(sample_qa_path), limit=2)
 
     trials_path = run_dir / TRIALS_ARTIFACT_NAME
     assert trials_path.is_file()
     rows = json.loads(trials_path.read_text(encoding="utf-8"))
-    assert len(rows) == 2
+    completed_rows = [row for row in rows if row["state"] == "COMPLETE"]
+    assert len(completed_rows) == 2, rows
     for row in rows:
         assert set(row) >= {
             "trial_number",
@@ -198,7 +201,11 @@ def test_the_run_directory_receives_trials_and_a_best_so_far_config(
             "metrics",
             "user_attrs",
         }
-        assert row["state"] == "COMPLETE"
+        # A duplicate the sampler redrew is pruned instead of re-scored.
+        assert row["state"] in {"COMPLETE", "PRUNED"}
+        if row["state"] == "PRUNED":
+            assert "duplicate_of" in row["user_attrs"]
+    for row in completed_rows:
         assert row["metrics"]
     assert output.is_file()
     best = yaml.safe_load(output.read_text(encoding="utf-8"))
@@ -223,7 +230,7 @@ def test_a_timeout_stops_the_study_and_keeps_the_artifacts(
         output_path=output,
     ).optimize(n_trials=12, dataset_path=str(sample_qa_path), limit=2, timeout=0.001)
 
-    complete = [t for t in result.study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    complete = [t for t in result.study.trials if t.state == TrialState.COMPLETE]
     assert len(complete) < 12
     assert result.stopped_early is True
     assert (run_dir / TRIALS_ARTIFACT_NAME).is_file()
@@ -262,9 +269,13 @@ def test_a_file_storage_uri_resumes_with_load_if_exists(
         seed=0,
         run_dir=run_dir,
     ).optimize(n_trials=2, dataset_path=str(sample_qa_path), limit=2)
-    assert len(second.study.trials) == 2
+    # The resume continues the same study. `n_trials` counts evaluations, so a
+    # duplicate Optuna redraws is pruned and the study holds extra trial rows.
+    completed = [t for t in second.study.trials if t.state == TrialState.COMPLETE]
+    assert len(completed) == 2
     assert dict(second.study.trials[0].params) == first_params
-    assert [t.number for t in second.study.trials] == [0, 1]
+    assert second.study.trials[0].number == 0
+    assert second.pruned_trials + len(completed) == len(second.study.trials)
 
 
 def test_a_remote_index_is_copied_once_into_the_run_directory(
@@ -558,3 +569,184 @@ def test_the_shipped_space_is_file_backed() -> None:
     )
     assert config.storage_uri != "sqlite:///:memory:"
     assert config.storage_uri.startswith("sqlite:///")
+
+
+def test_the_exported_candidate_carries_only_the_tuned_params(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """A candidate must not ship the sweep's subsample, seed or local index path.
+
+    The trial config points at a 2-question subsample and the local index
+    cache so the sweep is cheap. None of that belongs in the candidate that
+    `deepfix eval` re-scores on the full dev set, so the export is the base
+    config plus the sampled parameters.
+    """
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    output = run_dir / "candidate.yaml"
+    base = _base_config(index_dir, sample_corpus_path)
+    # The base config the export must reproduce: the champion's own dataset and
+    # index, not the CLI's --dataset rewrite or the run's index cache.
+    base.data = DataLoaderConfig(path_or_repo="corpus/champion-corpus", split="train")
+    base.data.limit = None
+
+    opt = HyperparameterOpt(
+        base_config=base,
+        hpo_config=_query_time_space(fixed=True),
+        study_name="export_test",
+        seed=0,
+        run_dir=run_dir,
+        output_path=output,
+        embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+        persist=False,
+    )
+    result = opt.optimize(
+        n_trials=1,
+        dataset_path=str(sample_qa_path),
+        limit=2,
+        split="dev",
+    )
+    assert result.best_config is not None
+
+    exported = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert exported["data"]["path_or_repo"] == "corpus/champion-corpus"
+    assert exported["data"]["split"] == "train"
+    assert exported["data"]["limit"] is None
+    assert exported["retrieval"]["lancedb_index_dir"] == str(index_dir)
+
+    # The candidate equals the base config except for the tuned retrieval keys.
+    base_dump = base.model_dump(mode="json")
+    exported_dump = yaml.safe_load(output.read_text(encoding="utf-8"))
+    changed = {key for key in base_dump if base_dump[key] != exported_dump[key]}
+    assert changed <= {"retrieval"}, changed
+    retrieval_changes = {
+        key
+        for key in base_dump["retrieval"]
+        if base_dump["retrieval"][key] != exported_dump["retrieval"][key]
+    }
+    # The fixed test space pins top_k, so a sampled value equal to the base
+    # changes nothing; what matters is that no trial-only key ever appears.
+    assert retrieval_changes <= {"top_k"}, retrieval_changes
+
+
+def test_the_best_so_far_yaml_also_drops_the_trial_only_overrides(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """The incremental artifact is what a turn-cap wrap-up confirms from."""
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    base = _base_config(index_dir, sample_corpus_path)
+    base.data = DataLoaderConfig(path_or_repo="corpus/champion-corpus", split="train")
+
+    HyperparameterOpt(
+        base_config=base,
+        hpo_config=_query_time_space(fixed=True),
+        study_name="best_so_far_test",
+        seed=0,
+        run_dir=run_dir,
+        output_path=run_dir / "candidate.yaml",
+        embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+        persist=False,
+    ).optimize(n_trials=1, dataset_path=str(sample_qa_path), limit=2)
+
+    for path in (run_dir / "candidate.yaml",):
+        exported = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert exported["data"]["path_or_repo"] == "corpus/champion-corpus"
+        assert exported["data"]["limit"] is None
+        assert exported["data"]["split"] == "train"
+
+
+def test_an_explicit_export_base_config_keeps_its_own_index(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """The CLI passes the pre-override config so `--dataset`/`--limit` never leak."""
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    trial_base = _base_config(index_dir, sample_corpus_path)
+    export_base = trial_base.model_copy(deep=True)
+    export_base.data = DataLoaderConfig(path_or_repo="corpus/champion-corpus")
+    export_base.retrieval.lancedb_index_dir = "s3://deepfix-index/optimization/runs/x/index"
+
+    opt = HyperparameterOpt(
+        base_config=trial_base,
+        export_base_config=export_base,
+        hpo_config=_query_time_space(fixed=True),
+        study_name="export_base_test",
+        run_dir=run_dir,
+        index_dir=index_dir,
+        output_path=run_dir / "candidate.yaml",
+        embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+        persist=False,
+    )
+    result = opt.optimize(n_trials=1, dataset_path=str(sample_qa_path), limit=2)
+    exported = yaml.safe_load((run_dir / "candidate.yaml").read_text(encoding="utf-8"))
+    assert exported["retrieval"]["lancedb_index_dir"] == (
+        "s3://deepfix-index/optimization/runs/x/index"
+    )
+    assert exported["data"]["path_or_repo"] == "corpus/champion-corpus"
+    assert result.best_config is not None
+    assert result.best_config.retrieval.lancedb_index_dir == (
+        "s3://deepfix-index/optimization/runs/x/index"
+    )
+
+
+def test_a_redrawn_parameter_set_is_pruned_without_spending_a_trial(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """A one-configuration space cannot fill 3 trials, so duplicates are pruned.
+
+    Optuna's TPE sampler can hand back a set it already scored. On the small
+    discrete space that happened in the HPO-007 run (trials 10 and 11 repeated
+    trial 4) and cost two full evals for no information.
+    """
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    run_dir = tmp_path / "run"
+    # One value per parameter: the second trial can only repeat the first.
+    result = _opt(
+        index_dir,
+        sample_corpus_path,
+        hpo_config=_query_time_space(fixed=True),
+        seed=0,
+        run_dir=run_dir,
+    ).optimize(n_trials=3, dataset_path=str(sample_qa_path), limit=2)
+
+    states = [trial.state.name for trial in result.study.trials]
+    assert states.count("COMPLETE") == 1
+    assert states.count("PRUNED") >= 1
+    assert result.pruned_trials >= 1
+    # The study gives up instead of grinding through a space with nothing left.
+    assert result.stopped_early is True
+
+    pruned = [t for t in result.study.trials if t.state.name == "PRUNED"]
+    assert all("duplicate_of" in trial.user_attrs for trial in pruned)
+    assert {trial.user_attrs["duplicate_of"] for trial in pruned} == {0}
+
+    rows = json.loads((run_dir / TRIALS_ARTIFACT_NAME).read_text(encoding="utf-8"))
+    assert [row["state"] for row in rows].count("COMPLETE") == 1
+
+
+def test_n_trials_counts_evaluated_trials_not_attempts(
+    sample_corpus_path: Path,
+    sample_qa_path: Path,
+    tmp_path: Path,
+) -> None:
+    """Pruning must not shrink the budget: the sweep keeps going until N ran."""
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    result = _opt(
+        index_dir,
+        sample_corpus_path,
+        hpo_config=_query_time_space(),
+        seed=0,
+    ).optimize(n_trials=3, dataset_path=str(sample_qa_path), limit=2)
+
+    completed = [t for t in result.study.trials if t.state.name == "COMPLETE"]
+    assert len(completed) == 3
+    assert result.to_dict()["completed_trials"] == 3

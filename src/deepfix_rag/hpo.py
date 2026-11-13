@@ -561,6 +561,24 @@ class HyperparameterOpt:
                 return executor.submit(asyncio.run, self._evaluate_trial(**kwargs)).result()
         return asyncio.run(self._evaluate_trial(**kwargs))
 
+    @staticmethod
+    def _duplicate_of(trial: optuna.Trial, params: dict[str, Any]) -> int | None:
+        """The earlier trial with the same parameters, or None.
+
+        Optuna's TPE sampler can redraw a parameter set it has already scored
+        when the space is small and discrete, which spends a full eval for no
+        information. This compares against the study's earlier trials.
+        """
+        study = trial.study
+        for earlier in study.trials:
+            if earlier.number >= trial.number:
+                break
+            if earlier.state != TrialState.COMPLETE:
+                continue
+            if dict(earlier.params) == dict(params):
+                return earlier.number
+        return None
+
     def _objective(
         self,
         trial: optuna.Trial,
@@ -577,6 +595,17 @@ class HyperparameterOpt:
 
         # 2. Mutate config
         trial_config = apply_mutation(self.base_config, {**self._base_overrides(), **overrides})
+
+        # 2b. A small discrete space can sample a param set the study already
+        # scored. Pruning it costs no eval and keeps the trial budget for
+        # unexplored configurations.
+        duplicate = self._duplicate_of(trial, overrides)
+        if duplicate is not None:
+            trial.set_user_attr("duplicate_of", duplicate)
+            LOGGER.info(
+                f"Pruning trial {trial.number}: it repeats trial {duplicate}'s parameters."
+            )
+            raise optuna.TrialPruned(f"duplicate of trial {duplicate}")
 
         temp_dir: str | None = None
         # 3. Check if chunking was modified and isolate index dir if so
