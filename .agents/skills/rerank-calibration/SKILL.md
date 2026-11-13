@@ -16,6 +16,8 @@ cli_actions:
 
 Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Re-ranking is query-time: do not re-index for `rerank.*` or `retrieval.top_k`, and do not pass `--index-dir` (the candidate reuses the champion's index).
 
+**In an API-driven round, rerank is searched through `hpo-search`, not hand-set here.** `hpo-search` runs one bounded `deepfix hpo` sweep over the shipped small space, which samples `rerank.enabled`, `rerank.top_n`, `retrieval.top_k` and the fusion settings together, then confirms the best trial on the full dev set. This skill keeps the single-setting recipe and the validated findings for manual use; a round does not hand-write one rerank candidate instead of the sweep.
+
 The rerank settings come from the environment (`COHERE_BASE_URL`, `COHERE_MODEL`) and rerank authorizes with `OPENROUTER_API_KEY`. If an eval exits 2 with `OPENROUTER_API_KEY` in the message, every case errored: rerank is unavailable. STOP, write `result.json` with a null candidate, report the cause in `summary`, and finish.
 
 ## When not to use

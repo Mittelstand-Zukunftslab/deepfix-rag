@@ -29,11 +29,24 @@ FAILURE_MODES = {mode.value for mode in RAGFailureMode if mode != RAGFailureMode
 SET_KEY_RE = re.compile(r"(?:--set|-s)\s+([A-Za-z0-9_.]+)=")
 
 LOOP_SKILL = "optimization-loop"
+# The loop routes query-time work (rerank, fusion) to one bounded HPO sweep.
+HPO_SKILL = "hpo-search"
 ROUTED_SKILLS = (
     "chunking-tuning",
-    "rerank-calibration",
+    HPO_SKILL,
     "retrieval-backend-selection",
+)
+# Readable single-setting recipes and validated findings. The loop does not
+# route to them any more; `hpo-search` covers their levers.
+REFERENCE_SKILLS = (
+    "rerank-calibration",
     "hybrid-fusion-tuning",
+)
+# Skills that change an index-time key and must therefore name all of them.
+# `hpo-search` samples only query-time knobs, so it is not one of these.
+INDEX_TIME_SKILLS = (
+    "chunking-tuning",
+    "retrieval-backend-selection",
 )
 UNROUTED_SKILLS = (
     "deflection-and-refusal",
@@ -41,7 +54,12 @@ UNROUTED_SKILLS = (
     "multi-hop-aggregation",
     "diagnostic-server",
 )
-OPTIMIZATION_SKILLS = (LOOP_SKILL, *ROUTED_SKILLS, *UNROUTED_SKILLS)
+OPTIMIZATION_SKILLS = (
+    LOOP_SKILL,
+    *ROUTED_SKILLS,
+    *REFERENCE_SKILLS,
+    *UNROUTED_SKILLS,
+)
 RESULT_KEYS = ("candidate_config_path", "primary_metric", "summary", "mlflow_run_id")
 
 _FENCED_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
@@ -258,7 +276,7 @@ def test_index_time_keys_are_listed_in_every_pathology_skill() -> None:
         "corpus_sha256": "`corpus_sha256`",
     }
     expected = [mentions.get(key, f"`retrieval.{key}`") for key in signature]
-    for name in ROUTED_SKILLS:
+    for name in INDEX_TIME_SKILLS:
         text = _read(name)
         missing = [key for key in expected if key not in text]
         assert not missing, f"{name} does not list index-time keys {missing}"
@@ -285,23 +303,36 @@ def test_language_values_are_real_stemmers() -> None:
     assert algorithms <= listed, f"missing stemmers: {algorithms - listed}"
 
 
-def test_hpo_examples_use_real_flags_and_stay_out_of_cli_actions(cli_runner: CliRunner) -> None:
-    """Manual hpo examples use flags the command has; the agent-facing actions omit hpo."""
+def test_hpo_examples_use_real_flags(cli_runner: CliRunner) -> None:
+    """Every `deepfix hpo` example in a skill uses flags the command actually has."""
     help_text = cli_runner.invoke(app, ["hpo", "--help"]).output
     commands = [
         c
-        for name in ROUTED_SKILLS
+        for name in (LOOP_SKILL, *ROUTED_SKILLS, *REFERENCE_SKILLS)
         for c in _commands(name, "deepfix hpo")
         if c.startswith("deepfix hpo --config")
     ]
-    assert len(commands) >= 2, "manual hpo examples are missing"
+    assert len(commands) >= 2, "hpo examples are missing"
     for command in commands:
         flags = re.findall(r"(?<!\S)(--[a-z-]+)", command)
         unknown = [flag for flag in flags if flag not in help_text]
         assert not unknown, f"`{command}` uses unknown hpo flags {unknown}"
-    for name in ROUTED_SKILLS:
+
+
+def test_only_hpo_search_and_the_loop_offer_hpo_as_a_round_action() -> None:
+    """The sweep lives in `hpo-search`; the loop repeats its one command, nothing else does."""
+    for name in OPTIMIZATION_SKILLS:
         actions = _load_frontmatter(SKILLS_ROOT / name / "SKILL.md")["cli_actions"]
-        assert not [a for a in actions if "hpo" in a], f"{name} offers hpo as a round action"
+        hpo_actions = [action for action in actions if "hpo" in action]
+        if name in (HPO_SKILL, LOOP_SKILL):
+            assert len(hpo_actions) <= 1, f"{name} offers more than one hpo action"
+        else:
+            assert not hpo_actions, f"{name} offers hpo as a round action"
+    assert [
+        action
+        for action in _load_frontmatter(SKILLS_ROOT / HPO_SKILL / "SKILL.md")["cli_actions"]
+        if "hpo" in action
+    ], "hpo-search must carry the sweep as its round action"
 
 
 def test_agent_skills_never_enable_query_expansion() -> None:
@@ -341,8 +372,11 @@ def test_loop_budget_matches_the_hermes_turn_cap_and_keeps_extra_frontmatter() -
     assert "agent.max_turns" in text
     assert "not a cancel" in text
     assert "result.json" in text
-    assert "No `deepfix hpo`" in text
-    assert "no `run-diagnostic`" in text
+    assert "No `run-diagnostic`" in text
+    # HPO is allowed, but only as the single bounded sweep `hpo-search` defines.
+    assert "No `deepfix hpo`" not in text
+    assert "hpo-search" in text
+    assert "deepfix hpo" in text
     assert "15 agent" not in text
     assert "15-step" not in text
     for path in _skill_paths():
@@ -382,3 +416,92 @@ def test_loop_says_top_k_alone_does_not_move_scores() -> None:
     text = _read(LOOP_SKILL)
     assert "`retrieval.top_k` only moves the scores through reranking" in text
     assert "not a useful hypothesis" in text
+
+
+def test_the_hpo_skill_is_the_query_time_path_and_stays_bounded() -> None:
+    """`hpo-search` is the one sweep; it confirms on the full dev set and never promotes."""
+    text = _read(HPO_SKILL)
+    assert "deepfix hpo" in text
+    assert "configs/hpo_retrieval_small.yaml" in text
+    assert "--n-trials 12" in text
+    assert "--limit 20" in text
+    assert "--seed 0" in text
+    assert "--timeout 2400" in text
+    assert "sqlite:///<run_dir>/hpo.db" in text
+    assert "<run_dir>/idx-cache" in text
+    # The confirmation is the whole dev set and the existing gate.
+    assert "Do not pass `--limit`" in text or "No `--limit`" in text
+    assert "deepfix gate" in text
+    assert "result.json" in text
+    for key in RESULT_KEYS:
+        assert key in text, f"hpo-search never mentions {key}"
+    assert "Promote" not in text
+    assert "run-diagnostic" not in text
+    assert "retrieval.query_expansion_num=1" not in text
+    # The budget and the fixed space are explicit.
+    assert f"{HERMES_MAX_TURNS} agent turns" in text
+    assert "bm25_k1" in text and "bm25_b" in text
+    assert "chunking" in text
+
+
+def test_the_hpo_skill_example_is_a_real_hpo_invocation(cli_runner: CliRunner) -> None:
+    """The round's single hpo command parses, and HPO accepts its shipped config."""
+    from deepfix_rag.config.hpo import load_hpo_config
+
+    # The command appears in the frontmatter actions and in the fenced block.
+    commands = sorted(
+        {
+            command
+            for command in _commands(HPO_SKILL, "deepfix hpo")
+            if command.startswith("deepfix hpo --config")
+        }
+    )
+    assert len(commands) == 1, commands
+    command = commands[0]
+    args = shlex.split(command.strip("`"))
+    assert args[:2] == ["deepfix", "hpo"]
+    assert "--n-trials" in args and args[args.index("--n-trials") + 1] == "12"
+    assert "--timeout" in args and args[args.index("--timeout") + 1] == "2400"
+    assert "--seed" in args and args[args.index("--seed") + 1] == "0"
+    assert "--limit" in args and args[args.index("--limit") + 1] == "20"
+
+    help_text = cli_runner.invoke(app, ["hpo", "--help"]).output
+    flags = re.findall(r"(?<!\S)(--[a-z-]+)", command)
+    assert not [flag for flag in flags if flag not in help_text]
+
+    config_path = Path(command.split("--config", 1)[1].split()[0])
+    assert config_path == Path("configs/hpo_retrieval_small.yaml")
+    config = load_hpo_config(Path(__file__).resolve().parents[1] / config_path)
+    assert config.n_trials == 12
+    assert config.retrieval_only is True
+    assert config.search_space.hybrid.top_k_choices == [10, 20, 50]
+    assert config.search_space.hybrid.rerank_choices == [False, True]
+
+
+def test_the_loop_routes_query_time_work_to_hpo_search_only() -> None:
+    """Rows 3 and 5 are hpo-search; chunking and backend selection stay one-hypothesis."""
+    text = _read(LOOP_SKILL)
+    table = [line for line in text.splitlines() if re.match(r"\| \d+ \|", line)]
+    rows = {line.split("|")[1].strip(): line for line in table}
+    assert f"`{HPO_SKILL}`" in rows["3"]
+    assert f"`{HPO_SKILL}`" in rows["5"]
+    assert f"`{HPO_SKILL}`" not in rows["2"]
+    assert f"`{HPO_SKILL}`" not in rows["4"]
+    assert "chunking-tuning" in rows["2"]
+    assert "retrieval-backend-selection" in rows["4"]
+    assert "one bounded `deepfix hpo` sweep" in text
+    assert "no HPO" in text
+
+
+def test_the_reference_skills_say_a_round_uses_hpo_search() -> None:
+    for name in REFERENCE_SKILLS:
+        text = _read(name)
+        assert "hpo-search" in text, f"{name} never points at hpo-search"
+        assert "does not hand-write" in text or "not hand-write" in text, name
+
+
+def test_chunking_hpo_stays_out_of_api_rounds() -> None:
+    text = _read("chunking-tuning")
+    assert "--tune-chunking" in text
+    assert "Never run it with `--tune-chunking` in an API-driven round" in text
+    assert "hpo-search" in text

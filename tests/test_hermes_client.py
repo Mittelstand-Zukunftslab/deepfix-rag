@@ -468,6 +468,10 @@ def test_start_run_sends_the_fixed_instructions_and_replays_the_original_id() ->
     assert f"{HERMES_MAX_TURNS} agent turns" in instructions
     assert "not a cancel" in instructions
     assert "deepfix hpo" in instructions
+    assert "hpo-search" in instructions
+    assert "configs/hpo_retrieval_small.yaml" in instructions
+    assert "ONCE" in instructions
+    assert "Do not run `deepfix hpo`" not in instructions
     assert "run-diagnostic" in instructions
     for call in api.calls:
         assert call.authorized

@@ -17,6 +17,8 @@ cli_actions:
   - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
 ---
 
+**In an API-driven round, query-time fusion and rerank go through `hpo-search`, not this skill.** `hpo-search` runs one bounded `deepfix hpo` sweep over the shipped small space (fusion mode, dense weight, `top_k`, rerank) and then confirms the best trial on the full dev set. This skill documents a single hand-picked fusion setting for manual use and for reading the findings; a round does not hand-write one candidate instead of the sweep.
+
 Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Everything here is query-time: do not re-index and do not pass `--index-dir`.
 
 Do not set `retrieval.query_expansion_num` above 1 in agent runs: it calls an LLM the agent does not have, so every case would error. The field is capped at 8 and the agent must leave it at 1. Do not edit `retrieval.query_gen_prompt` either. Hypothetical document embeddings (HyDE) are not implemented. This skill does not rewrite the query text.
@@ -53,13 +55,13 @@ If `effective_backend` is `dense` while the champion is `hybrid`, the BM25 docst
 
 ## Outside a round (manual use only)
 
-Searching the fusion settings with `deepfix hpo` is not available in a round (see `chunking-tuning` for the caveats). The hybrid search space already covers `fusion_modes`, `dense_weight`, `bm25_k1` and `bm25_b`:
+The query-time sweep an API round runs is `hpo-search` with `configs/hpo_retrieval_small.yaml`. For a wider manual study, `configs/hpo.yaml` already covers `fusion_modes`, `dense_weight`, `bm25_k1` and `bm25_b`:
 
 ```
-deepfix hpo --config <hpo_yaml> --paradigm hybrid --dataset <dataset_path> --retrieval-only --limit 30 --n-trials 20 --output <out_yaml> --json
+deepfix hpo --config <hpo_yaml> --paradigm hybrid --dataset <dataset_path> --retrieval-only --limit 30 --seed 0 --n-trials 20 --timeout 2400 --storage-uri sqlite:///hpo.db --output <out_yaml> --run-dir <run_dir> --json
 ```
 
-`<hpo_yaml>` must set `base_config` to the champion and `query_expansion_num_min` and `query_expansion_num_max` to 1 under `search_space.hybrid`. Run the best config through the `optimization-loop` compare before trusting it.
+`<hpo_yaml>` must set `base_config` to the champion and `query_expansion_num_min` and `query_expansion_num_max` to 1 under `search_space.hybrid`. Run the best config through the `optimization-loop` compare on the full dev set before trusting it. Do not run this inside a round: `hpo-search` is the round's one sweep.
 
 ## Valid values
 
