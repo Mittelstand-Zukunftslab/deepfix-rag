@@ -485,3 +485,49 @@ def test_an_explicit_index_dir_is_filled_from_the_remote_base(
     assert opt.local_index_for() == explicit
     assert opt.index_copy_source is None
     assert opt._base_overrides()["retrieval.lancedb_index_dir"] == str(explicit)
+
+
+@pytest.mark.cli
+def test_hpo_json_stdout_is_one_json_document(
+    cli_runner: CliRunner,
+    sample_corpus_path: Path,
+    tmp_path: Path,
+) -> None:
+    """MLflow's "View run" chatter must not land on the agent's stdout."""
+    index_dir = _fixture_index(sample_corpus_path, tmp_path)
+    champion_path = tmp_path / "champion.yaml"
+    champion_path.write_text(_base_config(index_dir, sample_corpus_path).to_yaml())
+    space_path = tmp_path / "space.yaml"
+    space = _query_time_space(fixed=True)
+    space_path.write_text(
+        yaml.safe_dump(
+            {
+                "base_config": str(champion_path),
+                "study_name": "stdout_test",
+                "storage_uri": "sqlite:///:memory:",
+                "n_trials": 1,
+                "retrieval_only": True,
+                "limit": 2,
+                "seed": 0,
+                "search_space": space.search_space.model_dump(mode="json"),
+            }
+        )
+    )
+    result = cli_runner.invoke(
+        app,
+        [
+            "hpo",
+            "--config",
+            str(space_path),
+            "--dataset",
+            str(tmp_path / "qa.jsonl"),
+            "--retrieval-only",
+            "--n-trials",
+            "1",
+            "--json",
+        ],
+    )
+    # Even the error payload is a single JSON object: no MLflow line precedes it.
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert "View run" not in result.stdout

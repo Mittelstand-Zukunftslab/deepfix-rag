@@ -1,6 +1,8 @@
 """deepfix hpo subcommand for multi-paradigm hyperparameter optimization."""
 
+import contextlib
 from pathlib import Path
+import sys
 from typing import Any
 
 import typer
@@ -220,13 +222,19 @@ def hpo_cmd(
             index_dir=index_dir,
             output_path=effective_output,
         )
-        result = opt.optimize(
-            n_trials=effective_n_trials,
-            timeout=effective_timeout,
-            dataset_path=effective_dataset,
-            split=effective_split,
-            limit=effective_limit,
+        # With --json, MLflow prints "View run ..." on stdout. The agent parses
+        # stdout as one JSON document, so keep that chatter on stderr.
+        redirect = (
+            contextlib.redirect_stdout(sys.stderr) if json_output else contextlib.nullcontext()
         )
+        with redirect:
+            result = opt.optimize(
+                n_trials=effective_n_trials,
+                timeout=effective_timeout,
+                dataset_path=effective_dataset,
+                split=effective_split,
+                limit=effective_limit,
+            )
     except Exception as e:
         emit_error(
             f"Optimization runtime error: {e}",

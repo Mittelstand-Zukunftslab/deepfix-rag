@@ -96,7 +96,8 @@ Fill in `mlflow_run_id` from the compare JSON's candidate side, restate baseline
 ## Reading the HPO JSON
 
 - `best_trial.params` / `best_trial.values` come from the 20-question subsample. Use them only to describe the hypothesis.
-- `stopped_early` is true when `--timeout` stopped the sweep before 12 trials. Say so in `summary`; it does not invalidate the confirmation.
+- `stopped_early` is true when the sweep finished fewer trials than `--n-trials` — because `--timeout` stopped it or a trial failed. Say so in `summary`; it does not invalidate the confirmation.
+- `failed_trials` counts trials Optuna recorded `FAIL`. Each one errored on every case, so it measured nothing and can never be the best trial. The error text is on the trial row's `user_attrs.error` in `hpo_trials.json`.
 - `trials_path` points at `<run_dir>/hpo_trials.json`. `index_dir` / `index_cache_source` show the local index the trials used.
 - `completed_trials` / `total_trials` describe the study, not your turn budget.
 
@@ -109,3 +110,4 @@ Fill in `mlflow_run_id` from the compare JSON's candidate side, restate baseline
 - Reaching for `configs/...` inside the container. The sandbox has no repository checkout: the search space and the champion both come from `input/` in the run bundle.
 - Expecting `retrieval.dense_weight` to matter under `reciprocal_rerank`. The space does not sample it there for that reason.
 - Treating an HPO trial error as a retrieval miss. Read `hpo_trials.json`: a failed trial state means the pipeline, not the ranking.
+- Reading `best_trial: null` with `failed_trials` equal to the trial count as "no configuration helps". If every rerank trial failed with the same HTTP error, the rerank path is broken: stop, write a null candidate, and put that error in `summary`. Do not report rerank as a lever that does not work.

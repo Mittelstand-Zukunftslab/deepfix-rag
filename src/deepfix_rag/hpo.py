@@ -165,6 +165,7 @@ class HPOResult:
     index_dir: Path | None = None
     index_cache_source: str | None = None
     stopped_early: bool = False
+    failed_trials: int = 0
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert study trials to a structured DataFrame."""
@@ -221,6 +222,7 @@ class HPOResult:
             "pareto_trials": pareto_list,
             "best_config": self.best_config.model_dump() if self.best_config else None,
             "stopped_early": self.stopped_early,
+            "failed_trials": self.failed_trials,
             "run_dir": str(self.run_dir) if self.run_dir is not None else None,
             "trials_path": str(self.trials_path) if self.trials_path is not None else None,
             "index_dir": str(self.index_dir) if self.index_dir is not None else None,
@@ -672,6 +674,7 @@ class HyperparameterOpt:
             best_config = pareto_configs[idx]
 
         completed_count = len([t for t in study.trials if t.state == TrialState.COMPLETE])
+        failed_count = len([t for t in study.trials if t.state == TrialState.FAIL])
         trials_path: Path | None = None
         if self.run_dir is not None:
             trials_path = _write_trial_rows(self.run_dir, self.metric_names, study.trials)
@@ -688,6 +691,7 @@ class HyperparameterOpt:
             trials_path=trials_path,
             index_dir=self.local_index_dir,
             index_cache_source=self.index_copy_source,
-            # A timeout, or a trial that failed, can stop the study short.
+            failed_trials=failed_count,
+            # A timeout, or a trial that failed, can leave the budget unspent.
             stopped_early=completed_count < target_n_trials,
         )
