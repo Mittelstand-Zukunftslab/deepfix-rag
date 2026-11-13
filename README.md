@@ -339,6 +339,8 @@ deepfix eval --dataset <path_to_qa> --config <config.yaml> [--index-dir <dir>] [
 ```
 
 `--index-dir` moves only the candidate. `--baseline-index-dir` moves the `--compare` baseline, so a round can score both sides from one local copy of a remote index (`<run_dir>/idx-cache`) instead of re-reading the object store.
+
+`eval` never builds an index. When `--index-dir` or `--baseline-index-dir` names a missing or empty directory it copies the config's own `s3://` index into it, manifest included, then scores that. If the config's index is local too, the run fails with `error_type` `stale_index` naming the directory. A missing cache no longer falls through to ingestion, which used to build and score a brand-new index without saying so.
 ### `deepfix mutate-config`
 Validate and mutate RAG pipeline hyperparameters using dot-notation keys.
 ```bash
@@ -378,7 +380,7 @@ deepfix hpo --config configs/hpo_retrieval_small.yaml --retrieval-only --limit 2
   --output <run_dir>/candidate.yaml --run-dir <run_dir> --json
 ```
 
-`--seed` draws a deterministic sample of `--limit` rows for every trial (the same semantics as `deepfix eval --seed`). `--timeout` caps the study wall clock. `--run-dir` keeps `hpo_trials.json` and the best-so-far YAML fresh after every trial, so a timeout or a crash still leaves a usable candidate. When the base config names an `s3://` index, HPO copies the whole prefix — bucket and key — once into `<run_dir>/idx-cache` (or the `--index-dir` you pass) and every trial reads that local copy. Point the confirmation evals at the same cache with `--index-dir` and `--baseline-index-dir`.
+`--seed` draws a deterministic sample of `--limit` rows for every trial (the same semantics as `deepfix eval --seed`). `--timeout` caps the study wall clock. `--run-dir` keeps `hpo_trials.json` and the best-so-far YAML fresh after every trial, so a timeout or a crash still leaves a usable candidate. When the base config names an `s3://` index, HPO copies the whole prefix — bucket and key — once into `<run_dir>/idx-cache` (or the `--index-dir` you pass) and every trial reads that local copy. The copy also receives a `deepfix_index.json` built from that config, so a later `eval --index-dir` on the cache passes the staleness check instead of falling back to S3. Point the confirmation evals at the same cache with `--index-dir` and `--baseline-index-dir`.
 
 The exported candidate contains the base config plus the tuned parameters only. `data.limit`, `data.path_or_repo` and `retrieval.lancedb_index_dir` are trial-only overrides and never appear in it, so the candidate is re-scored on the full dev set against the champion's own dataset and index.
 
