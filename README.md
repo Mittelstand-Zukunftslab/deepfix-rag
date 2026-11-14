@@ -312,6 +312,9 @@ ADMIN_CHAT_MAX_PROMPT_CHARS=48000
 ADMIN_CHAT_MAX_MESSAGES=60
 ADMIN_CHAT_TURN_TIMEOUT_SECONDS=300
 ADMIN_CHAT_DIGEST_MAX_CHARS=6000
+# The 31st turn in the window is a 429 with Retry-After, and one admin may run
+# one turn at a time. One turn over the global cap is a 429 "The assistant is
+# busy." with no audit row.
 ADMIN_CHAT_MAX_TURNS_PER_WINDOW=30
 ADMIN_CHAT_TURN_WINDOW_SECONDS=300
 ADMIN_CHAT_MAX_CONCURRENT_TURNS=2
