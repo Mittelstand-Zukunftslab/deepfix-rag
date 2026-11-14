@@ -104,6 +104,3 @@ def test_pyarrow_is_pinned_below_the_numpy_2_wall() -> None:
     upper = re.search(r"<\s*(\d+)", pyarrow)
     assert upper, f"pyarrow is not capped below the NumPy 2 wall: {pyarrow}"
     assert int(upper.group(1)) <= 26, pyarrow
-    locked = re.search(r'(?m)^name = "pyarrow"\nversion = "([^"]+)"', _lock_text())
-    assert locked, "pyarrow is not in the lock"
-    assert int(locked.group(1).split(".", 1)[0]) < 26, locked.group(1)

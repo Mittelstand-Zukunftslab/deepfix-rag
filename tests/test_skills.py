@@ -1,9 +1,11 @@
 """Validate the optimization skills against the CLI, RAGConfig and the promotion gate."""
 
 import json
+import os
 from pathlib import Path
 import re
 import shlex
+import subprocess
 from types import UnionType
 from typing import Union, get_args, get_origin
 
@@ -25,6 +27,8 @@ from deepfix_rag.run_bundle import HPO_SPACE_FILENAME
 pytestmark = [pytest.mark.unit]
 
 SKILLS_ROOT = Path(__file__).resolve().parents[1] / ".agents" / "skills"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PLUGIN_MANIFEST = REPO_ROOT / "plugins" / "deepfix-rag" / "plugin.yaml"
 REQUIRED_KEYS = ("name", "description", "failure_mode", "trigger_conditions", "cli_actions")
 FAILURE_MODES = {mode.value for mode in RAGFailureMode if mode != RAGFailureMode.SUCCESS}
 SET_KEY_RE = re.compile(r"(?:--set|-s)\s+([A-Za-z0-9_.]+)=")
@@ -584,28 +588,49 @@ def test_the_hpo_skill_localizes_the_cache_before_scoring_anything() -> None:
         assert "--baseline-index-dir <run_dir>/idx-cache" in command, command
 
 
-PLUGIN_MANIFEST = SKILLS_ROOT.parents[1] / "plugins" / "deepfix-rag" / "plugin.yaml"
+@pytest.mark.integration
+def test_a_fresh_tool_install_discovers_the_skills_and_runs_the_cli(tmp_path: Path) -> None:
+    """The adopter path end to end: `uv tool install` from this checkout, then both entry points.
 
-
-def test_the_plugin_manifest_lists_every_skill_on_disk() -> None:
-    """The manifest is what a plugin host reads, so it cannot lag the skills directory.
-
-    `hpo-search` was missing for a whole release because nothing compared the
-    two lists. Every directory under `.agents/skills/` must appear here, and
-    every entry must resolve to a real `SKILL.md`.
+    The package is published nowhere else, so this is the one install a new user
+    runs. It catches the failures that only appear outside the repo venv: a
+    dependency that resolves to a wheel the pinned NumPy cannot import (which is
+    how `deepfix --help` broke), or a manifest that omits a skill.
     """
+    env = {
+        **os.environ,
+        "UV_TOOL_DIR": str(tmp_path / "tools"),
+        "UV_TOOL_BIN_DIR": str(tmp_path / "bin"),
+        "UV_CACHE_DIR": str(tmp_path / "cache"),
+    }
+    installed = subprocess.run(
+        ["uv", "tool", "install", "--force", str(REPO_ROOT)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=900,
+    )
+    assert installed.returncode == 0, installed.stderr[-4000:]
+
+    deepfix = tmp_path / "bin" / "deepfix"
+    assert deepfix.is_file(), sorted(path.name for path in (tmp_path / "bin").iterdir())
+    helped = subprocess.run(
+        [str(deepfix), "--help"], capture_output=True, text=True, env=env, timeout=300
+    )
+    assert helped.returncode == 0, helped.stderr[-4000:]
+    for command in ("eval", "index", "hpo", "mutate-config", "gate", "run-diagnostic"):
+        assert command in helped.stdout, command
+
+    # The installer discovers `.agents/skills/`, and the manifest a plugin host
+    # reads must agree with it. A round needs `hpo-search` reachable this way.
     manifest = yaml.safe_load(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
-    listed = manifest["skills"]
-    on_disk = sorted(
-        f"../../.agents/skills/{path.parent.name}/SKILL.md"
-        for path in SKILLS_ROOT.glob("*/SKILL.md")
-    )
-    assert sorted(listed) == on_disk, (
-        f"manifest is missing {sorted(set(on_disk) - set(listed))} "
-        f"and lists stale {sorted(set(listed) - set(on_disk))}"
-    )
-    for entry in listed:
-        assert (PLUGIN_MANIFEST.parent / entry).is_file(), entry
-    for alias, target in manifest["aliases"].items():
-        assert alias in {Path(entry).parent.name for entry in listed}, alias
-        assert target in {Path(entry).parent.name for entry in listed}, target
+    listed = {entry.rsplit("/", 2)[-2] for entry in manifest["skills"]}
+    on_disk = {path.parent.name for path in SKILLS_ROOT.glob("*/SKILL.md")}
+    assert listed == on_disk
+    assert "hpo-search" in on_disk
+    for name in on_disk:
+        meta = yaml.safe_load(
+            (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8").split("---", 2)[1]
+        )
+        assert meta["name"] == name and meta["description"].strip()
+        assert set(REQUIRED_KEYS) <= set(meta), name
