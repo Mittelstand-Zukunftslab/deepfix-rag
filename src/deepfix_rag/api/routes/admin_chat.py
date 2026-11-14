@@ -24,6 +24,7 @@ depend on neither predicate: they serve what chat already wrote (D-4).
 import asyncio
 from collections.abc import AsyncIterator
 import json
+from pathlib import Path
 import time
 from typing import Any
 
@@ -31,7 +32,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 import httpx
 
-from deepfix_rag import admin_chat
+from deepfix_rag import admin_chat, optimization
 from deepfix_rag.api import chat_stream
 from deepfix_rag.api.chat_turns import TurnRegistry, registry_for, resume_frames
 from deepfix_rag.api.deps import get_settings, require_admin
@@ -56,6 +57,7 @@ from deepfix_rag.api.schemas import (
     ChatMessageResponse,
     ChatThreadDetailResponse,
     ChatThreadResponse,
+    ChatThreadRunResponse,
     ChatThreadSummaryResponse,
     ChatTurnResponse,
     OptimizationRunResponse,
@@ -931,3 +933,89 @@ def _owned_action(settings: Settings, action_id: str, admin_id: str) -> admin_ch
     except KeyError as exc:
         raise HTTPException(status_code=NOT_FOUND, detail="No chat action with that id.") from exc
     return action
+
+
+@router.post(
+    "/admin/chat/threads/{thread_id}/runs/{run_id}",
+    operation_id="link_admin_chat_thread_run",
+    response_model=ChatThreadRunResponse,
+    responses=error_responses(UNAUTHORIZED, FORBIDDEN, NOT_FOUND, SERVICE_UNAVAILABLE),
+    summary="Link an optimization run to a thread",
+)
+def link_admin_chat_thread_run(
+    thread_id: str, run_id: str, request: Request
+) -> ChatThreadRunResponse:
+    """Link a run so the thread can show its progress. Linking twice is idempotent."""
+    user = require_admin(request, "Only admins can use Hermes chat.")
+    settings = get_settings(request)
+    chat_gate(request)
+    _owned_thread(settings, thread_id, user.id)
+    try:
+        optimization.get_run(settings.product_db_path, run_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=NOT_FOUND, detail="No optimization run with that id."
+        ) from exc
+    admin_chat.link_run(settings.product_db_path, thread_id, run_id)
+    items = _run_items(settings, thread_id, user.id)
+    return next(item for item in items if item.run_id == run_id)
+
+
+@router.get(
+    "/admin/chat/threads/{thread_id}/runs",
+    operation_id="list_admin_chat_thread_runs",
+    response_model=list[ChatThreadRunResponse],
+    responses=error_responses(UNAUTHORIZED, FORBIDDEN, NOT_FOUND, SERVICE_UNAVAILABLE),
+    summary="Show the runs linked to a thread",
+)
+def list_admin_chat_thread_runs(thread_id: str, request: Request) -> list[ChatThreadRunResponse]:
+    """Each linked run's status, deltas, MLflow link, and redacted step tail."""
+    user = require_admin(request, "Only admins can use Hermes chat.")
+    settings = get_settings(request)
+    chat_gate(request)
+    # A dead job must not be reported as running forever: the same arguments the
+    # Optimization screen uses, so the two cannot disagree about staleness.
+    _owned_thread(settings, thread_id, user.id)
+    optimization.fail_stale_runs(
+        settings.product_db_path,
+        timeout_seconds=settings.OPTIMIZATION_RUN_TIMEOUT_HOURS * 60 * 60,
+        options=optimization.settings_from(settings),
+    )
+    return _run_items(settings, thread_id, user.id)
+
+
+def _run_items(settings: Settings, thread_id: str, admin_id: str) -> list[ChatThreadRunResponse]:
+    private = _private_paths(settings)
+    items = admin_chat.linked_runs(
+        settings.product_db_path,
+        thread_id,
+        admin_id,
+        step_tail=settings.ADMIN_CHAT_STEP_TAIL,
+        step_read_bytes=settings.ADMIN_CHAT_STEP_READ_BYTES,
+        private_paths=private,
+        # The chat key is a secret by name, but a test (and a deployment with a
+        # different settings source) has it in Settings rather than the process
+        # environment, so it is passed explicitly as well as being in the list.
+        secrets=((settings.HERMES_CHAT_API_SERVER_KEY or "").strip(),),
+        step_log_dir=Path(settings.PRODUCT_DATA_DIR) / "optimization-logs",
+        url_for=optimization.mlflow_run_url,
+    )
+    return [
+        ChatThreadRunResponse(
+            run_id=item.run_id,
+            status=item.status,
+            trigger=item.trigger,
+            reason=item.reason,
+            started_at=item.started_at,
+            ended_at=item.ended_at,
+            primary_metric=item.primary_metric,
+            dev_delta=item.dev_delta,
+            holdout_delta=item.holdout_delta,
+            holdout_wins=item.holdout_wins,
+            holdout_losses=item.holdout_losses,
+            mlflow_run_id=item.mlflow_run_id,
+            mlflow_url=item.mlflow_url,
+            steps=item.steps,
+        )
+        for item in items
+    ]

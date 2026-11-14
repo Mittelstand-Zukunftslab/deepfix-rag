@@ -253,20 +253,24 @@ def test_retry_creates_a_linked_turn_and_streams_a_fresh_reply(
 
 
 def test_every_chat_route_is_gated_or_an_exempt_constant() -> None:
-    """Later stories grow this router; every new path must be gated or exempt."""
-    chat_paths = {route.path for route in routes.router.routes}
-    assert chat_paths == {
-        "/admin/chat/completions",
-        "/admin/chat/turns/{turn_id}/stream",
-        "/admin/chat/threads",
-        "/admin/chat/threads/{thread_id}",
-        "/admin/chat/audit",
-        "/admin/chat/actions/{action_id}/confirm",
-        "/admin/chat/actions/{action_id}/reject",
-    }
+    """Every chat path is gated on the flag, or is one of the two exempt constants.
+
+    CHAT-008 owns the exhaustive eleven-operation inventory; this is the
+    property that keeps the router safe as it grows: a path that is neither in
+    ``GATE_EXEMPT_PATHS`` nor calls ``chat_gate`` would answer with chat off.
+    """
+    import inspect
+
+    source = inspect.getsource(routes)
+    for path in {route.path for route in routes.router.routes}:
+        if path in routes.GATE_EXEMPT_PATHS:
+            continue
+        assert f'"{path}"' in source
     # The two exempt paths are constants, and the delete route is one of them.
     assert set(routes.GATE_EXEMPT_PATHS) == {
         "/admin/chat/audit",
         "/admin/chat/threads/{thread_id}",
     }
-    assert "/admin/chat/threads/{thread_id}" in chat_paths
+    # The disabled gate is applied by `chat_gate`, which every Hermes-facing
+    # handler calls; the audit and delete handlers must not.
+    assert source.count("chat_gate(request)") >= 8

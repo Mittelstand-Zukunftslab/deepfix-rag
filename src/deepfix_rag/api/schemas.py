@@ -421,3 +421,22 @@ class ChatAuditResponse(ApiModel):
     thread_deleted: bool = Field(
         description="True when the thread this event names has since been deleted."
     )
+
+
+class ChatThreadRunResponse(ApiModel):
+    """One optimization run linked to a thread, with its step tail."""
+
+    run_id: str
+    status: Literal["running", "skipped", "rejected", "promoted", "succeeded", "failed"]
+    trigger: Literal["cron", "manual"]
+    reason: str | None = None
+    started_at: str
+    ended_at: str | None = None
+    primary_metric: str | None = None
+    dev_delta: dict[str, float] | None = None
+    holdout_delta: dict[str, float] | None = None
+    holdout_wins: int | None = None
+    holdout_losses: int | None = None
+    mlflow_run_id: str | None = None
+    mlflow_url: str | None = None
+    steps: list[str] = Field(default_factory=list)

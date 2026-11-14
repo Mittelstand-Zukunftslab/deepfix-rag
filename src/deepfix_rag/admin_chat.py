@@ -1281,3 +1281,121 @@ def decide_action(
             (status, _now(), admin_id, result, action_id),
         )
         return cursor.rowcount == 1
+
+
+OUTPUT_MARKER = "----- output -----"
+
+
+def read_step_tail(
+    path: Path,
+    *,
+    max_lines: int,
+    max_bytes: int,
+    private_paths: tuple[str, ...] = (),
+    secrets: tuple[str, ...] = (),
+) -> list[str]:
+    """The last ``max_lines`` redacted lines of a step log, reading at most ``max_bytes``.
+
+    The file is never loaded: the reader seeks to the end and reads one bounded
+    window backwards, so a 10 MB log costs the same as a small one and the
+    response cannot grow with the log (NFR-3). The ``----- output -----``
+    section is cut first, because that is where the run's final output goes and
+    it is not step progress.
+    """
+    if max_bytes <= 0 or not path.is_file():
+        return []
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            start = max(0, size - max_bytes)
+            handle.seek(start)
+            raw = handle.read(size - start)
+    except OSError:
+        return []
+    text = raw.decode("utf-8", errors="replace")
+    if start > 0:
+        # The window may begin mid-line; that fragment is not a real line.
+        _, _, text = text.partition("\n")
+    if OUTPUT_MARKER in text:
+        text = text.split(OUTPUT_MARKER, 1)[0]
+    lines = [line for line in text.splitlines() if line.strip()]
+    tail = lines[-max_lines:] if max_lines > 0 else []
+    return [redacted_detail(line, private_paths, secrets) for line in tail]
+
+
+@dataclass(frozen=True)
+class RunProgress:
+    """One linked optimization run, as the thread's run panel shows it."""
+
+    run_id: str
+    status: str
+    trigger: str
+    reason: str | None
+    started_at: str
+    ended_at: str | None
+    primary_metric: str | None
+    dev_delta: dict[str, float] | None
+    holdout_delta: dict[str, float] | None
+    holdout_wins: int | None
+    holdout_losses: int | None
+    mlflow_run_id: str | None
+    mlflow_url: str | None
+    steps: list[str]
+
+
+def linked_runs(
+    db_path: Path,
+    thread_id: str,
+    admin_id: str,
+    *,
+    step_tail: int,
+    step_read_bytes: int,
+    private_paths: tuple[str, ...] = (),
+    secrets: tuple[str, ...] = (),
+    step_log_dir: Path | None = None,
+    url_for: Any = None,
+) -> list[RunProgress]:
+    """Every run linked to this admin's thread, newest link first.
+
+    ``url_for`` is ``mlflow_run_url``; it is an argument so this module does not
+    import a transport concern and a test can assert the URL without MLflow.
+    """
+    get_thread(db_path, thread_id, admin_id)
+    items: list[RunProgress] = []
+    for link in thread_runs(db_path, thread_id, admin_id):
+        try:
+            run = optimization.get_run(db_path, link.run_id)
+        except KeyError:
+            # A pruned run row must not break the thread: the link is only a pointer.
+            continue
+        steps = (
+            read_step_tail(
+                Path(step_log_dir) / f"{link.run_id}.log",
+                max_lines=step_tail,
+                max_bytes=step_read_bytes,
+                private_paths=private_paths,
+                secrets=secrets,
+            )
+            if step_log_dir is not None
+            else []
+        )
+        items.append(
+            RunProgress(
+                run_id=run.run_id,
+                status=run.status,
+                trigger=run.trigger,
+                reason=run.reason,
+                started_at=run.started_at,
+                ended_at=run.ended_at,
+                primary_metric=run.primary_metric,
+                dev_delta=run.dev_delta,
+                holdout_delta=run.holdout_delta,
+                holdout_wins=run.holdout_wins,
+                holdout_losses=run.holdout_losses,
+                mlflow_run_id=run.mlflow_run_id,
+                mlflow_url=url_for(run.mlflow_run_id) if url_for is not None else None,
+                steps=steps,
+            )
+        )
+    return items

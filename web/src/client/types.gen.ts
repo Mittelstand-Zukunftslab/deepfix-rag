@@ -281,6 +281,74 @@ export type ChatThreadResponse = {
 };
 
 /**
+ * ChatThreadRunResponse
+ *
+ * One optimization run linked to a thread, with its step tail.
+ */
+export type ChatThreadRunResponse = {
+    /**
+     * Dev Delta
+     */
+    dev_delta: {
+        [key: string]: number;
+    } | null;
+    /**
+     * Ended At
+     */
+    ended_at: string | null;
+    /**
+     * Holdout Delta
+     */
+    holdout_delta: {
+        [key: string]: number;
+    } | null;
+    /**
+     * Holdout Losses
+     */
+    holdout_losses: number | null;
+    /**
+     * Holdout Wins
+     */
+    holdout_wins: number | null;
+    /**
+     * Mlflow Run Id
+     */
+    mlflow_run_id: string | null;
+    /**
+     * Mlflow Url
+     */
+    mlflow_url: string | null;
+    /**
+     * Primary Metric
+     */
+    primary_metric: string | null;
+    /**
+     * Reason
+     */
+    reason: string | null;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Status
+     */
+    status: 'running' | 'skipped' | 'rejected' | 'promoted' | 'succeeded' | 'failed';
+    /**
+     * Steps
+     */
+    steps: Array<string>;
+    /**
+     * Trigger
+     */
+    trigger: 'cron' | 'manual';
+};
+
+/**
  * ChatThreadSummaryResponse
  *
  * A thread in the list: the same fields plus how its newest turn ended.
@@ -1473,6 +1541,96 @@ export type GetAdminChatThreadResponses = {
 };
 
 export type GetAdminChatThreadResponse = GetAdminChatThreadResponses[keyof GetAdminChatThreadResponses];
+
+export type ListAdminChatThreadRunsData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/admin/chat/threads/{thread_id}/runs';
+};
+
+export type ListAdminChatThreadRunsErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type ListAdminChatThreadRunsError = ListAdminChatThreadRunsErrors[keyof ListAdminChatThreadRunsErrors];
+
+export type ListAdminChatThreadRunsResponses = {
+    /**
+     * Response List Admin Chat Thread Runs
+     *
+     * Successful Response
+     */
+    200: Array<ChatThreadRunResponse>;
+};
+
+export type ListAdminChatThreadRunsResponse = ListAdminChatThreadRunsResponses[keyof ListAdminChatThreadRunsResponses];
+
+export type LinkAdminChatThreadRunData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/admin/chat/threads/{thread_id}/runs/{run_id}';
+};
+
+export type LinkAdminChatThreadRunErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type LinkAdminChatThreadRunError = LinkAdminChatThreadRunErrors[keyof LinkAdminChatThreadRunErrors];
+
+export type LinkAdminChatThreadRunResponses = {
+    /**
+     * Successful Response
+     */
+    200: ChatThreadRunResponse;
+};
+
+export type LinkAdminChatThreadRunResponse = LinkAdminChatThreadRunResponses[keyof LinkAdminChatThreadRunResponses];
 
 export type ResumeAdminChatTurnData = {
     body?: never;
