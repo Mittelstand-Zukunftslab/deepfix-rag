@@ -85,3 +85,25 @@ def test_the_lock_is_complete_for_the_declared_python() -> None:
     assert "3.12" in requires
     # The lock records the interpreter it resolved for.
     assert "3.12" in _lock_text().splitlines()[3] or "3.12" in _lock_text()[:400]
+
+
+def test_pyarrow_is_pinned_below_the_numpy_2_wall() -> None:
+    """`uv tool install` resolves without this lock, so the constraint must be declared.
+
+    pyarrow 26 refuses to import against NumPy 1.x at all. The project pins
+    ``numpy<2``, so an unpinned pyarrow resolves to a wheel that cannot import
+    and ``deepfix --help`` fails in a fresh ``uv tool install``.
+    """
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    requirements = {
+        re.split(r"[<>=!~\[; ]", requirement, maxsplit=1)[0].strip().lower(): requirement
+        for requirement in project["project"]["dependencies"]
+    }
+    assert "numpy<2" in requirements["numpy"]
+    pyarrow = requirements["pyarrow"]
+    upper = re.search(r"<\s*(\d+)", pyarrow)
+    assert upper, f"pyarrow is not capped below the NumPy 2 wall: {pyarrow}"
+    assert int(upper.group(1)) <= 26, pyarrow
+    locked = re.search(r'(?m)^name = "pyarrow"\nversion = "([^"]+)"', _lock_text())
+    assert locked, "pyarrow is not in the lock"
+    assert int(locked.group(1).split(".", 1)[0]) < 26, locked.group(1)

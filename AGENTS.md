@@ -1,6 +1,6 @@
 # DeepFix Agent Guidelines: Architecture, Conventions & Design Patterns
 
-This document serves as the mandatory reference for all AI coding agents working in the `pilotproject-deepfix` codebase. Agents must strictly adhere to existing coding conventions, modern Python 3.12 standards, idiomatic (Pythonic) practices, and robust software design patterns.
+This document serves as the mandatory reference for all AI coding agents working in the `deepfix-rag` codebase. Agents must strictly adhere to existing coding conventions, modern Python 3.12 standards, idiomatic (Pythonic) practices, and robust software design patterns.
 
 ---
 
@@ -11,7 +11,7 @@ DeepFix decouples deterministic pipeline execution from agentic reasoning and ev
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        CLI Layer (`src/deepfix_rag/cli/`)              │
-│  - Typer subcommands (`dataset`, `index`, `eval`, `config`, etc.)      │
+│  - Typer subcommands (`dataset`, `index`, `eval`, `gate`, `hpo`, etc.) │
 │  - Thin CLI adaptors; argument parsing & validation                    │
 │  - Standardized exit codes (`0`, `1`, `2`) & JSON stdout serialization │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -142,6 +142,7 @@ The project uses [pytest](https://docs.pytest.org/) with registered markers in `
 | `integration` | Tests requiring local filesystem, LanceDB tables, or loaders | `test_index_creation.py`, local loader tests |
 | `e2e` | Full end-to-end pipeline ingestion, embedding & retrieval | `test_end_to_end.py` |
 | `network` | Tests interacting with live Hugging Face Hub APIs | Live dataset download tests |
+| `api` | FastAPI product API routes, schemas, and the OpenAPI contract | `test_api_*.py` |
 
 ### Test Execution Commands
 
