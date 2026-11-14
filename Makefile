@@ -4,20 +4,17 @@
 
 PROJECT_NAME = deepfix_rag
 PYTHON_VERSION = 3.12
-PYTHON_INTERPRETER = python
+DATASET ?= bundestag-qa
+SPLIT ?= train
 
 #################################################################################
 # COMMANDS                                                                      #
 #################################################################################
 
-
 ## Install Python dependencies
 .PHONY: requirements
 requirements:
 	uv sync
-	
-
-
 
 ## Delete all compiled Python files
 .PHONY: clean
@@ -25,26 +22,22 @@ clean:
 	find . -type f -name "*.py[co]" -delete
 	find . -type d -name "__pycache__" -delete
 
-
 ## Lint using ruff (use `make format` to do formatting)
 .PHONY: lint
 lint:
-	ruff format --check
-	ruff check
+	uv run ruff format --check
+	uv run ruff check
 
 ## Format source code with ruff
 .PHONY: format
 format:
-	ruff check --fix
-	ruff format
+	uv run ruff check --fix
+	uv run ruff format
 
-
-
-## Run tests
+## Run tests (skips the live network and end-to-end suites)
 .PHONY: test
 test:
-	python -m pytest tests
-
+	uv run pytest -v -m "not network and not e2e"
 
 ## Set up Python interpreter environment
 .PHONY: create_environment
@@ -53,20 +46,15 @@ create_environment:
 	@echo ">>> New uv virtual environment created. Activate with:"
 	@echo ">>> Windows: .\\\\.venv\\\\Scripts\\\\activate"
 	@echo ">>> Unix/macOS: source ./.venv/bin/activate"
-	
-
-
 
 #################################################################################
 # PROJECT RULES                                                                 #
 #################################################################################
 
-
-## Make dataset
+## Fetch a benchmark dataset with the DataLoader strategies in src/deepfix_rag/data.py
 .PHONY: data
 data: requirements
-	$(PYTHON_INTERPRETER) deepfix_rag/dataset.py
-
+	uv run deepfix dataset load --name $(DATASET) --split $(SPLIT)
 
 #################################################################################
 # Self Documenting Commands                                                     #
@@ -83,5 +71,6 @@ print('\n'.join(['{:25}{}'.format(*reversed(match)) for match in matches]))
 endef
 export PRINT_HELP_PYSCRIPT
 
+.PHONY: help
 help:
-	@$(PYTHON_INTERPRETER) -c "${PRINT_HELP_PYSCRIPT}" < $(MAKEFILE_LIST)
+	@python -c "${PRINT_HELP_PYSCRIPT}" < $(MAKEFILE_LIST)
