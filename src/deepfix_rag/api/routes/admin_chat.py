@@ -38,6 +38,7 @@ from deepfix_rag.api.errors import (
     BAD_GATEWAY,
     BAD_REQUEST,
     FORBIDDEN,
+    INTERNAL_SERVER_ERROR,
     NOT_FOUND,
     SERVICE_UNAVAILABLE,
     UNAUTHORIZED,
@@ -172,6 +173,7 @@ async def admin_chat_completion(
         prompt=payload.messages[-1].content,
         thread_id=thread.thread_id,
         turn_id=turn.turn_id,
+        digest=_digest(request, settings),
     )
     if upstream is None:
         # A refusal before the first byte is an honest HTTP status, not a stream
@@ -281,17 +283,33 @@ def upstream_messages(
     *,
     thread_id: str,
     turn_id: str,
+    digest: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """The system message plus the stored thread plus the new user message.
 
     Never the client's earlier array: the browser cannot rewrite the policy or
-    claim a history that never happened (FR-005).
+    claim a history that never happened (FR-005). The system message is rebuilt
+    on every turn, digest included, so it always describes the server as it is
+    now rather than as it was when the thread started.
     """
-    system = admin_chat.system_prompt(settings, thread_id=thread_id, turn_id=turn_id)
+    system = admin_chat.system_prompt(
+        settings, thread_id=thread_id, turn_id=turn_id, digest=digest
+    )
     messages = [{"role": "system", "content": system}]
     messages.extend({"role": item.role, "content": item.content} for item in history)
     messages.append({"role": "user", "content": prompt})
     return messages
+
+
+def _digest(request: Request, settings: Settings) -> dict[str, Any]:
+    """The status digest, or a 500 naming the setting when it cannot fit (CHAT-004)."""
+    scheduler = getattr(request.app.state, "optimization", None)
+    if scheduler is None:
+        return {}
+    try:
+        return admin_chat.status_digest(settings, scheduler)
+    except ValueError as exc:
+        raise HTTPException(status_code=INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 async def _open_upstream(
@@ -301,6 +319,7 @@ async def _open_upstream(
     prompt: str,
     thread_id: str,
     turn_id: str,
+    digest: dict[str, Any] | None = None,
 ) -> "_Upstream | None":
     """Open Hermes's stream before any byte reaches the browser.
 
@@ -311,7 +330,7 @@ async def _open_upstream(
         "model": chat_model(settings),
         "stream": True,
         "messages": upstream_messages(
-            settings, history, prompt, thread_id=thread_id, turn_id=turn_id
+            settings, history, prompt, thread_id=thread_id, turn_id=turn_id, digest=digest
         ),
     }
     headers = {

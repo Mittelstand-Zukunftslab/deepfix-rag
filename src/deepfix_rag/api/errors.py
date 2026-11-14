@@ -9,6 +9,7 @@ UNAUTHORIZED = 401
 FORBIDDEN = 403
 NOT_FOUND = 404
 CONFLICT = 409
+INTERNAL_SERVER_ERROR = 500
 BAD_GATEWAY = 502
 SERVICE_UNAVAILABLE = 503
 
@@ -18,6 +19,7 @@ _DESCRIPTIONS: dict[int, str] = {
     FORBIDDEN: "The signed-in user's role does not allow this action.",
     NOT_FOUND: "Unknown id.",
     CONFLICT: "The request conflicts with the current state.",
+    INTERNAL_SERVER_ERROR: "The server could not complete this request.",
     BAD_GATEWAY: "An upstream dependency answered with an error.",
     SERVICE_UNAVAILABLE: "A required dependency is not ready.",
 }

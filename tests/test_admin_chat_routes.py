@@ -753,3 +753,18 @@ def test_another_admins_thread_is_404(settings: Settings, identity: IdentityIssu
         # thread is still there: ownership is checked inside the store.
         assert client.delete(f"/admin/chat/threads/{foreign.thread_id}").status_code == 204
     admin_chat.get_thread(settings.product_db_path, foreign.thread_id, other_id)
+
+
+def test_the_upstream_system_message_carries_the_digest(
+    settings: Settings, hermes: StandIn, identity: IdentityIssuer
+) -> None:
+    """The prompt is rebuilt per turn, digest included, not taken from the client."""
+    with _client(settings, identity) as client:
+        thread_id = _thread(client, identity)
+        _send(client, thread_id, "Was ist der Status?")
+    system = hermes.state.requests[-1]["body"]["messages"][0]
+    assert system["role"] == "system"
+    assert "Current DeepFix server state, as data:" in system["content"]
+    assert '"cron": "0 2 * * *"' in system["content"]
+    assert "No runs yet." in system["content"]
+    assert thread_id in system["content"]
