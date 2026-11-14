@@ -337,6 +337,8 @@ The Optimization screen stays the one in the product UI. This feature adds one c
 
 ### Admin chat profile
 
+**Amendment (CHAT-011, 2026-11-14).** The chat profile is no longer idle: it is a standalone gateway on 8643, started only while `HERMES_CHAT_ENABLED=true` (default false). See `tasks/prd-admin-hermes-chat.md` (decisions D-1 through D-7) for the whole feature. Two consequences for this document: the profile is now started as its own chat gateway, and it receives the same `hermes-otel` and `deepfix-run-tag` plugins with its own `profiles/chat/hermes_otel.yaml` and its own `MLFLOW_HERMES_CHAT_EXPERIMENT` (default `deepfix_hermes_chat`), still with `content_capture: "off"`. US-007's sentence that the chat profile gets neither plugin is reversed on purpose, so a chat turn is traceable. Every other boundary below is unchanged.
+
 The chat UI is a later feature. The sandbox that this plan deploys must already keep a second Hermes profile, `chat`, isolated from the optimization profile. Hermes profiles are separate homes (config, credentials, sessions, skills) inside one container. The chat profile gets its own `API_SERVER_PORT` (8643, not published) and its own `API_SERVER_KEY`. The optimization profile stays on 8642. A chat session id is never the optimization run's session id.
 
 The chat profile has no terminal toolset and no file-write toolset. Both profiles share one container user, and a terminal on the chat profile could read the optimization profile's `.env` on the shared data volume. Leaving the terminal off is the isolation. The chat profile also does not receive `HERMES_S3_ACCESS_KEY_ID`, the optimization OpenRouter key, or the root RustFS key.

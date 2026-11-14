@@ -183,7 +183,9 @@ def test_a_hermes_model_with_a_newline_is_refused(tmp_path: Path) -> None:
         boot.apply_sandbox(home, _env(HERMES_MODEL="fixture/model\ninjected"), _skills(tmp_path))
 
 
-def test_hermes_otel_is_enabled_on_the_optimization_profile_only(tmp_path: Path) -> None:
+def test_hermes_otel_is_enabled_on_both_profiles_with_separate_experiments(
+    tmp_path: Path,
+) -> None:
     home = tmp_path / "data"
     otel = tmp_path / "hermes_otel"
     tag = tmp_path / "deepfix-run-tag"
@@ -223,13 +225,26 @@ def test_hermes_otel_is_enabled_on_the_optimization_profile_only(tmp_path: Path)
     text = (home / "hermes_otel.yaml").read_text(encoding="utf-8")
     assert "scoped-secret-value" not in text
     assert API_KEY not in text
-    chat = (home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8")
-    assert "hermes_otel" not in chat
-    assert "deepfix-run-tag" not in chat
-    assert not (home / "profiles" / "chat" / "hermes_otel.yaml").exists()
+    # CHAT-011 reverses US-007's exclusion on purpose: the chat profile gets the
+    # same plugins, its own document inside profiles/chat, and its own experiment.
+    chat_document = yaml.safe_load(
+        (home / "profiles" / "chat" / "hermes_otel.yaml").read_text(encoding="utf-8")
+    )
+    assert chat_document["content_capture"] == "off"
+    assert chat_document["capture_conversation_history"] is False
+    assert chat_document["capture_sender_id"] is False
+    assert (
+        chat_document["backends"][0]["experiment_id"] != document["backends"][0]["experiment_id"]
+    )
+    chat_config = yaml.safe_load(
+        (home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8")
+    )
+    assert "hermes_otel" in chat_config["plugins"]["enabled"]
+    assert "deepfix-run-tag" in chat_config["plugins"]["enabled"]
     dotenv = (home / ".env").read_text(encoding="utf-8")
     assert f"DEEPFIX_HERMES_EXPERIMENT_ID={document['backends'][0]['experiment_id']}" in dotenv
     chat_env = (home / "profiles" / "chat" / ".env").read_text(encoding="utf-8")
+    assert "DEEPFIX_HERMES_CHAT_EXPERIMENT_ID" in chat_env
     assert "DEEPFIX_HERMES_EXPERIMENT_ID" not in chat_env
     assert "MLFLOW_TRACKING_URI" not in chat_env
 

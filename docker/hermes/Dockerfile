@@ -66,9 +66,12 @@
 # python_runtime: external so it is not a workspace member, and a .pth file
 # adds /opt/deepfix/otel to the Hermes interpreter only. Boot writes
 # $HERMES_HOME/hermes_otel.yaml with type: mlflow, content_capture off, and
-# the deepfix_hermes experiment id. The chat profile does not get that file
-# or the plugin. A small deepfix-run-tag plugin stamps deepfix.run_id on the
-# spans. The OTEL exporter env vars are not set; hermes-otel owns the MLflow
+# the deepfix_hermes experiment id. The chat profile gets the same plugins with
+# its own profiles/chat/hermes_otel.yaml and its own experiment
+# (MLFLOW_HERMES_CHAT_EXPERIMENT, default deepfix_hermes_chat); content capture
+# stays off on both. A small deepfix-run-tag plugin stamps deepfix.run_id on an
+# optimization round's spans and deepfix.chat_thread_id / deepfix.chat_turn_id
+# on a chat turn's. The OTEL exporter env vars are not set; hermes-otel owns the MLflow
 # header.
 # deepfix-sync is the fixed bundle command (download input/, upload output/).
 # It is not a script the model writes. The optimization profile's S3 key is

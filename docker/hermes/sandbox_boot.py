@@ -66,6 +66,9 @@ CHAT_API_KEY_ENV = "HERMES_CHAT_API_SERVER_KEY"
 CHAT_ENABLED_ENV = "HERMES_CHAT_ENABLED"
 # Empty falls back to HERMES_MODEL (D-3), resolved in ``apply_sandbox``.
 CHAT_MODEL_ENV = "HERMES_CHAT_MODEL"
+# The chat profile's own trace experiment, separate from the optimizer's (D-5).
+CHAT_EXPERIMENT_ENV = "MLFLOW_HERMES_CHAT_EXPERIMENT"
+DEFAULT_CHAT_EXPERIMENT = "deepfix_hermes_chat"
 
 # Documented approvals.deny globs for force-push and pipe-to-shell.
 # ``approvals.mode: off`` does not bypass this list.
@@ -654,12 +657,20 @@ def _prepare_cli_log(home: Path) -> None:
     log_file.chmod(0o644)
 
 
+def chat_experiment_name(env: Mapping[str, str]) -> str:
+    """The chat profile's trace experiment. Never the optimizer's."""
+    value = env.get(CHAT_EXPERIMENT_ENV, "").strip() or DEFAULT_CHAT_EXPERIMENT
+    if any(char in value for char in "\n\r\x00"):
+        raise SandboxBootError(f"{CHAT_EXPERIMENT_ENV} contains a newline or NUL")
+    return value
+
+
 def hermes_otel_document(env: Mapping[str, str], experiment_id: str | None) -> dict[str, Any]:
-    """``$HERMES_HOME/hermes_otel.yaml`` for the optimization profile.
+    """``$HERMES_HOME/hermes_otel.yaml`` for one profile.
 
     ``type: mlflow`` sends traces only and sets ``x-mlflow-experiment-id``.
-    ``content_capture`` is ``off``, so prompts, responses, and tool bodies
-    are not span attributes. The chat profile does not get this file.
+    ``content_capture`` is ``off``, so prompts, responses, and tool bodies are
+    not span attributes. Each profile gets its own file and its own experiment.
     """
     tracking = mlflow_env(env)["MLFLOW_TRACKING_URI"].rstrip("/")
     backend: dict[str, Any] = {
@@ -682,10 +693,15 @@ def hermes_otel_document(env: Mapping[str, str], experiment_id: str | None) -> d
     }
 
 
-def _trace_experiment_id(env: Mapping[str, str]) -> str | None:
-    """Create ``deepfix_hermes`` when MLflow answers. A miss does not stop boot."""
+def _trace_experiment_id(
+    env: Mapping[str, str],
+    *,
+    name: str = "deepfix_hermes",
+    preset_env: str = "DEEPFIX_HERMES_EXPERIMENT_ID",
+) -> str | None:
+    """Create the trace experiment when MLflow answers. A miss does not stop boot."""
     if env.get("DEEPFIX_SKIP_TRACE_EXPERIMENT", "").strip() == "1":
-        preset = env.get("DEEPFIX_HERMES_EXPERIMENT_ID", "").strip()
+        preset = env.get(preset_env, "").strip()
         return preset or None
     raw_attempts = env.get("DEEPFIX_TRACE_EXPERIMENT_ATTEMPTS", "").strip() or "1"
     raw_delay = env.get("DEEPFIX_TRACE_EXPERIMENT_DELAY_SECONDS", "").strip() or "0"
@@ -701,13 +717,13 @@ def _trace_experiment_id(env: Mapping[str, str]) -> str | None:
     from deepfix_rag.hermes_trace_experiment import ensure_hermes_trace_experiment
 
     for attempt in range(attempts):
-        experiment_id = ensure_hermes_trace_experiment(tracking)
+        experiment_id = ensure_hermes_trace_experiment(tracking, name=name)
         if experiment_id:
             return experiment_id
         if attempt + 1 < attempts and delay > 0:
             time.sleep(delay)
     print(
-        "hermes trace experiment deepfix_hermes was not created; "
+        f"hermes trace experiment {name} was not created; "
         "restart the container once MLflow is reachable",
         file=sys.stderr,
     )
@@ -924,6 +940,8 @@ def apply_sandbox(
         chat_env["API_SERVER_KEY"] = chat_key
     # Replace the file so an optimization key from an older boot cannot linger.
     _upsert_env(chat_dir / ".env", chat_env, frozenset(), replace=True)
+    # After the replace above, so the experiment id is not wiped by it.
+    _install_chat_trace_plugins(home, chat_dir, chat_config, env)
     state = gateway_state_path(home)
     state.write_text('{"gateway_state":"stopped"}\n', encoding="utf-8")
     state.chmod(0o644)
@@ -932,6 +950,63 @@ def apply_sandbox(
     repair_home_ownership(home)
     if enabled:
         start_chat_gateway(home, env)
+
+
+def _install_chat_trace_plugins(
+    home: Path,
+    chat_dir: Path,
+    chat_config: dict[str, Any],
+    env: Mapping[str, str],
+) -> str | None:
+    """Give the chat profile the same plugins with its own experiment (D-5).
+
+    The document and the enabled list live inside ``profiles/chat``, so the two
+    profiles cannot share an experiment id, and ``content_capture`` stays off.
+    The chat profile's spans are labelled with the thread and turn ids by
+    ``deepfix-run-tag``.
+    """
+    name = chat_experiment_name(env)
+    experiment_id = _trace_experiment_id(
+        env, name=name, preset_env="DEEPFIX_HERMES_CHAT_EXPERIMENT_ID"
+    )
+    document = hermes_otel_document(env, experiment_id)
+    _dump_yaml(chat_dir / "hermes_otel.yaml", document)
+    _chown_hermes(chat_dir / "hermes_otel.yaml")
+    otel_source = _plugin_source(env, "HERMES_OTEL_PACKAGE", DEFAULT_HERMES_OTEL_PACKAGE)
+    tag_source = _plugin_source(env, "DEEPFIX_RUN_TAG_PLUGIN", DEFAULT_RUN_TAG_PLUGIN)
+    enabled_names: list[str] = []
+    plugins = chat_config.setdefault("plugins", {})
+    enabled = plugins.get("enabled")
+    if not isinstance(enabled, list):
+        enabled = []
+    # A profile-local plugin directory, so the chat profile never reads the
+    # optimization profile's home. Hermes resolves `plugins` under the profile.
+    profile_plugins = chat_dir / "plugins"
+    for source, plugin_name in (
+        (otel_source, HERMES_OTEL_PLUGIN),
+        (tag_source, RUN_TAG_PLUGIN),
+    ):
+        if not (source / "plugin.yaml").is_file():
+            continue
+        profile_plugins.mkdir(parents=True, exist_ok=True)
+        dest = profile_plugins / plugin_name
+        if not dest.exists() and not dest.is_symlink():
+            dest.symlink_to(source)
+        if plugin_name not in enabled:
+            enabled.append(plugin_name)
+        enabled_names.append(plugin_name)
+    if not enabled_names:
+        return experiment_id
+    plugins["enabled"] = enabled
+    _dump_yaml(chat_dir / "config.yaml", chat_config)
+    _chown_hermes(chat_dir / "config.yaml")
+    if experiment_id:
+        _upsert_env(
+            chat_dir / ".env",
+            {"DEEPFIX_HERMES_CHAT_EXPERIMENT_ID": experiment_id},
+            frozenset(),
+        )
+    return experiment_id
 
 
 def start_chat_gateway(home: Path, env: Mapping[str, str]) -> dict[str, Any]:
