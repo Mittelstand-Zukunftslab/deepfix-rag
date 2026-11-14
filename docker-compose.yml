@@ -143,6 +143,8 @@ services:
     environment:
       WEB_ORIGIN: ${WEB_ORIGIN:-http://web:8080}
       AUTH_JWKS_URL: ${AUTH_JWKS_URL:-http://web:8080/api/auth/jwks}
+      # Console level for the deepfix_rag and apscheduler loggers on stdout.
+      DEEPFIX_LOG_LEVEL: ${DEEPFIX_LOG_LEVEL:-INFO}
       PRODUCT_DATA_DIR: /data/product
       WORKSPACE_DIR: /data/workspace
       MEMGRAPH_URL: bolt://memgraph:7687

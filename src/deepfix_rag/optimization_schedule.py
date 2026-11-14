@@ -370,17 +370,25 @@ class OptimizationScheduler:
 
     def _start_run(self) -> None:
         try:
-            start_optimization_run(
+            run = start_optimization_run(
                 self.db_path,
                 self.workspace,
                 trigger="cron",
                 options=self._options_for(),
                 coordinator=self._coordinator_for(),
             )
-        except (RunInProgress, AgentUnavailable):
-            LOGGER.info("Scheduled optimization did not start")
+        except (RunInProgress, AgentUnavailable) as exc:
+            LOGGER.info("Scheduled optimization did not start: %s", exc)
         except Exception:
             LOGGER.exception("Scheduled optimization failed")
+            return
+        # The row is already settled when it was skipped; a running row is logged
+        # again with its outcome when the agent thread ends.
+        LOGGER.info(
+            "Scheduled optimization fired run=%s status=%s",
+            run.run_id,
+            run.status,
+        )
 
     def _fire(self) -> None:
         """The optimization job's body. A failure here must not stop the scheduler."""
@@ -414,6 +422,19 @@ class OptimizationScheduler:
             replace_existing=True,
         )
         self._armed_cron = stored.cron
+        if stored.enabled:
+            LOGGER.info(
+                "Optimization schedule armed cron=%r timezone=%s next_run_at=%s",
+                stored.cron,
+                self._timezone,
+                self._next_fire_text(),
+            )
+        else:
+            LOGGER.info(
+                "Optimization schedule armed paused cron=%r timezone=%s",
+                stored.cron,
+                self._timezone,
+            )
 
     def _arm_prune(self) -> None:
         """Add the hourly audit prune to the same scheduler.
@@ -465,6 +486,11 @@ class OptimizationScheduler:
                     trigger=self._cron_trigger(cron),
                 )
                 self._armed_cron = cron
+                LOGGER.info(
+                    "Optimization schedule rescheduled cron=%r next_run_at=%s",
+                    cron,
+                    self._next_fire_text(),
+                )
             job = self._scheduler.get_job(OPTIMIZATION_JOB_ID)
             paused = job is None or job.next_run_time is None
             # resume_job recomputes the next fire time from the trigger, which
@@ -472,8 +498,20 @@ class OptimizationScheduler:
             # when the job really is paused.
             if enabled and paused:
                 self._scheduler.resume_job(OPTIMIZATION_JOB_ID)
+                LOGGER.info(
+                    "Optimization schedule resumed cron=%r next_run_at=%s",
+                    cron,
+                    self._next_fire_text(),
+                )
             elif not enabled and not paused:
                 self._scheduler.pause_job(OPTIMIZATION_JOB_ID)
+                LOGGER.info("Optimization schedule paused cron=%r", cron)
+
+    def _next_fire_text(self) -> str:
+        """The live job's next fire time for a log line, or ``none`` when paused."""
+        job = self._scheduler.get_job(OPTIMIZATION_JOB_ID)
+        armed = getattr(job, "next_run_time", None) if job is not None else None
+        return armed.astimezone(timezone.utc).isoformat() if armed is not None else "none"
 
     def _next_run_at(self, stored: StoredSchedule) -> str | None:
         if not stored.enabled:

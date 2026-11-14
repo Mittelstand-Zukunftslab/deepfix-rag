@@ -12,7 +12,9 @@ labeled dev questions, which is still enough to prove a fire time reached
 """
 
 from datetime import datetime, timedelta, timezone
+import logging
 from pathlib import Path
+import sys
 import threading
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -350,3 +352,54 @@ def test_the_scheduler_starts_once_and_shuts_down_with_the_app(
         assert [job.id for job in scheduler._scheduler.get_jobs()] == [OPTIMIZATION_JOB_ID]
     assert scheduler.running is False
     assert thread.is_alive() is False
+
+
+def test_every_schedule_event_leaves_a_console_line(
+    tmp_path: Path, identity: IdentityIssuer, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Armed, rescheduled, paused, resumed and fired are visible in `docker logs`.
+
+    Nothing else tells an operator that the nightly run was armed or that a fire
+    time was skipped, so these lines are the observable side of the schedule. The
+    console handler must also stay one handler: a second one prints every line
+    twice.
+    """
+    caplog.set_level(logging.INFO)
+    settings = _settings(tmp_path)
+    with TestClient(create_app(settings, token_verifier=identity.verifier())) as client:
+        identity.sign_in(client, "admin@example.com", "admin")
+        scheduler: OptimizationScheduler = client.app.state.optimization
+        # The default cron is due tonight; the skipped row is the whole run here.
+        assert scheduler.run_due(TONIGHT) is True
+        edited = client.patch("/admin/optimization", json={"cron": "15 3 * * *", "enabled": True})
+        assert edited.status_code == 200, edited.text
+        paused = client.patch("/admin/optimization", json={"cron": "15 3 * * *", "enabled": False})
+        assert paused.status_code == 200, paused.text
+        resumed = client.patch("/admin/optimization", json={"cron": "15 3 * * *", "enabled": True})
+        assert resumed.status_code == 200, resumed.text
+
+    console = [
+        handler
+        for handler in logging.getLogger("DeepFix RAG Eval Runner").handlers
+        if isinstance(handler, logging.StreamHandler)
+    ]
+    assert len(console) == 1
+    assert console[0].stream is sys.stdout
+
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "DeepFix RAG Eval Runner" and record.levelno == logging.INFO
+    ]
+    assert any(line.startswith("Optimization schedule armed") for line in lines)
+    assert any("rescheduled cron='15 3 * * *'" in line for line in lines)
+    assert any("paused cron='15 3 * * *'" in line for line in lines)
+    assert any("resumed cron='15 3 * * *'" in line for line in lines)
+    fired = [line for line in lines if line.startswith("Scheduled optimization fired")]
+    assert len(fired) == 1
+    assert "status=skipped" in fired[0]
+    # APScheduler's own lifecycle lines reach the console through the same setup.
+    assert any(
+        record.name.startswith("apscheduler") and record.levelno == logging.INFO
+        for record in caplog.records
+    )

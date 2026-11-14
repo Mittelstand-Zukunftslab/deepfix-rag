@@ -9,13 +9,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def get_logger():
-    """Get logger for deepfix-rag."""
+    """Get logger for deepfix-rag.
+
+    The CLI prints this logger to stderr. The API replaces the handler at startup
+    (``deepfix_rag.api.logging_config``), so the handler is added once, not once
+    per call, and a caller cannot end up printing every line twice.
+    """
     logger = logging.getLogger("DeepFix RAG Eval Runner")
     logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    stream_handler = logging.StreamHandler(sys.stderr)
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
+    if not logger.handlers:
+        formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
     return logger
 
 
@@ -98,6 +104,10 @@ class Settings(BaseSettings):
 
     # Product API
     WEB_ORIGIN: str = "http://localhost:8080"
+    # Console log level for the API process: the ``deepfix_rag`` and ``apscheduler``
+    # loggers print to stdout at this level. An unknown value falls back to INFO
+    # with a warning; it never stops the API from starting.
+    DEEPFIX_LOG_LEVEL: str = "INFO"
     PRODUCT_DATA_DIR: Path = Path.home() / ".deepfix" / "product"
     WORKSPACE_DIR: Path = Path.home() / ".deepfix" / "workspace"
     # Identity tokens come from Better Auth in the web app. Issuer and audience default to

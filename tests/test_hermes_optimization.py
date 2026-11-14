@@ -1069,7 +1069,7 @@ def test_status_stops_a_stale_hermes_run(tmp_path: Path, identity: IdentityIssue
         assert any(call.path == f"/v1/runs/{hermes_id}/stop" for call in api.calls)
 
 
-def test_a_fresh_heartbeat_is_a_stderr_line_and_the_log_stays_private(
+def test_a_fresh_heartbeat_is_a_console_line_and_the_log_stays_private(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, identity: IdentityIssuer
 ) -> None:
     _tracking(tmp_path)
@@ -1141,7 +1141,7 @@ def test_a_fresh_heartbeat_is_a_stderr_line_and_the_log_stays_private(
     assert "event=heartbeat" in logged
     assert "event=heartbeat" in caplog.text
     assert any(
-        isinstance(handler, logging.StreamHandler) and handler.stream is sys.stderr
+        isinstance(handler, logging.StreamHandler) and handler.stream is sys.stdout
         for handler in logging.getLogger("DeepFix RAG Eval Runner").handlers
     )
     assert begin in logged
