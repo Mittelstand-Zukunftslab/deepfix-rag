@@ -162,9 +162,7 @@ def test_at_most_one_rate_limited_row_per_minute(tmp_path: Path) -> None:
         )
     assert admin_chat.should_audit_rate_limit(db_path, ADMIN_ID, now=moment) is False
     assert (
-        admin_chat.should_audit_rate_limit(
-            db_path, ADMIN_ID, now=moment + timedelta(seconds=61)
-        )
+        admin_chat.should_audit_rate_limit(db_path, ADMIN_ID, now=moment + timedelta(seconds=61))
         is True
     )
 
