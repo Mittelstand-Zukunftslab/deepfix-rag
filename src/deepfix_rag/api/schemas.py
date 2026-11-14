@@ -17,10 +17,28 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
 
+class ChatErrorDetail(ApiModel):
+    """The chat routes' structured error body, nested under ``detail``.
+
+    A chat failure carries a stable machine-readable ``code`` beside a sentence,
+    so the UI branches on the code and an operator can tell "turned off"
+    (``chat_disabled``) from "turned on but broken" (``chat_misconfigured``).
+    Only the chat routes use this shape; every other route keeps ``detail: str``.
+    """
+
+    code: str = Field(description="Stable machine-readable reason, e.g. chat_disabled.")
+    message: str = Field(description="Sentence shown to the admin.")
+
+
 class ErrorResponse(ApiModel):
     """Body returned for every 4xx and 5xx response."""
 
-    detail: str = Field(description="Human-readable explanation of what went wrong.")
+    detail: str | ChatErrorDetail = Field(
+        description=(
+            "Human-readable explanation of what went wrong. The chat routes nest a "
+            "{code, message} object here so the UI never matches on the sentence."
+        )
+    )
 
 
 class HealthResponse(ApiModel):
@@ -306,3 +324,78 @@ class InteractionReviewResponse(ApiModel):
     trace_id: str | None
     answer_comments: list[ReviewedCommentResponse]
     hits: list[ReviewedHitResponse]
+
+
+class ChatMessageModel(ApiModel):
+    """One message the browser sends. Only ``user`` and ``assistant`` are accepted."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatCompletionRequest(ApiModel):
+    """An OpenAI-shaped turn request.
+
+    The server rebuilds the upstream conversation from the stored thread, so this
+    array is a consistency check rather than the prompt: the client cannot rewrite
+    the system message or claim a history that never happened.
+    """
+
+    thread_id: str = Field(min_length=1)
+    messages: list[ChatMessageModel] = Field(min_length=1)
+    retry_of: str | None = None
+
+
+class ChatThreadResponse(ApiModel):
+    """One conversation."""
+
+    thread_id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class ChatMessageResponse(ApiModel):
+    """One stored message."""
+
+    message_id: str
+    turn_id: str | None = None
+    role: Literal["user", "assistant"]
+    seq: int
+    content: str
+    created_at: str
+
+
+class ChatTurnResponse(ApiModel):
+    """One attempt at a reply."""
+
+    turn_id: str
+    status: Literal["running", "completed", "failed", "cancelled"]
+    retry_of: str | None = None
+    error: str | None = None
+    first_token_ms: int | None = None
+    started_at: str
+    ended_at: str | None = None
+
+
+class ChatActionResponse(ApiModel):
+    """One proposed action card."""
+
+    action_id: str
+    turn_id: str
+    kind: str
+    payload: str = Field(description="The JSON object the assistant proposed, as text.")
+    status: Literal["proposed", "confirmed", "rejected", "expired", "failed"]
+    created_at: str
+    expires_at: str
+    decided_at: str | None = None
+    result: str | None = None
+
+
+class ChatThreadDetailResponse(ApiModel):
+    """One thread with everything a page render needs."""
+
+    thread: ChatThreadResponse
+    messages: list[ChatMessageResponse]
+    turns: list[ChatTurnResponse]
+    actions: list[ChatActionResponse]

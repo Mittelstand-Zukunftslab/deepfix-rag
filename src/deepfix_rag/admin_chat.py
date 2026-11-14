@@ -20,12 +20,15 @@ Two rules from the PRD shape the schema:
 row must not cascade-delete a thread.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
 import os
 from pathlib import Path
 import re
 import sqlite3
+from typing import Any
 import uuid
 
 from deepfix_rag import optimization
@@ -262,6 +265,70 @@ def derive_title(content: str) -> str:
     """A thread title from its first user message. No model call, ever."""
     collapsed = _WHITESPACE.sub(" ", content).strip()
     return collapsed[:TITLE_CHARS].strip()
+
+
+# The policy the browser cannot change. CHAT-004 adds the per-turn digest; the
+# sentence naming the thread and turn ids is already here because CHAT-011's
+# trace plugin keys on it.
+POLICY = """You are the DeepFix admin chat, a helper for the operator of this DeepFix server.
+
+You explain what the server is doing and propose what to do next. You do not promote a candidate and you must never
+claim to have promoted anything: promotion happens in the backend's gate, which is not reachable from this
+conversation. When you discuss a promotion, name the gate thresholds the server is configured with.
+
+You never ask for, repeat, or echo a credential, a key, or an internal path.
+
+You may propose one action for the admin to confirm themselves, by ending your reply with a fenced block whose info
+string is exactly deepfix-action and whose body is one JSON object with a kind and a reason. The only kinds are
+start_optimization_run and cancel_optimization_run. You never claim an action has run: only the admin's confirm can
+run it.
+"""
+
+
+def system_prompt(
+    settings: Any,
+    *,
+    thread_id: str | None = None,
+    turn_id: str | None = None,
+    digest: Mapping[str, Any] | None = None,
+) -> str:
+    """The policy text plus this turn's identity and digest.
+
+    CHAT-003 ships the policy text alone; CHAT-004 adds the digest and the
+    untrusted-data delimiters around agent-written fields. The ids come from the
+    arguments, never from the digest, so a stored reason cannot invent them.
+    """
+    from deepfix_rag.config.settings import Settings
+
+    if not isinstance(settings, Settings):
+        raise TypeError("system_prompt needs a Settings instance")
+    parts = [POLICY.strip()]
+    if thread_id and turn_id:
+        parts.append(f"The DeepFix chat thread id is {thread_id} and the turn id is {turn_id}.")
+    if digest:
+        parts.append(render_digest(digest, max_chars=settings.ADMIN_CHAT_DIGEST_MAX_CHARS))
+    return "\n\n".join(parts) + "\n"
+
+
+def render_digest(digest: Mapping[str, Any], *, max_chars: int) -> str:
+    """Render the status digest, dropping the oldest runs rather than cutting a line."""
+    payload = dict(digest)
+    runs = list(payload.pop("runs", []) or [])
+    base = "Current DeepFix server state, as data:\n" + json.dumps(
+        payload, indent=2, sort_keys=True
+    )
+    kept: list[Any] = []
+    for run in runs:
+        candidate = kept + [run]
+        rendered = base + "\nRecent runs:\n" + json.dumps(candidate, indent=2, sort_keys=True)
+        if len(rendered) > max_chars:
+            break
+        kept = candidate
+    if not kept and runs:
+        return base + "\nNo recent run fits in the digest."
+    if not kept:
+        return base + "\nNo runs yet."
+    return base + "\nRecent runs:\n" + json.dumps(kept, indent=2, sort_keys=True)
 
 
 def create_thread(

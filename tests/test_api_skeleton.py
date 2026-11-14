@@ -69,9 +69,15 @@ def test_every_public_route_declares_a_typed_success_response():
                     f"{method.upper()} {path} 204 must not include a body"
                 )
                 continue
-            assert body.get("content", {}).get("application/json", {}).get("schema"), (
-                f"{method.upper()} {path} {code} has no response schema"
-            )
+            content = body.get("content", {})
+            # A streaming route answers `text/event-stream`; every other success
+            # is JSON. Either way the content type carries a declared schema.
+            declared = [
+                media
+                for media, media_body in content.items()
+                if media_body.get("schema") and media in {"application/json", "text/event-stream"}
+            ]
+            assert declared, f"{method.upper()} {path} {code} has no response schema"
 
 
 def test_cors_allows_only_the_configured_web_origin():

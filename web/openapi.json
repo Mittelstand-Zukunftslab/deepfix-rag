@@ -88,6 +88,355 @@
         "title": "Body_create_document",
         "type": "object"
       },
+      "ChatActionResponse": {
+        "description": "One proposed action card.",
+        "properties": {
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "description": "The JSON object the assistant proposed, as text.",
+            "title": "Payload",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "enum": [
+              "proposed",
+              "confirmed",
+              "rejected",
+              "expired",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "turn_id",
+          "kind",
+          "payload",
+          "status",
+          "created_at",
+          "expires_at",
+          "decided_at",
+          "result"
+        ],
+        "title": "ChatActionResponse",
+        "type": "object"
+      },
+      "ChatCompletionRequest": {
+        "description": "An OpenAI-shaped turn request.\n\nThe server rebuilds the upstream conversation from the stored thread, so this\narray is a consistency check rather than the prompt: the client cannot rewrite\nthe system message or claim a history that never happened.",
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageModel"
+            },
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "thread_id": {
+            "minLength": 1,
+            "title": "Thread Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "messages"
+        ],
+        "title": "ChatCompletionRequest",
+        "type": "object"
+      },
+      "ChatErrorDetail": {
+        "description": "The chat routes' structured error body, nested under ``detail``.\n\nA chat failure carries a stable machine-readable ``code`` beside a sentence,\nso the UI branches on the code and an operator can tell \"turned off\"\n(``chat_disabled``) from \"turned on but broken\" (``chat_misconfigured``).\nOnly the chat routes use this shape; every other route keeps ``detail: str``.",
+        "properties": {
+          "code": {
+            "description": "Stable machine-readable reason, e.g. chat_disabled.",
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "description": "Sentence shown to the admin.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ChatErrorDetail",
+        "type": "object"
+      },
+      "ChatMessageModel": {
+        "description": "One message the browser sends. Only ``user`` and ``assistant`` are accepted.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ChatMessageModel",
+        "type": "object"
+      },
+      "ChatMessageResponse": {
+        "description": "One stored message.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          }
+        },
+        "required": [
+          "message_id",
+          "turn_id",
+          "role",
+          "seq",
+          "content",
+          "created_at"
+        ],
+        "title": "ChatMessageResponse",
+        "type": "object"
+      },
+      "ChatThreadDetailResponse": {
+        "description": "One thread with everything a page render needs.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ChatActionResponse"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageResponse"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "thread": {
+            "$ref": "#/components/schemas/ChatThreadResponse"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/ChatTurnResponse"
+            },
+            "title": "Turns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "thread",
+          "messages",
+          "turns",
+          "actions"
+        ],
+        "title": "ChatThreadDetailResponse",
+        "type": "object"
+      },
+      "ChatThreadResponse": {
+        "description": "One conversation.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "title",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChatThreadResponse",
+        "type": "object"
+      },
+      "ChatTurnResponse": {
+        "description": "One attempt at a reply.",
+        "properties": {
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "first_token_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Token Ms"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id",
+          "status",
+          "retry_of",
+          "error",
+          "first_token_ms",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "ChatTurnResponse",
+        "type": "object"
+      },
       "CommentReason": {
         "description": "One-tap reasons offered after a thumbs-down.",
         "enum": [
@@ -263,9 +612,16 @@
         "description": "Body returned for every 4xx and 5xx response.",
         "properties": {
           "detail": {
-            "description": "Human-readable explanation of what went wrong.",
-            "title": "Detail",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/ChatErrorDetail"
+              }
+            ],
+            "description": "Human-readable explanation of what went wrong. The chat routes nest a {code, message} object here so the UI never matches on the sentence.",
+            "title": "Detail"
           }
         },
         "required": [
@@ -1502,6 +1858,320 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/chat/completions": {
+      "post": {
+        "description": "Validate the turn, then relay the reply as an AI SDK UI message stream.",
+        "operationId": "admin_chat_completion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The AI SDK UI message stream for one turn."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "An upstream dependency answered with an error."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Send one chat turn and stream the reply",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/threads": {
+      "get": {
+        "operationId": "list_admin_chat_threads",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatThreadResponse"
+                  },
+                  "title": "Response List Admin Chat Threads",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "List this admin's chat threads",
+        "tags": [
+          "admin-chat"
+        ]
+      },
+      "post": {
+        "operationId": "create_admin_chat_thread",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatThreadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Open a new chat thread",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/threads/{thread_id}": {
+      "delete": {
+        "description": "Hard delete, children before parent. Audit rows survive (D-4).\n\nAnswers 204 with chat on or off, with the key set or not: it is one of the\ntwo SQLite-only routes this feature keeps reachable.",
+        "operationId": "delete_admin_chat_thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "Delete one chat thread for good",
+        "tags": [
+          "admin-chat"
+        ]
+      },
+      "get": {
+        "operationId": "get_admin_chat_thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatThreadDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Show one chat thread with its messages, turns, and actions",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
     "/admin/feedback/summary": {
       "get": {
         "description": "Return vote, dataset, and outbox counts. Members receive 403.",

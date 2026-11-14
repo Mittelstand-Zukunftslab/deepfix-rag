@@ -47,6 +47,230 @@ export type BodyCreateDocument = {
 };
 
 /**
+ * ChatActionResponse
+ *
+ * One proposed action card.
+ */
+export type ChatActionResponse = {
+    /**
+     * Action Id
+     */
+    action_id: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Decided At
+     */
+    decided_at: string | null;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    /**
+     * Kind
+     */
+    kind: string;
+    /**
+     * Payload
+     *
+     * The JSON object the assistant proposed, as text.
+     */
+    payload: string;
+    /**
+     * Result
+     */
+    result: string | null;
+    /**
+     * Status
+     */
+    status: 'proposed' | 'confirmed' | 'rejected' | 'expired' | 'failed';
+    /**
+     * Turn Id
+     */
+    turn_id: string;
+};
+
+/**
+ * ChatCompletionRequest
+ *
+ * An OpenAI-shaped turn request.
+ *
+ * The server rebuilds the upstream conversation from the stored thread, so this
+ * array is a consistency check rather than the prompt: the client cannot rewrite
+ * the system message or claim a history that never happened.
+ */
+export type ChatCompletionRequest = {
+    /**
+     * Messages
+     */
+    messages: Array<ChatMessageModel>;
+    /**
+     * Retry Of
+     */
+    retry_of?: string | null;
+    /**
+     * Thread Id
+     */
+    thread_id: string;
+};
+
+/**
+ * ChatErrorDetail
+ *
+ * The chat routes' structured error body, nested under ``detail``.
+ *
+ * A chat failure carries a stable machine-readable ``code`` beside a sentence,
+ * so the UI branches on the code and an operator can tell "turned off"
+ * (``chat_disabled``) from "turned on but broken" (``chat_misconfigured``).
+ * Only the chat routes use this shape; every other route keeps ``detail: str``.
+ */
+export type ChatErrorDetail = {
+    /**
+     * Code
+     *
+     * Stable machine-readable reason, e.g. chat_disabled.
+     */
+    code: string;
+    /**
+     * Message
+     *
+     * Sentence shown to the admin.
+     */
+    message: string;
+};
+
+/**
+ * ChatMessageModel
+ *
+ * One message the browser sends. Only ``user`` and ``assistant`` are accepted.
+ */
+export type ChatMessageModel = {
+    /**
+     * Content
+     */
+    content: string;
+    /**
+     * Role
+     */
+    role: 'user' | 'assistant';
+};
+
+/**
+ * ChatMessageResponse
+ *
+ * One stored message.
+ */
+export type ChatMessageResponse = {
+    /**
+     * Content
+     */
+    content: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Message Id
+     */
+    message_id: string;
+    /**
+     * Role
+     */
+    role: 'user' | 'assistant';
+    /**
+     * Seq
+     */
+    seq: number;
+    /**
+     * Turn Id
+     */
+    turn_id: string | null;
+};
+
+/**
+ * ChatThreadDetailResponse
+ *
+ * One thread with everything a page render needs.
+ */
+export type ChatThreadDetailResponse = {
+    /**
+     * Actions
+     */
+    actions: Array<ChatActionResponse>;
+    /**
+     * Messages
+     */
+    messages: Array<ChatMessageResponse>;
+    thread: ChatThreadResponse;
+    /**
+     * Turns
+     */
+    turns: Array<ChatTurnResponse>;
+};
+
+/**
+ * ChatThreadResponse
+ *
+ * One conversation.
+ */
+export type ChatThreadResponse = {
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Thread Id
+     */
+    thread_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
+ * ChatTurnResponse
+ *
+ * One attempt at a reply.
+ */
+export type ChatTurnResponse = {
+    /**
+     * Ended At
+     */
+    ended_at: string | null;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * First Token Ms
+     */
+    first_token_ms: number | null;
+    /**
+     * Retry Of
+     */
+    retry_of: string | null;
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Status
+     */
+    status: 'running' | 'completed' | 'failed' | 'cancelled';
+    /**
+     * Turn Id
+     */
+    turn_id: string;
+};
+
+/**
  * CommentReason
  *
  * One-tap reasons offered after a thumbs-down.
@@ -146,9 +370,9 @@ export type ErrorResponse = {
     /**
      * Detail
      *
-     * Human-readable explanation of what went wrong.
+     * Human-readable explanation of what went wrong. The chat routes nest a {code, message} object here so the UI never matches on the sentence.
      */
-    detail: string;
+    detail: string | ChatErrorDetail;
 };
 
 /**
@@ -861,6 +1085,196 @@ export type VoteCountsResponse = {
      */
     up: number;
 };
+
+export type AdminChatCompletionData = {
+    body: ChatCompletionRequest;
+    path?: never;
+    query?: never;
+    url: '/admin/chat/completions';
+};
+
+export type AdminChatCompletionErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * An upstream dependency answered with an error.
+     */
+    502: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type AdminChatCompletionError = AdminChatCompletionErrors[keyof AdminChatCompletionErrors];
+
+export type AdminChatCompletionResponses = {
+    /**
+     * The AI SDK UI message stream for one turn.
+     */
+    200: string;
+};
+
+export type AdminChatCompletionResponse = AdminChatCompletionResponses[keyof AdminChatCompletionResponses];
+
+export type ListAdminChatThreadsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/admin/chat/threads';
+};
+
+export type ListAdminChatThreadsErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type ListAdminChatThreadsError = ListAdminChatThreadsErrors[keyof ListAdminChatThreadsErrors];
+
+export type ListAdminChatThreadsResponses = {
+    /**
+     * Response List Admin Chat Threads
+     *
+     * Successful Response
+     */
+    200: Array<ChatThreadResponse>;
+};
+
+export type ListAdminChatThreadsResponse = ListAdminChatThreadsResponses[keyof ListAdminChatThreadsResponses];
+
+export type CreateAdminChatThreadData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/admin/chat/threads';
+};
+
+export type CreateAdminChatThreadErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type CreateAdminChatThreadError = CreateAdminChatThreadErrors[keyof CreateAdminChatThreadErrors];
+
+export type CreateAdminChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    200: ChatThreadResponse;
+};
+
+export type CreateAdminChatThreadResponse = CreateAdminChatThreadResponses[keyof CreateAdminChatThreadResponses];
+
+export type DeleteAdminChatThreadData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/admin/chat/threads/{thread_id}';
+};
+
+export type DeleteAdminChatThreadErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+};
+
+export type DeleteAdminChatThreadError = DeleteAdminChatThreadErrors[keyof DeleteAdminChatThreadErrors];
+
+export type DeleteAdminChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type DeleteAdminChatThreadResponse = DeleteAdminChatThreadResponses[keyof DeleteAdminChatThreadResponses];
+
+export type GetAdminChatThreadData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/admin/chat/threads/{thread_id}';
+};
+
+export type GetAdminChatThreadErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type GetAdminChatThreadError = GetAdminChatThreadErrors[keyof GetAdminChatThreadErrors];
+
+export type GetAdminChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    200: ChatThreadDetailResponse;
+};
+
+export type GetAdminChatThreadResponse = GetAdminChatThreadResponses[keyof GetAdminChatThreadResponses];
 
 export type GetFeedbackSummaryData = {
     body?: never;
