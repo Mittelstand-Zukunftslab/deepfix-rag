@@ -407,6 +407,7 @@ class IndexCoordinator:
             )
             return
         set_document_status(self.db_path, doc_id, "indexed", indexed=True)
+        self._refresh_manifest()
 
     def _delete_document(self, doc_id: str) -> None:
         try:
@@ -424,6 +425,32 @@ class IndexCoordinator:
             )
             return
         set_document_status(self.db_path, doc_id, "deleting", deleted=True)
+        self._refresh_manifest()
+
+    def _refresh_manifest(self) -> None:
+        """Keep the serving build's manifest in step with per-document writes.
+
+        A build's manifest records the corpus hash it was built from, and startup
+        rebuilds when the manifest no longer matches the corpus. Writing one
+        document would otherwise leave every restart rebuilding the whole index.
+        """
+        with self._lock:
+            build_id = self._build_id if self._service is not None else None
+        if build_id is None:
+            return
+        path = self._build_path(build_id) / _MANIFEST
+        try:
+            manifest = self._read_manifest(build_id)
+            if manifest is None or not path.is_file():
+                return
+            config = bind_locations(
+                self._read_champion(), self.workspace, self._build_path(build_id)
+            )
+            manifest["index_time"] = index_time_signature(config)
+            manifest["chunk_count"] = self._chunk_count(build_id)
+            path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            LOGGER.exception("Could not refresh the manifest for build %s", build_id)
 
     def _run_rebuild(self) -> None:
         with self._lock:

@@ -31,6 +31,13 @@ function status(overrides: Partial<OptimizationStatus> = {}): OptimizationStatus
   };
 }
 
+const HERMES_UNAVAILABLE =
+  "Hermes is not set up on this server, so a run cannot start. The schedule and history are still shown.";
+
+// OpenHands was removed; its copy must never come back as the fallback.
+const OPENHANDS_COPY =
+  "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.";
+
 const skippedRun: OptimizationStatus["runs"][number] = {
   run_id: "run-skipped",
   status: "skipped",
@@ -67,20 +74,16 @@ describe("Optimization screen", () => {
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
-  it("disables Run now when OpenHands is not set up and still shows the schedule", () => {
+  it("falls back to the Hermes message when the server names no agent", () => {
     render(
       <OptimizationPage
-        status={status({ agent_available: false })}
+        status={status({ agent_available: false, agent_unavailable_message: null })}
         onRun={async () => {}}
         onSave={async () => {}}
         onCancel={async () => {}}
       />,
     );
-    expect(
-      screen.getByText(
-        "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.",
-      ),
-    ).toBeTruthy();
+    expect(screen.getByText(HERMES_UNAVAILABLE)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
     expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
     expect(screen.getByLabelText("Schedule")).toHaveValue("0 2 * * *");
@@ -105,11 +108,7 @@ describe("Optimization screen", () => {
       />,
     );
     expect(screen.getByText(hermes)).toBeTruthy();
-    expect(
-      screen.queryByText(
-        "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.",
-      ),
-    ).toBeNull();
+    expect(screen.queryByText(OPENHANDS_COPY)).toBeNull();
     expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
     expect(screen.getByLabelText("Schedule")).toHaveValue("0 2 * * *");
   });
