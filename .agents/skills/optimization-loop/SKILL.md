@@ -26,6 +26,22 @@ cli_actions:
 
 This skill is the whole contract for a round. Pathology skills are sibling folders of this one (`../chunking-tuning/SKILL.md`, and so on). Each names one hypothesis; this skill decides whether to recommend it.
 
+## Prerequisite: the `deepfix` CLI
+
+Every step below calls `deepfix`. Confirm it resolves before you plan anything:
+
+```
+command -v deepfix
+```
+
+A path means you can continue. No output means the CLI is not installed, so no round can run: install it once, then check again.
+
+```
+uv tool install "git+https://github.com/Mittelstand-Zukunftslab/deepfix-rag.git"
+```
+
+The package is not on PyPI, so the git source is the install. If `deepfix` is still missing afterwards, `uv tool update-shell` puts uv's tool directory on `PATH`; open a new shell and retry. In the API sandbox the shim is always present, so this check should only fail on a developer's own machine.
+
 ## Hard rules
 
 - Write only under `<run_dir>` (the run directory named in the prompt, `runs/<run_id>/`). The champion is read-only input at `<run_dir>/input/champion.yaml`; never edit it, and never write anything under `indexes/current`.
