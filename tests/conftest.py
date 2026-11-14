@@ -51,24 +51,24 @@ def _fixture_model_env() -> None:
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _wide_help_output() -> None:
-    """Pin the terminal width so Rich-wrapped `--help` text is the same everywhere.
+def _plain_help_output() -> None:
+    """Render `--help` without ANSI colour so the CLI contract tests can read it.
 
-    Typer renders help through Rich, which wraps to the detected terminal width.
-    CI runs without a TTY and Rich then assumes 80 columns, so an option's flag
-    and its description can land on different lines and a substring assertion
-    that passes locally fails there. A wide fixed width keeps each option on one
-    line on both.
+    Typer draws help with Rich, which colorizes option names when it thinks the
+    terminal can show colour. Its highlighter splits a flag into separate spans:
+    ``--config`` comes out as ``ESC[1m-ESC[0mESC[1m-configESC[0m``, so the literal
+    string is never in ``stdout``. A developer's shell often has ``TERM=dumb``
+    and sees plain text, while a GitHub runner leaves ``TERM`` unset and gets the
+    split form, which is why six contract tests passed locally and failed in CI.
+    ``TERM=dumb`` is the one value Rich treats as no colour regardless.
     """
-    previous = {name: os.environ.get(name) for name in ("COLUMNS", "LINES")}
-    os.environ["COLUMNS"] = "240"
-    os.environ["LINES"] = "60"
+    previous = os.environ.get("TERM")
+    os.environ["TERM"] = "dumb"
     yield
-    for name, value in previous.items():
-        if value is None:
-            os.environ.pop(name, None)
-        else:
-            os.environ[name] = value
+    if previous is None:
+        os.environ.pop("TERM", None)
+    else:
+        os.environ["TERM"] = previous
 
 
 @pytest.fixture(scope="session")
