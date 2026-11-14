@@ -1015,6 +1015,10 @@ export type OptimizationRunSummary = {
  * OptimizationStatusResponse
  *
  * Schedule, champion diff, and the 20 most recent runs.
+ *
+ * ``chat_enabled`` is the admin chat's switch (D-2). It rides here rather than
+ * on a chat route so the disabled page can render without calling one, and so
+ * the eleven chat routes stay exactly eleven.
  */
 export type OptimizationStatusResponse = {
     /**
@@ -1039,6 +1043,10 @@ export type OptimizationStatusResponse = {
     champion_diff: {
         [key: string]: ConfigChange;
     };
+    /**
+     * Chat Enabled
+     */
+    chat_enabled: boolean;
     /**
      * Cron
      */

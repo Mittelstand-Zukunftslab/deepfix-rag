@@ -22,6 +22,9 @@ function status(overrides: Partial<OptimizationStatus> = {}): OptimizationStatus
     agent_unavailable_message: null,
     champion_config_path: "/workspace/configs/champion.yaml",
     champion_diff: {},
+    // `chat_enabled` is required on the generated type: ApiModel marks every
+    // serialized default required, so the fixture carries it (CHAT-010).
+    chat_enabled: true,
     cron: "0 2 * * *",
     enabled: true,
     next_run_at: "2026-10-13T00:00:00.000Z",

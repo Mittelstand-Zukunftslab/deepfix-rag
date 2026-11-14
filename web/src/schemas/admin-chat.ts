@@ -74,6 +74,11 @@ export const chatRun = z.object({
 });
 export type ChatRun = z.infer<typeof chatRun>;
 
+/** The list row: the thread plus how its newest turn ended. */
+export type ChatThreadSummary = ChatThread & {
+  last_turn_status?: "running" | "completed" | "failed" | "cancelled" | null;
+};
+
 export const chatThreadDetail = z.object({
   thread: chatThread,
   messages: z.array(chatMessage),

@@ -1816,7 +1816,7 @@
         "type": "object"
       },
       "OptimizationStatusResponse": {
-        "description": "Schedule, champion diff, and the 20 most recent runs.",
+        "description": "Schedule, champion diff, and the 20 most recent runs.\n\n``chat_enabled`` is the admin chat's switch (D-2). It rides here rather than\non a chat route so the disabled page can render without calling one, and so\nthe eleven chat routes stay exactly eleven.",
         "properties": {
           "agent": {
             "const": "hermes",
@@ -1850,6 +1850,11 @@
             "title": "Champion Diff",
             "type": "object"
           },
+          "chat_enabled": {
+            "default": false,
+            "title": "Chat Enabled",
+            "type": "boolean"
+          },
           "cron": {
             "title": "Cron",
             "type": "string"
@@ -1882,6 +1887,7 @@
           }
         },
         "required": [
+          "chat_enabled",
           "cron",
           "timezone",
           "enabled",

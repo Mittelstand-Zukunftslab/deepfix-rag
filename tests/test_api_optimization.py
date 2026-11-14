@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import os
+from pathlib import Path
 import subprocess
 
 from fastapi.testclient import TestClient
@@ -208,3 +209,31 @@ def test_cancel_kills_only_the_openhands_process_group(
             if proc.poll() is None:
                 proc.kill()
                 proc.wait(timeout=2)
+
+
+def test_the_status_payload_carries_the_chat_flag(
+    tmp_path: Path, identity: IdentityIssuer
+) -> None:
+    """`chat_enabled` rides on this payload so the chat page needs no chat call.
+
+    FR-027: the disabled page must render without requesting any `/admin/chat/*`
+    route, which is only possible if the flag arrives on a route the page
+    already fetches.
+    """
+    for enabled in (False, True):
+        settings = _settings_for_chat(tmp_path, HERMES_CHAT_ENABLED=enabled)
+        with _client(settings, identity) as client:
+            identity.sign_in(client, "admin@example.com", "admin")
+            body = client.get("/admin/optimization").json()
+        assert body["chat_enabled"] is enabled
+
+
+def _settings_for_chat(tmp_path: Path, **overrides: object) -> Settings:
+    values: dict[str, object] = {
+        "PRODUCT_DATA_DIR": tmp_path / "chat-private",
+        "WORKSPACE_DIR": tmp_path / "chat-workspace",
+        "WEB_ORIGIN": "http://localhost:8080",
+        "MLFLOW_TRACKING_URI": f"sqlite:///{tmp_path / 'chat-mlflow.db'}",
+        **overrides,
+    }
+    return Settings(_env_file=None, **values)

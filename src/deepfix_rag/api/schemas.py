@@ -209,8 +209,14 @@ class OptimizationRunSummary(ApiModel):
 
 
 class OptimizationStatusResponse(ApiModel):
-    """Schedule, champion diff, and the 20 most recent runs."""
+    """Schedule, champion diff, and the 20 most recent runs.
 
+    ``chat_enabled`` is the admin chat's switch (D-2). It rides here rather than
+    on a chat route so the disabled page can render without calling one, and so
+    the eleven chat routes stay exactly eleven.
+    """
+
+    chat_enabled: bool = False
     cron: str
     timezone: str
     enabled: bool

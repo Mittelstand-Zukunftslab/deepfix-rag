@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { AccountRole } from "@/schemas/auth";
 import { useSidebarStore } from "@/stores/sidebar-store";
-import { navigationItems } from "./navigation";
+import { activePathMatches, navigationItems } from "./navigation";
 
 export function AppSidebar({ role }: { role: AccountRole | null }) {
   const active = useActivePath();
@@ -46,7 +46,9 @@ export function AppSidebar({ role }: { role: AccountRole | null }) {
       </div>
       <nav className="flex flex-col gap-1">
         {items.map((item) => {
-          const isActive = active.startsWith(item.to);
+          // Longest matching prefix wins, so `/admin/chat` does not also light
+          // `/admin`: a plain `startsWith` would mark both as the current page.
+          const isActive = activePathMatches(active, items, item.to);
           return (
             <NavLink
               key={item.to}

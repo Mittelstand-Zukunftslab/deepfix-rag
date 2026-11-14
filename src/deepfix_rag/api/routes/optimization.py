@@ -175,6 +175,7 @@ def _status(request: Request) -> OptimizationStatusResponse:
         for run in recent_runs(settings.product_db_path)
     ]
     return OptimizationStatusResponse(
+        chat_enabled=bool(settings.HERMES_CHAT_ENABLED),
         cron=schedule.cron,
         timezone=schedule.timezone,
         enabled=schedule.enabled,
