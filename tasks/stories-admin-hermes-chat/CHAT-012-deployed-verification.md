@@ -57,10 +57,10 @@ Journeys:
 10. Given J4, when the admin deletes a thread, then the conversation disappears, the run it started is intact, and
     the audit view shows the surviving rows with `thread_deleted: true` and no message text.
 11. Given the retention prune on the deployed stack, when an audit row older than `ADMIN_CHAT_AUDIT_RETENTION_DAYS`
-    exists, then the row is gone after the next scheduler tick and the API log carries one
+    exists, then the row is gone after the next hourly prune job fires and the API log carries one
     `chat audit prune deleted=<n> retention_days=<d>` line. A row inside the window is still returned by
     `GET /admin/chat/audit`. Checked by inserting a row with an old `at` through the API container's SQLite file,
-    then waiting for the tick; also checked once with `HERMES_CHAT_ENABLED=false`, which is the case that matters
+    then waiting for the hourly job; also checked once with `HERMES_CHAT_ENABLED=false`, which is the case that matters
     most because the audit route stays reachable then.
 12. Given a reload during a reply, when the page reopens, then the reply resumes with no duplicated text.
 13. Given `HERMES_CHAT_ENABLED=false` on the deployed site, when the admin opens `/admin/chat`, then the disabled

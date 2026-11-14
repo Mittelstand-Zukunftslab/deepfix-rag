@@ -70,7 +70,8 @@ out of a session. If that happens, the honest split is relay-and-gate first, err
 - Chat is off by default (`HERMES_CHAT_ENABLED=false`) and, when off, runs no gateway process and binds no port.
 - No model id is hardcoded in Python or TypeScript. `HERMES_CHAT_MODEL` falls back to `HERMES_MODEL`.
 - Audit rows are never deleted by a thread delete, only by age: `ADMIN_CHAT_AUDIT_RETENTION_DAYS` (default 14, `0`
-  keeps them forever), pruned from the existing scheduler tick whether chat is on or off.
+  keeps them forever), pruned by an hourly interval job on the optimization scheduler whether chat is on or
+  off.
 - The Hermes secret scrub (`optimization._secrets` / `_redact`, extended with the chat key) stays in force on every outbound string.
 
 ## Open questions
@@ -88,9 +89,9 @@ Both questions that needed Fadel are settled (2026-11-14) and are decisions, not
 
 - **Deleting a thread never deletes audit rows.** D-4 as written. Applied by CHAT-002 (the delete order), CHAT-005
   (the route), CHAT-006 (`thread_deleted` on read) and CHAT-010 (the dialog copy).
-- **Audit retention is 14 days**, by `ADMIN_CHAT_AUDIT_RETENTION_DAYS`, pruned from the existing scheduler tick and
-  running whether chat is on or off. D-6 and FR-030. The function is CHAT-002's; the wiring and its hourly wake-up
-  are CHAT-006's; the deployed check is CHAT-012's.
+- **Audit retention is 14 days**, by `ADMIN_CHAT_AUDIT_RETENTION_DAYS`, pruned by an hourly interval job on the
+  optimization scheduler and running whether chat is on or off. D-6 and FR-030. The function is CHAT-002's; the
+  job registration is CHAT-006's; the deployed check is CHAT-012's.
 
 ## Test commands
 
@@ -133,7 +134,7 @@ uv run --env-file .env pytest -v tests/test_api_optimization.py
 | CHAT-003 | `tests/test_admin_chat_routes.py` | — (edits `web/src/test/api-boundary.test.ts` only if the client changes shape) |
 | CHAT-004 | `tests/test_admin_chat_prompt.py` | — |
 | CHAT-005 | `tests/test_admin_chat_threads.py` | — |
-| CHAT-006 | `tests/test_admin_chat_limits.py`, plus new cases in `tests/test_optimization_schedule.py` for the prune hook and `_idle_delay` | — |
+| CHAT-006 | `tests/test_admin_chat_limits.py`, plus new cases in `tests/test_optimization_schedule.py` for the prune job | — |
 | CHAT-007 | `tests/test_admin_chat_actions.py` | — |
 | CHAT-008 | `tests/test_admin_chat_runs.py` | — |
 | CHAT-009 | — | `src/test/admin-chat-stream.test.ts`, `src/test/admin-chat-boundary.test.ts` |
@@ -147,8 +148,8 @@ Every Python module carries an explicit `pytestmark` (`unit`, `integration`, `ap
 ## FR coverage
 
 Every FR is claimed by at least one story; CHAT-012 verifies the whole set end to end. FR-030 is split by design:
-CHAT-002 ships `prune_audit`, CHAT-006 calls it from the scheduler tick, and CHAT-012 proves it on the deployment
-with chat off.
+CHAT-002 ships `prune_audit`, CHAT-006 registers it as an hourly job on the optimization scheduler, and CHAT-012
+proves it on the deployment with chat off.
 
 | Story | FRs |
 | :--- | :--- |
