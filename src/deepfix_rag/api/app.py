@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.formparsers import MultiPartParser
 
+from deepfix_rag.admin_chat import init_admin_chat
 from deepfix_rag.api.identity import TokenVerifier
 from deepfix_rag.api.logging_config import configure_logging
 from deepfix_rag.api.routes import (
@@ -98,6 +99,7 @@ def create_app(
         drop_account_tables(app.state.settings.product_db_path)
         init_documents(app.state.settings.product_db_path)
         init_optimization(app.state.settings.product_db_path)
+        init_admin_chat(app.state.settings.product_db_path)
         prepare_workspace(app.state.settings.workspace_dir)
         coordinator = IndexCoordinator(
             app.state.settings.workspace_dir,

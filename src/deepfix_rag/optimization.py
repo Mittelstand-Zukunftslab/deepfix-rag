@@ -85,6 +85,7 @@ _STEP_LOG_DIRNAME = "optimization-logs"
 _HEARTBEAT_FIELDS = ("run_id", "pid", "elapsed_s", "argv0", "written_at")
 _SECRET_ENVS = (
     "API_SERVER_KEY",
+    "HERMES_CHAT_API_SERVER_KEY",
     "OPENROUTER_API_KEY",
     "S3_SECRET_ACCESS_KEY",
     "HERMES_S3_SECRET_ACCESS_KEY",
