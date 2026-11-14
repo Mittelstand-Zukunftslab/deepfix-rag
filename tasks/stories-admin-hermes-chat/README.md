@@ -93,6 +93,22 @@ Both questions that needed Fadel are settled (2026-11-14) and are decisions, not
   optimization scheduler and running whether chat is on or off. D-6 and FR-030. The function is CHAT-002's; the
   job registration is CHAT-006's; the deployed check is CHAT-012's.
 
+## Amendment: the chat UI uses the Vercel AI SDK (D-7, owner request 2026-11-14)
+
+After these stories were written, the owner required the frontend to use the Vercel AI SDK, wired to Assistant UI
+through Assistant UI's official AI SDK runtime, instead of a hand-rolled SSE reader and `useExternalStoreRuntime`.
+The PRD carries the decision as **D-7**; what it changes in the stories, and what it does not:
+
+| Story | Effect |
+| :--- | :--- |
+| CHAT-003 | The browser-facing encoding is the AI SDK UI message stream (`x-vercel-ai-ui-message-stream: v1`) translated from Hermes's OpenAI `chat.completion.chunk` frames. `model`-stripping moves into that translation. The upstream call, the gate, the limits, the audit, and the terminal `deepfix.turn` information are unchanged; the turn status and actions ride as `data-*` parts. |
+| CHAT-005 | Resume speaks the same protocol, so the transport's `reconnectToStream` consumes it and no browser-side parser exists. |
+| CHAT-009 | Replaces the hand-written `admin-chat-sse.ts` reader with an AI SDK transport. The exemption in `api-boundary.test.ts` narrows to the transport module (or disappears if the transport is handed the app's own fetch). Contracts stay Zod schemas in `web/src/schemas/admin-chat.ts`. |
+| CHAT-010 | Uses `AssistantRuntimeProvider` with `useChatRuntime` from `@assistant-ui/react-ai-sdk` instead of `useExternalStoreRuntime`. The primitives, the accessibility requirements, and the disabled/misconfigured states are unchanged. |
+
+Nothing in the backend design changes: the chat gateway is still the OpenAI-compatible Hermes API, deepfix-api is
+still the only caller, and no key or model id reaches the browser.
+
 ## Test commands
 
 Python, from the repository root:

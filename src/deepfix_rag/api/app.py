@@ -13,6 +13,7 @@ from starlette.formparsers import MultiPartParser
 from deepfix_rag.api.identity import TokenVerifier
 from deepfix_rag.api.logging_config import configure_logging
 from deepfix_rag.api.routes import (
+    admin_chat,
     documents,
     feedback,
     health,
@@ -162,6 +163,7 @@ def create_app(
     app.include_router(feedback.router)
     app.include_router(history.router)
     app.include_router(optimization.router)
+    app.include_router(admin_chat.router)
     for route in app.routes:
         if isinstance(route, APIRoute):
             route.responses.pop(422, None)

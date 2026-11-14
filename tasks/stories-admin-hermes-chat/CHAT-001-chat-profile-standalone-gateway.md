@@ -162,12 +162,38 @@ are recorded as not-run here and repeated on the deployment in CHAT-012, exactly
 - [ ] Committed on `feat/hermes-optimizer` on its own, before CHAT-002 starts
 
 ## Verification note
-Fill in on implementation, in the style of `tasks/prd-hermes-optimizer.md`'s story notes: the start command the
-image actually uses, whether it survives `docker restart`, the two `/p/chat/` negative checks, the process and
-port evidence in both states, and which ACs could not be run on the implementing VM.
 
-Also record the measurement the PRD's open question 1 assigns to whoever runs this story: close the socket
-mid-turn and observe whether the gateway keeps generating (container token usage or the gateway log). The behaviour
-shipped is the recommended default either way — close the upstream stream, record `cancelled`, keep the partial
-text — so this is a measurement, not a decision gate. If the answer is "it keeps running", record it here; the
-300-second cap in CHAT-003 is then the only bound, and the risk is accepted rather than fixed.
+Implemented 2026-11-14 on `feat/hermes-optimizer`.
+
+**Start command.** `boot.chat_start_command()` returns
+`["hermes", "-p", "chat", "gateway", "run"]`, printed once by `start_chat_gateway` as
+`chat gateway: hermes -p chat gateway run HERMES_HOME=<home> port=8643`. The optimization profile keeps the
+image entrypoint's own slot on 8642; the chat profile is a second, independent foreground process rather than a
+second s6 longrun, because this pin registers profiles the image entrypoint already reconciles and a hand-added
+slot would duplicate that bookkeeping. `gateway_state.json` is written `stopped` on every boot and only becomes
+`running` when `HERMES_CHAT_ENABLED` is true and the chat key passes `validate_api_key`.
+
+**Model resolution.** `chat_model_id(env)` is `HERMES_CHAT_MODEL` when set or blank-tolerant, else
+`model_id(env)` (`HERMES_MODEL`). The three cases are asserted by
+`tests/test_hermes_chat_profile.py::test_the_chat_model_falls_back_to_hermes_model_in_three_cases`.
+
+**Standalone invariant.** `apply_sandbox` writes `gateway.standalone: true` through `chat_profile_config` and
+then reads the file back; a missing or false value raises `SandboxBootError` before `gateway_state.json` exists.
+`test_boot_refuses_a_chat_config_without_gateway_standalone` injects exactly that config and asserts the
+`SandboxBootError` and the absent state file.
+
+**Not run on this VM (no container runtime).** AC 17 (`GET http://hermes:8643/health`,
+`POST http://hermes:8643/v1/chat/completions`, and the expected failure of
+`POST http://hermes:8642/p/chat/v1/chat/completions`), AC 18 (one gateway process with chat off, nothing bound to
+8643; a second process and 8643 bound with chat on; container RSS in both states), and the "survives
+`docker restart`" half of AC 9. `docker`, `podman`, and `nerdctl` are all absent here. CHAT-012 repeats them on
+the deployment, exactly as `tasks/prd-hermes-optimizer.md` US-007 recorded its container checks.
+
+**Open question 1 (disconnect mid-turn).** Not measured here, for the same reason: it needs a running gateway.
+The shipped behaviour is the PRD's recommended default — close the upstream stream, record `cancelled`, keep the
+partial text — and the `ADMIN_CHAT_TURN_TIMEOUT_SECONDS` cap in CHAT-003 is the bound if the gateway turns out to
+keep generating after the socket closes. CHAT-012 records the measurement on the deployment.
+
+**What did run.** `uv run --env-file .env pytest -q -m "(unit or cli) and not network"` (348 passed),
+`-m "api and not network"` (50 passed), the three chat modules plus `test_hermes_sandbox.py` (47 passed), and
+`uv run ruff check` / `uv run ruff format --check` are clean.

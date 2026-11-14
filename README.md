@@ -290,8 +290,33 @@ OPENROUTER_API_KEY=
 # writes it into /opt/data/config.yaml and the API posts it on POST /v1/runs.
 # Both services read the same value, so they cannot drift.
 HERMES_MODEL=deepseek/deepseek-v4.1-flash-1017
-# Optional chat-profile key. The chat profile is not started.
+# Optional chat-profile key. Distinct from API_SERVER_KEY, and never written
+# into the optimization profile. At least 16 characters; placeholders rejected.
 HERMES_CHAT_API_SERVER_KEY=
+# Admin Hermes chat, off by default. false means no chat gateway process exists
+# and nothing listens on 8643; the API's chat routes answer 503 and the page
+# says so. true starts the chat profile's standalone gateway on 8643.
+HERMES_CHAT_ENABLED=false
+# Optional. The chat profile's model. Unset or blank uses HERMES_MODEL, so one
+# model id serves both profiles unless an operator chooses otherwise.
+# HERMES_CHAT_MODEL=
+# Optional. Where deepfix-api reaches the chat profile.
+# HERMES_CHAT_BASE_URL=http://hermes:8643
+# MLflow experiment for chat turn traces. Separate from deepfix_hermes.
+MLFLOW_HERMES_CHAT_EXPERIMENT=deepfix_hermes_chat
+# Chat limits, all optional. Defaults shown; each is read from the environment.
+ADMIN_CHAT_MAX_PROMPT_CHARS=48000
+ADMIN_CHAT_MAX_MESSAGES=60
+ADMIN_CHAT_TURN_TIMEOUT_SECONDS=300
+ADMIN_CHAT_DIGEST_MAX_CHARS=6000
+ADMIN_CHAT_MAX_TURNS_PER_WINDOW=30
+ADMIN_CHAT_TURN_WINDOW_SECONDS=300
+ADMIN_CHAT_MAX_CONCURRENT_TURNS=2
+ADMIN_CHAT_ACTION_TTL_SECONDS=600
+ADMIN_CHAT_STEP_TAIL=50
+ADMIN_CHAT_STEP_READ_BYTES=65536
+# Audit rows are pruned hourly after this many days. 0 keeps them forever.
+ADMIN_CHAT_AUDIT_RETENTION_DAYS=14
 
 # ------------------------------------------------------------------------------
 # MLflow Server (docker compose)

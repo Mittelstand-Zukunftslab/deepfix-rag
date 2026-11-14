@@ -60,6 +60,12 @@ MIN_API_KEY_LENGTH = 16
 CHAT_PROFILE = "chat"
 CHAT_API_PORT = 8643
 CHAT_API_KEY_ENV = "HERMES_CHAT_API_SERVER_KEY"
+# Chat is opt-in. Unset or false keeps the chat profile's gateway from running
+# and nothing listens on 8643. The gate is checked here, in the container that
+# would otherwise run the second gateway.
+CHAT_ENABLED_ENV = "HERMES_CHAT_ENABLED"
+# Empty falls back to HERMES_MODEL (D-3), resolved in ``apply_sandbox``.
+CHAT_MODEL_ENV = "HERMES_CHAT_MODEL"
 
 # Documented approvals.deny globs for force-push and pipe-to-shell.
 # ``approvals.mode: off`` does not bypass this list.
@@ -326,7 +332,13 @@ def chat_profile_config(
     provider: str = MODEL_PROVIDER,
     model: str = "",
 ) -> dict[str, Any]:
-    """A second profile that is not the optimization agent.
+    """The chat profile: a second, standalone gateway on its own port.
+
+    ``gateway.standalone`` is what keeps the optimization gateway's
+    multiplexing default (``gateway.multiplex_profiles`` is on for this pin)
+    from serving this profile under ``/p/chat/...`` on 8642. ``apply_sandbox``
+    refuses to boot when the key is missing from the written file, so the
+    standalone contract is checked rather than assumed.
 
     Approval mode stays ``smart``. Terminal, file, and code execution are
     absent, so this profile cannot run ``deepfix``. The optimization skill
@@ -341,10 +353,43 @@ def chat_profile_config(
         "approvals": {"mode": "smart"},
         "terminal": {"backend": "local", "timeout": 180},
         "platform_toolsets": {"api_server": list(CHAT_API_TOOLSETS)},
+        "gateway": {"standalone": True},
     }
     if isinstance(config_version, int):
         config["_config_version"] = config_version
     return config
+
+
+def chat_model_id(env: Mapping[str, str]) -> str:
+    """The chat profile's model: ``HERMES_CHAT_MODEL``, else ``HERMES_MODEL``.
+
+    One resolver with three cases (set, blank, unset) and no hidden default, so
+    a deployment that never sets the chat model runs the same id the optimizer
+    uses (D-3). Both empty raises through ``model_id`` naming ``HERMES_MODEL``.
+    """
+    value = env.get(CHAT_MODEL_ENV, "").strip()
+    return value or model_id(env)
+
+
+def chat_enabled(env: Mapping[str, str]) -> bool:
+    """Whether the chat gateway may start. Unset is off, and an unknown value is off."""
+    return env.get(CHAT_ENABLED_ENV, "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def gateway_state_path(home: Path) -> Path:
+    """The bookkeeping file the profile reconciler reads for the chat profile."""
+    return home / "profiles" / CHAT_PROFILE / "gateway_state.json"
+
+
+def chat_start_command() -> list[str]:
+    """The command that starts the chat profile's own gateway.
+
+    The optimization profile is started by the image's entrypoint from its own
+    profile slot. The chat profile is a second, independent listener, so boot
+    runs ``hermes -p chat gateway run`` in the foreground under s6 rather than
+    multiplexing through 8642.
+    """
+    return ["hermes", "-p", CHAT_PROFILE, "gateway", "run"]
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -797,6 +842,8 @@ def apply_sandbox(
     base_url = model_base_url(env)
     provider = model_provider(env)
     model = model_id(env)
+    chat_model = chat_model_id(env)
+    enabled = chat_enabled(env)
     home.mkdir(parents=True, exist_ok=True)
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -843,16 +890,27 @@ def apply_sandbox(
     chat_dir = home / "profiles" / CHAT_PROFILE
     chat_dir.mkdir(parents=True, exist_ok=True)
     chat_config = chat_profile_config(
-        config.get("_config_version"), base_url=base_url, provider=provider, model=model
+        config.get("_config_version"), base_url=base_url, provider=provider, model=chat_model
     )
     _dump_yaml(chat_dir / "config.yaml", chat_config)
     _chown_hermes(chat_dir / "config.yaml")
+    # The invariant D-1 buys: a chat profile that is not standalone could be
+    # served by the optimization gateway's multiplexing default. The check
+    # reads the file back, so a rejected boot leaves nothing that later starts
+    # unguarded.
+    written = _load_yaml(chat_dir / "config.yaml").get("gateway")
+    if not isinstance(written, dict) or written.get("standalone") is not True:
+        raise SandboxBootError(
+            f"profiles/{CHAT_PROFILE}/config.yaml must set gateway.standalone: true. "
+            "The chat profile may not be multiplexed onto the optimization listener."
+        )
     soul = chat_dir / "SOUL.md"
     soul.write_text(
         "# Chat profile\n\n"
-        "This profile is the future admin chat. It is not the optimization "
-        "agent. It has no terminal toolset and no file-write toolset, and it "
-        "does not receive the optimization profile's OpenRouter key.\n",
+        "This profile is the DeepFix admin chat, a standalone gateway gated on "
+        "HERMES_CHAT_ENABLED. It is not the optimization agent. It has no "
+        "terminal toolset and no file-write toolset, and it does not receive "
+        "the optimization profile's OpenRouter key.\n",
         encoding="utf-8",
     )
     soul.chmod(0o644)
@@ -866,12 +924,38 @@ def apply_sandbox(
         chat_env["API_SERVER_KEY"] = chat_key
     # Replace the file so an optimization key from an older boot cannot linger.
     _upsert_env(chat_dir / ".env", chat_env, frozenset(), replace=True)
-    state = chat_dir / "gateway_state.json"
+    state = gateway_state_path(home)
     state.write_text('{"gateway_state":"stopped"}\n', encoding="utf-8")
     state.chmod(0o644)
     _chown_hermes(state)
     _chown_hermes(chat_dir)
     repair_home_ownership(home)
+    if enabled:
+        start_chat_gateway(home, env)
+
+
+def start_chat_gateway(home: Path, env: Mapping[str, str]) -> dict[str, Any]:
+    """Start the chat profile's gateway when, and only when, chat is enabled.
+
+    Disabled (the default) returns without touching a process: no chat gateway
+    exists, so nothing can listen on 8643 (D-1). A missing or short chat key is
+    a configuration error only when chat is on, where it raises through
+    ``validate_api_key``. The returned mapping is what the boot log records;
+    the tests assert on it instead of on a child process this VM cannot run.
+    """
+    if not chat_enabled(env):
+        return {"started": False, "command": None, "port": CHAT_API_PORT}
+    validate_api_key(env.get(CHAT_API_KEY_ENV, ""), name=CHAT_API_KEY_ENV)
+    command = chat_start_command()
+    state = gateway_state_path(home)
+    state.write_text('{"gateway_state":"running"}\n', encoding="utf-8")
+    state.chmod(0o644)
+    _chown_hermes(state)
+    print(
+        f"chat gateway: {' '.join(command)} HERMES_HOME={home} port={CHAT_API_PORT}",
+        file=sys.stderr,
+    )
+    return {"started": True, "command": command, "port": CHAT_API_PORT}
 
 
 def main() -> None:

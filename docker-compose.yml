@@ -191,6 +191,27 @@ services:
       HERMES_MODEL: ${HERMES_MODEL:-}
       HERMES_MODEL_PROVIDER: ${HERMES_MODEL_PROVIDER:-openrouter}
       API_SERVER_KEY: ${API_SERVER_KEY:-}
+      # Admin Hermes chat. Off by default: nothing listens on 8643 and no chat
+      # gateway exists. Typed fields use a non-empty default so an unset .env
+      # cannot raise bool_parsing or int_parsing.
+      HERMES_CHAT_ENABLED: ${HERMES_CHAT_ENABLED:-false}
+      HERMES_CHAT_BASE_URL: ${HERMES_CHAT_BASE_URL:-http://hermes:8643}
+      # Empty falls back to HERMES_MODEL, so a default deploy runs one model.
+      HERMES_CHAT_MODEL: ${HERMES_CHAT_MODEL:-}
+      HERMES_CHAT_API_SERVER_KEY: ${HERMES_CHAT_API_SERVER_KEY:-}
+      MLFLOW_HERMES_CHAT_EXPERIMENT: ${MLFLOW_HERMES_CHAT_EXPERIMENT:-deepfix_hermes_chat}
+      ADMIN_CHAT_MAX_PROMPT_CHARS: ${ADMIN_CHAT_MAX_PROMPT_CHARS:-48000}
+      ADMIN_CHAT_MAX_MESSAGES: ${ADMIN_CHAT_MAX_MESSAGES:-60}
+      ADMIN_CHAT_TURN_TIMEOUT_SECONDS: ${ADMIN_CHAT_TURN_TIMEOUT_SECONDS:-300}
+      ADMIN_CHAT_DIGEST_MAX_CHARS: ${ADMIN_CHAT_DIGEST_MAX_CHARS:-6000}
+      ADMIN_CHAT_MAX_TURNS_PER_WINDOW: ${ADMIN_CHAT_MAX_TURNS_PER_WINDOW:-30}
+      ADMIN_CHAT_TURN_WINDOW_SECONDS: ${ADMIN_CHAT_TURN_WINDOW_SECONDS:-300}
+      ADMIN_CHAT_MAX_CONCURRENT_TURNS: ${ADMIN_CHAT_MAX_CONCURRENT_TURNS:-2}
+      ADMIN_CHAT_ACTION_TTL_SECONDS: ${ADMIN_CHAT_ACTION_TTL_SECONDS:-600}
+      ADMIN_CHAT_STEP_TAIL: ${ADMIN_CHAT_STEP_TAIL:-50}
+      ADMIN_CHAT_STEP_READ_BYTES: ${ADMIN_CHAT_STEP_READ_BYTES:-65536}
+      # Audit rows older than this many days are pruned hourly. 0 keeps them.
+      ADMIN_CHAT_AUDIT_RETENTION_DAYS: ${ADMIN_CHAT_AUDIT_RETENTION_DAYS:-14}
     volumes:
       - api_data:/data
     restart: unless-stopped

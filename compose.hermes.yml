@@ -1,12 +1,14 @@
 # Hermes optimization sandbox. Internal Compose network only.
 #
-# No host ports: the optimization API listens on 8642 inside the network,
-# and the chat profile's 8643 is not published and is not started.
+# No host ports: the optimization API listens on 8642 inside the network.
+# The chat profile is a second, standalone gateway on 8643, started only when
+# HERMES_CHAT_ENABLED=true; it is not published either and is never served
+# under /p/chat/ by the optimization listener.
 # No Docker socket. No HERMES_DASHBOARD. The process user is the image's
 # hermes user (s6 starts as root and drops privileges for the gateway).
 #
-# OPTIMIZATION_AGENT defaults to openhands. The API reads the flag; this
-# file does not select the agent. Hermes runs only when the flag is hermes.
+# OPTIMIZATION_AGENT defaults to hermes. The API reads the flag; this
+# file does not select the agent.
 #
 # Secrets (API_SERVER_KEY, OPENROUTER_API_KEY, HERMES_CHAT_API_SERVER_KEY)
 # are interpolated from the environment. They are not baked into the image.
@@ -38,6 +40,11 @@ services:
       HERMES_MODEL: ${HERMES_MODEL:?HERMES_MODEL is required}
       HERMES_MODEL_PROVIDER: ${HERMES_MODEL_PROVIDER:-openrouter}
       HERMES_MODEL_BASE_URL: ${HERMES_MODEL_BASE_URL:-}
+      # Admin chat. Boot starts the chat profile's standalone gateway only when
+      # this is true. HERMES_CHAT_MODEL empty falls back to HERMES_MODEL above.
+      HERMES_CHAT_ENABLED: ${HERMES_CHAT_ENABLED:-false}
+      HERMES_CHAT_MODEL: ${HERMES_CHAT_MODEL:-}
+      MLFLOW_HERMES_CHAT_EXPERIMENT: ${MLFLOW_HERMES_CHAT_EXPERIMENT:-deepfix_hermes_chat}
       # `deepfix eval` runs inside this container, so it reads the same model
       # env names as the API. LLM_API_KEY stays out; model calls use the
       # OpenRouter key above.

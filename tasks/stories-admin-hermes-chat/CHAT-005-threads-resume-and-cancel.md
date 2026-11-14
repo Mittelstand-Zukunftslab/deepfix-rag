@@ -100,6 +100,13 @@ uv run ruff format --check
 cd web && npm run generate:api && bun run typecheck
 ```
 
+## Amendment: resume speaks the AI SDK stream too (D-7, 2026-11-14)
+
+`GET /admin/chat/turns/{turn_id}/stream` answers the same Vercel AI SDK UI message stream as the completions route,
+so the browser's transport reconnects with its own `reconnectToStream` and no hand-written parser exists. The
+already-stored assistant text is replayed as `text-start` / one `text-delta` / `text-end`, then live deltas follow,
+and the terminal `data-deepfix-turn` part carries the stored status. Nothing else in this story changes.
+
 ## Out of scope
 - Rate limiting and the audit read (CHAT-006).
 - Action cards and their confirm path (CHAT-007).

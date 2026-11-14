@@ -144,6 +144,34 @@ Fadel settled the retention question on 2026-11-14: audit rows older than **14 d
 - `ADMIN_CHAT_AUDIT_RETENTION_DAYS` is read on each prune, not cached at boot, so an operator changing it and restarting the API takes effect without a code change.
 - Rows are pruned by `at`, which every row has (`admin_chat_audit.at`, written by `record_audit`). Time is compared as stored ISO-8601 UTC, the same format `_now()` writes elsewhere in the repo.
 
+### D-7: The chat UI streams through the Vercel AI SDK, wrapped by Assistant UI's AI SDK runtime
+
+Settled by the owner on 2026-11-14, after this PRD was first written. It replaces CHAT-009's hand-rolled SSE
+reader and CHAT-010's `useExternalStoreRuntime` wiring; everything else about the chat is unchanged.
+
+- **The frontend uses the AI SDK.** `ai` (the AI SDK core) and `@ai-sdk/react` (`useChat`), with
+  `@ai-sdk/openai-compatible` where a provider object is needed, are the transport. Assistant UI is wired to it
+  through its official adapter `@assistant-ui/react-ai-sdk` (`useChatRuntime`), **not** through a custom runtime
+  and not through a hand-written `fetch` + SSE parser. NFR-7's "no new chat runtime package" is read as "no second
+  chat runtime": the AI SDK integration is now the one runtime. `@assistant-ui/react` stays on its current 0.15
+  line and `@assistant-ui/react-ai-sdk` is pinned to a release whose peer range accepts it.
+- **The wire protocol is the AI SDK's UI message stream.** `POST /admin/chat/completions` answers with
+  `x-vercel-ai-ui-message-stream: v1` frames (`start`, `text-start`/`text-delta`/`text-end`, `data-*`,
+  `finish`, `error`, `[DONE]`), which `DefaultChatTransport` consumes without a custom decoder. `GET
+  /admin/chat/turns/{turn_id}/stream` speaks the same protocol, so reconnect uses the transport's own
+  `reconnectToStream` rather than bespoke parsing.
+- **The gateway is still Hermes, and Hermes is still OpenAI-compatible.** deepfix-api keeps calling
+  `POST {HERMES_CHAT_BASE_URL}/v1/chat/completions`; only the browser-facing encoding changes. The proxy
+  translates OpenAI `chat.completion.chunk` frames into AI SDK UI message chunks, which is also where FR-003's
+  `model`-stripping rule now lives: no chunk the browser receives carries a model id.
+- **What survives unchanged:** the admin-only route list, the `chat_disabled`/`chat_misconfigured` codes, the
+  server-built prompt and digest, server-held history from the stored thread, action cards, the run panel, the
+  audit trail, and every backend rule. The browser still never holds a Hermes key, an OpenRouter key, or a model
+  id, and `web/src/test/admin-chat-boundary.test.ts` still proves it.
+- **Why:** the AI SDK is the established library for exactly this (streaming chat over HTTP), so hand-writing a
+  frame parser would be the kind of code the repository's "prefer established libraries" rule rejects, and
+  Assistant UI's adapter is the documented way to put an Assistant UI thread on top of it.
+
 ## Amendments required in `tasks/prd-hermes-optimizer.md`
 
 Do **not** edit that file as part of writing this document. After this PRD is accepted, a follow-up edit should align it with what CHAT-001 and CHAT-011 change:
@@ -530,7 +558,7 @@ Priority is **Must** (the release is incomplete without it), **Should** (planned
 - **NFR-4 Security.** Every `/admin/chat/*` route requires admin, and there are exactly eleven of them: `POST /admin/chat/completions`, `GET /admin/chat/turns/{turn_id}/stream`, `GET /admin/chat/threads`, `POST /admin/chat/threads`, `GET /admin/chat/threads/{thread_id}`, `DELETE /admin/chat/threads/{thread_id}`, `GET /admin/chat/threads/{thread_id}/runs`, `POST /admin/chat/threads/{thread_id}/runs/{run_id}`, `POST /admin/chat/actions/{action_id}/confirm`, `POST /admin/chat/actions/{action_id}/reject`, and `GET /admin/chat/audit`. Nine of them are Hermes-facing and gated on `HERMES_CHAT_ENABLED` and configuration; two (`GET /admin/chat/audit`, `DELETE /admin/chat/threads/{thread_id}`) are SQLite-only and stay reachable when chat is disabled, so an admin can still read the audit trail and delete their own conversation (D-4). A test walks `app.routes` and asserts every path starting `/admin/chat` is registered with the admin dependency, that none is unauthenticated, and that the exempt pair is exactly the two named here. The bearer key is sent only on the `Authorization` header to Hermes. The browser's better-auth cookie never leaves the web server (`src/api-proxy.ts` already strips `cookie` and `authorization`). No route accepts a URL that could be used to redirect the upstream call (the base URL is configuration, never request data). The chat profile keeps no terminal, so the `deepfix` shim, its secret scrub, and the read-only skill tree stay optimization-only.
 - **NFR-5 Privacy.** Conversation content is stored in the API's SQLite store, which already holds feedback text and run reasons; it is not copied to S3, not returned to members, and not captured in MLflow. Holdout content is never in scope of any chat read. Audit rows hold no message text, only counts, statuses, ids, and the redacted detail, and they are pruned after `ADMIN_CHAT_AUDIT_RETENTION_DAYS` (D-6), so the trail is bounded in time as well as in content.
 - **NFR-6 Accessibility.** Keyboard reachable composer, stop, retry, confirm, dismiss, and thread list; visible focus; `aria-live` for streaming text; error text is announced via `role="alert"` as the existing pages do.
-- **NFR-7 Compatibility.** `@assistant-ui/react` stays at `^0.15.28`; no new chat runtime package is added. The web app stays on the existing proxy and generated client; no new origin, no new server.
+- **NFR-7 Compatibility.** `@assistant-ui/react` stays on the `0.15` line it ships on today. The chat UI's runtime is the Vercel AI SDK (`ai` + `@ai-sdk/react`) through Assistant UI's official adapter `@assistant-ui/react-ai-sdk` (D-7); no second, hand-written chat runtime is added. The web app stays on the existing proxy and generated client; no new origin, no new server.
 - **NFR-8 Operability.** The chat failure modes are visible in the API log with the same structured style as `optimization run=… event=…`: one line per turn start, per terminal state, and per refused action. The audit table is the durable record. The retention prune writes one line per run with the deleted count, and only when it deleted something, so an idle day adds no log noise.
 - **NFR-9 Compliance.** N/A for a new regulatory obligation: the pilot handles no new personal data category (an admin's email is already stored on `optimization_runs` and in Better Auth), no payment data, and no special-category data. The applicable existing obligation is data minimisation, which NFR-5 satisfies by keeping conversation text out of MLflow and out of the audit table. Revisit if a member-facing chat is ever proposed.
 

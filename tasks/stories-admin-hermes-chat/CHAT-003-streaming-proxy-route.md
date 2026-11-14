@@ -140,6 +140,28 @@ cd web && npm run generate:api && bun run typecheck && bun run test src/test/api
 The upstream stand-in is a real `http.server`/`uvicorn` thread on `127.0.0.1:0` that the test starts and points
 `HERMES_CHAT_BASE_URL` at, so streaming and abort behaviour are exercised over TCP, not through a stub object.
 
+## Amendment: the browser-facing protocol is the AI SDK stream (D-7, 2026-11-14)
+
+The upstream call is unchanged — `POST {HERMES_CHAT_BASE_URL}/v1/chat/completions` with `stream: true` — but the
+bytes the browser receives are the **Vercel AI SDK UI message stream**, not raw OpenAI chunks, because the chat UI
+now runs on the AI SDK through Assistant UI's official adapter. Concretely:
+
+- The response carries `x-vercel-ai-ui-message-stream: v1` and `text/event-stream`.
+- Hermes's OpenAI `chat.completion.chunk` frames are translated: `delta.content` becomes
+  `{type: "text-delta", id, delta}` between `text-start` and `text-end`, the reply opens with
+  `{type: "start", messageId}` and closes with `{type: "finish", finishReason}` then `data: [DONE]`.
+- **`model`-stripping (AC 15) moves into that translation.** Nothing the browser receives carries a model id,
+  because the translator never copies one: the safety property is preserved by construction rather than by
+  deleting a field.
+- The turn's terminal information rides as `data-*` parts instead of one `deepfix.turn` object:
+  `{type: "data-deepfix-turn", data: {turn_id, status, actions}}`, and a mid-stream failure is a
+  `{type: "error", errorText}` part whose text has already passed the redaction helper. The `deepfix.turn` shape
+  and its `actions` payload keep their field names, so CHAT-007's card parser and CHAT-009's contracts do not
+  change shape.
+- `: keepalive` comments are still forwarded as comments; the AI SDK's decoder ignores them.
+- Everything else in this story is unchanged: the gate, the two codes, the check order, the admin dependency, the
+  limits, the audit kinds, the stored history, the no-session rule, and the timeout behaviour.
+
 ## Out of scope
 - The system prompt and the digest content (CHAT-004). This story injects a placeholder system message built by
   `admin_chat.system_prompt`, which CHAT-004 fills in; ship this story with the function returning the policy

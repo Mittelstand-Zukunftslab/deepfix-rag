@@ -7,9 +7,17 @@ Feature
 Draft
 
 ## Summary
-A frontend developer writes UI against typed contracts and one SSE reader, so no component hand-writes a request
-body, calls `fetch` directly, or parses an event frame twice — and no model id, key, or Hermes host reaches the
+A frontend developer writes UI against typed contracts and one AI SDK transport, so no component hand-writes a
+request body, calls `fetch` directly, or parses an event frame — and no model id, key, or Hermes host reaches the
 browser bundle.
+
+**Amended 2026-11-14 (PRD D-7).** The transport is the Vercel AI SDK (`ai` + `@ai-sdk/react`, with
+`@ai-sdk/openai-compatible` where a provider object is needed) rather than a hand-written SSE reader. Assistant UI
+consumes it through its official adapter `@assistant-ui/react-ai-sdk`, whose `useChatRuntime` CHAT-010 uses. The
+route answers the AI SDK's UI message stream protocol, which `DefaultChatTransport` decodes without custom code, so
+there is no frame parser in `web/src` at all. The earlier plan named a hand-written `web/src/services/admin-chat-sse.ts`;
+that module is replaced by a thin transport configuration. The Zod contracts, the server functions, the boundary
+test, and the "browser never sees a key, a model id, or the Hermes host" rule are unchanged.
 
 ## PRD traceability
 - Related: FR-003, FR-022, FR-026 (the `EXEMPT` entry it adds is one of the four named exceptions)

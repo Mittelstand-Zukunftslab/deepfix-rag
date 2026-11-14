@@ -43,6 +43,7 @@ def _env(**overrides: str) -> dict[str, str]:
         "API_SERVER_KEY": API_KEY,
         "OPENROUTER_API_KEY": "sk-or-test",
         "HERMES_MODEL": MODEL,
+        "HERMES_CHAT_API_SERVER_KEY": CHAT_KEY,
         "S3_ENDPOINT_URL": "http://rustfs:9000",
         "S3_URI": "s3://deepfix-index/dev",
         "S3_REGION": "us-east-1",
@@ -448,6 +449,7 @@ def test_apply_sandbox_strips_product_key_left_in_env_file(tmp_path: Path) -> No
 
 
 def test_chat_profile_env_is_replaced(tmp_path: Path) -> None:
+    """The chat .env is rewritten, carries its own key, and never the rest."""
     home = tmp_path / "data"
     chat = home / "profiles" / "chat"
     chat.mkdir(parents=True)
@@ -456,11 +458,18 @@ def test_chat_profile_env_is_replaced(tmp_path: Path) -> None:
     )
     boot.apply_sandbox(home, _env(), _skills(tmp_path))
     text = (chat / ".env").read_text(encoding="utf-8")
+    # (a) the chat key is HERMES_CHAT_API_SERVER_KEY ...
+    assert f"API_SERVER_KEY={CHAT_KEY}" in text
+    # (b) and is not the optimization key, which stays in the optimization file.
+    assert f"API_SERVER_KEY={API_KEY}" not in text
+    optimization_env = (home / ".env").read_text(encoding="utf-8")
+    assert f"API_SERVER_KEY={API_KEY}" in optimization_env
+    # (d) no product credentials leak into the chat profile.
     assert "OPENROUTER_API_KEY" not in text
-    assert "API_SERVER_PORT=8643" in text
-    assert "API_SERVER_KEY" not in text
     assert "S3_" not in text
+    assert "LLM_API_KEY" not in text
     assert "scoped-secret-value" not in text
+    assert "API_SERVER_PORT=8643" in text
 
 
 def test_compose_hermes_is_internal_and_limited() -> None:

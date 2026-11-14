@@ -34,8 +34,9 @@
 #        cron), discord, discord_admin (this pin has no toolset named
 #        messaging), code_execution, vision, image_gen, todo, memory,
 #        session_search, clarify, kanban, computer_use, connections
-# agent.max_turns is 40. The chat profile (port 8643, not started) has no
-# terminal, file, or code_execution toolset, so it cannot run deepfix.
+# agent.max_turns is 40. The chat profile (port 8643, a standalone gateway gated
+# on HERMES_CHAT_ENABLED) has no terminal, file, or code_execution toolset, so
+# it cannot run deepfix.
 # Skills are root 0444 under /opt/deepfix/skills. skill_manage on this pin
 # edits a skill wherever it lives, including a writable external_dirs entry;
 # the mode is what blocks that. A same-name skill in the profile skills
