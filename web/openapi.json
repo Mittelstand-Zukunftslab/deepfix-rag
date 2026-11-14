@@ -359,6 +359,53 @@
         "title": "ChatThreadResponse",
         "type": "object"
       },
+      "ChatThreadSummaryResponse": {
+        "description": "A thread in the list: the same fields plus how its newest turn ended.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "last_turn_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Turn Status"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "title",
+          "created_at",
+          "updated_at",
+          "last_turn_status"
+        ],
+        "title": "ChatThreadSummaryResponse",
+        "type": "object"
+      },
       "ChatTurnResponse": {
         "description": "One attempt at a reply.",
         "properties": {
@@ -1961,7 +2008,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/ChatThreadResponse"
+                    "$ref": "#/components/schemas/ChatThreadSummaryResponse"
                   },
                   "title": "Response List Admin Chat Threads",
                   "type": "array"
@@ -2167,6 +2214,79 @@
           }
         },
         "summary": "Show one chat thread with its messages, turns, and actions",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/turns/{turn_id}/stream": {
+      "get": {
+        "description": "Replay the stored text, then tail the turn if it is running in this process.",
+        "operationId": "resume_admin_chat_turn",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The AI SDK UI message stream, replayed and then tailed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Resume a reply that is in progress or already finished",
         "tags": [
           "admin-chat"
         ]

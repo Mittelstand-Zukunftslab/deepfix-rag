@@ -355,6 +355,12 @@ class ChatThreadResponse(ApiModel):
     updated_at: str
 
 
+class ChatThreadSummaryResponse(ChatThreadResponse):
+    """A thread in the list: the same fields plus how its newest turn ended."""
+
+    last_turn_status: Literal["running", "completed", "failed", "cancelled"] | None = None
+
+
 class ChatMessageResponse(ApiModel):
     """One stored message."""
 

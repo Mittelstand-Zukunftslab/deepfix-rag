@@ -235,6 +235,34 @@ export type ChatThreadResponse = {
 };
 
 /**
+ * ChatThreadSummaryResponse
+ *
+ * A thread in the list: the same fields plus how its newest turn ended.
+ */
+export type ChatThreadSummaryResponse = {
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Last Turn Status
+     */
+    last_turn_status: 'running' | 'completed' | 'failed' | 'cancelled' | null;
+    /**
+     * Thread Id
+     */
+    thread_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
  * ChatTurnResponse
  *
  * One attempt at a reply.
@@ -1162,7 +1190,7 @@ export type ListAdminChatThreadsResponses = {
      *
      * Successful Response
      */
-    200: Array<ChatThreadResponse>;
+    200: Array<ChatThreadSummaryResponse>;
 };
 
 export type ListAdminChatThreadsResponse = ListAdminChatThreadsResponses[keyof ListAdminChatThreadsResponses];
@@ -1275,6 +1303,48 @@ export type GetAdminChatThreadResponses = {
 };
 
 export type GetAdminChatThreadResponse = GetAdminChatThreadResponses[keyof GetAdminChatThreadResponses];
+
+export type ResumeAdminChatTurnData = {
+    body?: never;
+    path: {
+        /**
+         * Turn Id
+         */
+        turn_id: string;
+    };
+    query?: never;
+    url: '/admin/chat/turns/{turn_id}/stream';
+};
+
+export type ResumeAdminChatTurnErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type ResumeAdminChatTurnError = ResumeAdminChatTurnErrors[keyof ResumeAdminChatTurnErrors];
+
+export type ResumeAdminChatTurnResponses = {
+    /**
+     * The AI SDK UI message stream, replayed and then tailed.
+     */
+    200: string;
+};
+
+export type ResumeAdminChatTurnResponse = ResumeAdminChatTurnResponses[keyof ResumeAdminChatTurnResponses];
 
 export type GetFeedbackSummaryData = {
     body?: never;

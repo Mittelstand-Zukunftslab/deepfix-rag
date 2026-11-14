@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.formparsers import MultiPartParser
 
-from deepfix_rag.admin_chat import init_admin_chat
+from deepfix_rag.admin_chat import fail_interrupted_chat_turns, init_admin_chat
 from deepfix_rag.api.identity import TokenVerifier
 from deepfix_rag.api.logging_config import configure_logging
 from deepfix_rag.api.routes import (
@@ -115,6 +115,9 @@ def create_app(
             settings_from(app.state.settings),
             coordinator=coordinator,
         )
+        # A turn left running by the restart just ended is settled before the
+        # first request can resume it (NFR-1). A chat turn never blocks a run.
+        fail_interrupted_chat_turns(app.state.settings.product_db_path)
         worker = FeedbackWorker(app.state.settings.product_db_path)
         app.state.feedback = worker
         worker.start()

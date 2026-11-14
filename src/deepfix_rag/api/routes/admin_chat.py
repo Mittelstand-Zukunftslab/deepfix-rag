@@ -33,6 +33,7 @@ import httpx
 
 from deepfix_rag import admin_chat
 from deepfix_rag.api import chat_stream
+from deepfix_rag.api.chat_turns import TurnRegistry, registry_for, resume_frames
 from deepfix_rag.api.deps import get_settings, require_admin
 from deepfix_rag.api.errors import (
     BAD_GATEWAY,
@@ -51,6 +52,7 @@ from deepfix_rag.api.schemas import (
     ChatMessageResponse,
     ChatThreadDetailResponse,
     ChatThreadResponse,
+    ChatThreadSummaryResponse,
     ChatTurnResponse,
 )
 from deepfix_rag.config.settings import LOGGER, Settings
@@ -136,18 +138,24 @@ async def admin_chat_completion(
     chat_gate(request)
 
     thread = _owned_thread(settings, payload.thread_id, user.id)
-    history = admin_chat.thread_messages(settings.product_db_path, thread.thread_id, user.id)
+    stored = admin_chat.thread_messages(settings.product_db_path, thread.thread_id, user.id)
     _check_limits(settings, payload)
-    _check_history(history, payload)
+    _check_history(stored, payload)
+    # A retry replaces the answer it names, so that turn's messages stay out of
+    # the upstream conversation while the thread still shows both turns.
+    history = _retried_history(stored, payload.retry_of)
 
-    turn = admin_chat.start_turn(
-        settings.product_db_path,
-        thread.thread_id,
-        user.id,
-        admin_email=user.email,
-        retry_of=payload.retry_of,
-        request_chars=sum(len(item.content) for item in payload.messages),
-    )
+    try:
+        turn = admin_chat.start_turn(
+            settings.product_db_path,
+            thread.thread_id,
+            user.id,
+            admin_email=user.email,
+            retry_of=payload.retry_of,
+            request_chars=sum(len(item.content) for item in payload.messages),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=BAD_REQUEST, detail=str(exc)) from exc
     admin_chat.append_message(
         settings.product_db_path,
         thread.thread_id,
@@ -164,6 +172,8 @@ async def admin_chat_completion(
         content="",
         turn_id=turn.turn_id,
     )
+    registry = registry_for(request.app.state)
+    registry.open(turn.turn_id, thread.thread_id)
     _audit(settings, user, turn.turn_id, thread.thread_id, "turn_started", "turn started")
     _log(thread.thread_id, turn.turn_id, "turn_started")
 
@@ -194,6 +204,7 @@ async def admin_chat_completion(
             request,
             settings=settings,
             user=user,
+            registry=registry,
             thread_id=thread.thread_id,
             turn=turn,
             message_id=reply.message_id,
@@ -216,13 +227,28 @@ def _owned_thread(settings: Settings, thread_id: str, admin_id: str) -> admin_ch
         raise HTTPException(status_code=NOT_FOUND, detail="No chat thread with that id.") from exc
 
 
+def _retried_history(
+    history: list[admin_chat.Message], retry_of: str | None
+) -> list[admin_chat.Message]:
+    """The stored history minus the turn being retried, whose answer is replaced."""
+    if retry_of is None:
+        return list(history)
+    return [message for message in history if message.turn_id != retry_of]
+
+
 def _check_history(history: list[admin_chat.Message], payload: ChatCompletionRequest) -> None:
-    """The client's array must agree with the stored thread and end with a user turn."""
+    """The client's array must agree with the stored thread and end with a user turn.
+
+    A retry drops the answer it replaces, so that one assistant message is left
+    out of the comparison. Everything else has to match exactly: the browser
+    cannot rewrite history, and cannot claim a turn that never happened.
+    """
     if payload.messages[-1].role != "user":
         raise HTTPException(status_code=BAD_REQUEST, detail=STALE_HISTORY_MESSAGE)
-    if len(payload.messages) - 1 != len(history):
+    expected = _retried_history(history, payload.retry_of)
+    if len(payload.messages) - 1 != len(expected):
         raise HTTPException(status_code=BAD_REQUEST, detail=STALE_HISTORY_MESSAGE)
-    for stored, sent in zip(history, payload.messages[:-1], strict=True):
+    for stored, sent in zip(expected, payload.messages[:-1], strict=True):
         if stored.role != sent.role or stored.content != sent.content:
             raise HTTPException(status_code=BAD_REQUEST, detail=STALE_HISTORY_MESSAGE)
 
@@ -376,6 +402,7 @@ async def _relay(
     *,
     settings: Settings,
     user: User,
+    registry: "TurnRegistry",
     thread_id: str,
     turn: admin_chat.Turn,
     message_id: str,
@@ -409,7 +436,9 @@ async def _relay(
                         settings.product_db_path, message_id, "".join(collected)
                     )
                 for part in parts:
-                    yield chat_stream.sse(part)
+                    frame = chat_stream.sse(part)
+                    registry.publish(turn_id, frame)
+                    yield frame
         status = "completed"
     except _TurnTimeout:
         failure = TOO_LONG_MESSAGE
@@ -430,6 +459,7 @@ async def _relay(
         yield chat_stream.sse(chat_stream.error_part(failure))
     finally:
         await upstream.close()
+        registry.close(turn_id)
         _settle(
             settings,
             user=user,
@@ -569,16 +599,21 @@ def _action_response(action: admin_chat.Action) -> ChatActionResponse:
 @router.get(
     "/admin/chat/threads",
     operation_id="list_admin_chat_threads",
-    response_model=list[ChatThreadResponse],
+    response_model=list[ChatThreadSummaryResponse],
     responses=error_responses(UNAUTHORIZED, FORBIDDEN, SERVICE_UNAVAILABLE),
     summary="List this admin's chat threads",
 )
-def list_admin_chat_threads(request: Request, limit: int = 50) -> list[ChatThreadResponse]:
+def list_admin_chat_threads(request: Request, limit: int = 50) -> list[ChatThreadSummaryResponse]:
     user = require_admin(request, "Only admins can use Hermes chat.")
     settings = get_settings(request)
     chat_gate(request)
     return [
-        _thread_response(thread)
+        ChatThreadSummaryResponse(
+            **_thread_response(thread).model_dump(),
+            last_turn_status=admin_chat.last_turn_status(
+                settings.product_db_path, thread.thread_id
+            ),
+        )
         for thread in admin_chat.list_threads(settings.product_db_path, user.id, limit=limit)
     ]
 
@@ -652,3 +687,43 @@ def delete_admin_chat_thread(thread_id: str, request: Request) -> Response:
     # a delete is idempotent and never a way to probe another admin's ids (D-4).
     admin_chat.delete_thread(settings.product_db_path, thread_id, user.id)
     return Response(status_code=204)
+
+
+@router.get(
+    "/admin/chat/turns/{turn_id}/stream",
+    operation_id="resume_admin_chat_turn",
+    response_class=StreamingResponse,
+    responses={
+        **error_responses(UNAUTHORIZED, FORBIDDEN, NOT_FOUND, SERVICE_UNAVAILABLE),
+        200: {
+            "description": "The AI SDK UI message stream, replayed and then tailed.",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        },
+    },
+    summary="Resume a reply that is in progress or already finished",
+)
+def resume_admin_chat_turn(turn_id: str, request: Request) -> StreamingResponse:
+    """Replay the stored text, then tail the turn if it is running in this process."""
+    user = require_admin(request, "Only admins can use Hermes chat.")
+    settings = get_settings(request)
+    chat_gate(request)
+    try:
+        turn = admin_chat.turn_status(settings.product_db_path, turn_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=NOT_FOUND, detail="No chat turn with that id.") from exc
+    _owned_thread(settings, turn.thread_id, user.id)
+    return StreamingResponse(
+        resume_frames(
+            registry=registry_for(request.app.state),
+            db_path=settings.product_db_path,
+            turn_id=turn_id,
+            text_id=f"{turn_id}-text",
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            chat_stream.STREAM_HEADER: chat_stream.STREAM_HEADER_VALUE,
+        },
+    )

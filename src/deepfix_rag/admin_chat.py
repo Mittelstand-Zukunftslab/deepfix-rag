@@ -488,6 +488,19 @@ def list_threads(db_path: Path, admin_id: str, limit: int = 50) -> list[Thread]:
     return [_thread_from_row(row) for row in rows]
 
 
+def last_turn_status(db_path: Path, thread_id: str) -> str | None:
+    """The status of a thread's newest turn, or ``None`` before the first one."""
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT status FROM admin_chat_turns WHERE thread_id = ?
+            ORDER BY started_at DESC, turn_id DESC LIMIT 1
+            """,
+            (thread_id,),
+        ).fetchone()
+    return None if row is None else str(row["status"])
+
+
 def get_thread(db_path: Path, thread_id: str, admin_id: str) -> Thread:
     """One of this admin's threads. Another admin's id is a ``KeyError``, so routes 404."""
     init_admin_chat(db_path)
@@ -918,3 +931,32 @@ def _action_from_row(row: sqlite3.Row) -> Action:
         decided_by=None if row["decided_by"] is None else str(row["decided_by"]),
         result=None if row["result"] is None else str(row["result"]),
     )
+
+
+def stored_assistant_text(db_path: Path, turn_id: str) -> str:
+    """What a resume replays: the assistant text stored so far for one turn."""
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT content FROM admin_chat_messages
+            WHERE turn_id = ? AND role = 'assistant' ORDER BY seq DESC LIMIT 1
+            """,
+            (turn_id,),
+        ).fetchone()
+    return "" if row is None else str(row["content"])
+
+
+def turn_status(db_path: Path, turn_id: str) -> Turn:
+    """One turn, raising ``KeyError`` for an unknown id so the route answers 404."""
+    return get_turn(db_path, turn_id)
+
+
+def turn_owner(db_path: Path, turn_id: str) -> str:
+    """The admin id that started a turn."""
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT admin_id FROM admin_chat_turns WHERE turn_id = ?", (turn_id,)
+        ).fetchone()
+    if row is None:
+        raise KeyError(turn_id)
+    return str(row["admin_id"])
