@@ -220,7 +220,9 @@ cp example.env .env
 # ------------------------------------------------------------------------------
 # MLflow Tracking & Experiment Configuration
 # ------------------------------------------------------------------------------
-MLFLOW_TRACKING_URI=https://mlflow.mittelstand-zukunftslab.de
+# Internal Compose name. MLflow is not published and has no auth of its own;
+# see "MLflow and RustFS lockdown" below.
+MLFLOW_TRACKING_URI=http://mlflow:5000
 MLFLOW_DEV_RAG_EXPERIMENT=dev_rag_experiment
 MLFLOW_ENABLE_ASYNC_TRACE_LOGGING=true
 
@@ -240,8 +242,9 @@ LLM_JUDGE_MODEL=z-ai/glm-5.3-flash
 # Drop sampling params the provider rejects (Claude Haiku 5.5 allows only temperature=1).
 DEEPFIX_LLM_DROP_PARAMS=1
 
-# S3-compatible storage
-S3_ENDPOINT_URL=https://hpi-s3.mittelstand-zukunftslab.de
+# S3-compatible storage. Reach RustFS over the Compose network; it publishes
+# no host port.
+S3_ENDPOINT_URL=http://rustfs:9000
 S3_URI=s3://deepfix-index/dev
 S3_REGION=us-east-1
 S3_ACCESS_KEY_ID=
@@ -321,12 +324,19 @@ ADMIN_CHAT_AUDIT_RETENTION_DAYS=14
 # ------------------------------------------------------------------------------
 # MLflow Server (docker compose)
 # The tracking client above still uses MLFLOW_TRACKING_URI.
-# Point that URI at http://localhost:5000 to use this local server.
+# The service publishes no host port. Keep one authenticated domain in front of
+# it if you need the UI; see "MLflow and RustFS lockdown" below.
 MLFLOW_ALLOWED_HOSTS=localhost,127.0.0.1
 MLFLOW_CORS_ALLOWED_ORIGINS=http://localhost:5000
 # Optional overrides. MLflow 3.x matches Host exactly (include hostname:port).
 MLFLOW_SERVER_ALLOWED_HOSTS=hermes,localhost,diagnostic-agent,mlflow,mlflow:5000,localhost:5000,127.0.0.1,127.0.0.1:5000,backend-api,deepfix-mlflow.mittelstand-zukunftslab.de
 MLFLOW_SERVER_CORS_ALLOWED_ORIGINS=http://hermes,http://localhost,http://diagnostic-agent,http://mlflow:5000,http://backend-api:8000,https://deepfix-mlflow.mittelstand-zukunftslab.de
+
+# ------------------------------------------------------------------------------
+# RustFS (docker compose)
+# The S3 API and the console publish no host port. The console stays off.
+# ------------------------------------------------------------------------------
+RUSTFS_CONSOLE_ENABLE=false
 
 # ------------------------------------------------------------------------------
 # Product API (FastAPI)
@@ -339,6 +349,49 @@ MLFLOW_SERVER_CORS_ALLOWED_ORIGINS=http://hermes,http://localhost,http://diagnos
 # ERROR to keep the console to failures. The value is never logged.
 DEEPFIX_LOG_LEVEL=INFO
 ```
+---
+## MLflow and RustFS Lockdown
+
+MLflow has no authentication of its own and the RustFS console has no IAM policy in front of it, so neither is published. Both are reachable only from the Compose network. `docker-compose.yml` declares no `ports:` entry for `mlflow` or `rustfs`, and `RUSTFS_CONSOLE_ENABLE` defaults to `false`.
+
+| Service | Published port | Reach it as | Who needs it |
+| :--- | :--- | :--- | :--- |
+| MLflow | none | `MLFLOW_TRACKING_URI=http://mlflow:5000` | `backend-api`, `hermes`, `diagnostic-agent` |
+| RustFS S3 API | none | `S3_ENDPOINT_URL=http://rustfs:9000` | `backend-api`, `hermes`, LanceDB in both |
+| RustFS console | none | not started (`RUSTFS_CONSOLE_ENABLE=false`) | nothing in this repository |
+
+Every caller is a container, so the internal names above are the whole machine path. Nothing leaves the host and comes back in through a public hostname.
+
+### Environment variables this changes
+
+`example.env` and `docker-compose.yml` document each one.
+
+- `MLFLOW_TRACKING_URI` — `http://mlflow:5000`. `mlflow_run_url()` builds the admin "open run" link from this value, so with an internal host the admin table shows a dash instead of a link a browser cannot open. Point it at a public, authenticated domain to get the link back.
+- `S3_ENDPOINT_URL` — `http://rustfs:9000`. `S3_URI`, `S3_REGION`, and the IAM keys do not depend on it: the URI names a bucket and key, not a host.
+- `RUSTFS_CONSOLE_ENABLE` — `false`. Set it to `true` only on a private network; the console is the only full-control surface here.
+- `MLFLOW_SERVER_ALLOWED_HOSTS` and `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS` — still list the public hostname. If you keep one MLflow domain behind a Traefik `basicAuth` middleware, its `Host` must stay in the allow-list or MLflow answers for that request before the UI loads.
+
+### Reading the UI as a human
+
+The owner still reads MLflow and inspects RustFS by hand. Neither has a page on the host, so reach them from inside the network:
+
+```bash
+# Health and API from inside the network.
+docker compose exec backend-api python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://mlflow:5000/health').status)"
+
+# A shell that can `curl http://mlflow:5000` or talk S3 to http://rustfs:9000.
+docker compose run --rm --entrypoint sh backend-api
+```
+
+To read the MLflow UI in a browser, keep one Dokploy domain on `mlflow` with a Traefik `basicAuth` middleware. That router terminates TLS and proxies to the container over the Compose network, so it needs no `ports:` entry. Do not leave a published port behind.
+
+RustFS data is untouched by any of this: it lives in the `rustfs_data` volume, and no bucket policy, key, or artifact moves.
+
+### Rollback
+
+Each step is reversible without touching data. Re-add a `ports:` entry to put a service back on the host, set `RUSTFS_CONSOLE_ENABLE=true` and restart `rustfs`, or re-add a domain in Dokploy. Restore a public `MLFLOW_TRACKING_URI` or `S3_ENDPOINT_URL` and restart `backend-api` and `hermes` to move traffic back outside the network. Nothing here deletes the `mlflow_artifacts` or `rustfs_data` volume, changes a bucket policy, or rotates a key.
+
 ---
 ## Quickstart: Step-by-Step Optimization Walkthrough
 

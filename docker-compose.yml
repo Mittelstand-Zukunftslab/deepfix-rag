@@ -9,6 +9,7 @@
 #   MLFLOW_BACKEND_STORE_URI,
 #   MLFLOW_SERVER_ALLOWED_HOSTS, MLFLOW_SERVER_CORS_ALLOWED_ORIGINS
 #   MLFLOW_EXPERIMENT_ID, MLFLOW_DEV_RAG_EXPERIMENT
+#   RUSTFS_CONSOLE_ENABLE
 #   DEEPFIX_SERVER_DATABASE_URL
 #   BETTER_AUTH_SECRET, WEB_ORIGIN, API_INTERNAL_URL, AUTH_JWKS_URL, ALLOWED_EMAIL_DOMAINS
 #   LLM_API_KEY, EMBEDDING_API_KEY, COHERE_API_KEY
@@ -27,13 +28,18 @@ services:
   rustfs:
     image: rustfs/rustfs:latest
     container_name: rustfs
-    ports:
-      - "9000:9000" # S3 API
-      - "9001:9001" # Console
+    # No published ports. The S3 API and the console are reachable only from
+    # the Compose network, so every caller uses S3_ENDPOINT_URL=http://rustfs:9000
+    # and no request leaves the host. See "MLflow and RustFS lockdown" in
+    # README.md before re-adding a port.
     environment:
       RUSTFS_ADDRESS: ":9000"
       RUSTFS_CONSOLE_ADDRESS: ":9001"
-      RUSTFS_CONSOLE_ENABLE: "true"
+      # The console has no consumer in this repository and is the only
+      # full-control surface with no IAM policy in front of it, so it is off by
+      # default. Set RUSTFS_CONSOLE_ENABLE=true only on a private network, and
+      # rebuild this service alone.
+      RUSTFS_CONSOLE_ENABLE: ${RUSTFS_CONSOLE_ENABLE:-false}
       RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-rustfsadmin}
       RUSTFS_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-rustfsadmin}
     mem_limit: 1G
@@ -54,8 +60,13 @@ services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.15.1
     container_name: mlflow
-    ports:
-      - "5000:5000"
+    # No published port. MLflow has no authentication of its own, so the only
+    # safe way to run it is to keep it off the internet. Every machine caller
+    # (backend-api, hermes, diagnostic-agent) reaches it at
+    # MLFLOW_TRACKING_URI=http://mlflow:5000 over the Compose network. A human
+    # reads the UI through the single Dokploy domain kept in front of it, which
+    # must carry a Traefik basicAuth middleware; see the "MLflow and RustFS
+    # lockdown" section of README.md.
     volumes:
       - mlflow_artifacts:/opt/mlflow/data
     environment:

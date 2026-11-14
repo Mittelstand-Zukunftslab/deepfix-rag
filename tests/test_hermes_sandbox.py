@@ -390,7 +390,6 @@ def test_image_locks_skills_and_records_the_toolset_names() -> None:
     assert "LLM_JUDGE_MODEL: ${LLM_JUDGE_MODEL:-}" in stack
     assert "HERMES_MODEL: ${HERMES_MODEL:-}" in stack
     assert "HERMES_MODEL_PROVIDER: ${HERMES_MODEL_PROVIDER:-openrouter}" in stack
-    assert '"5000:5000"' in stack
     assert "MLFLOW_TRACKING_USERNAME" not in stack
     assert "MLFLOW_TRACKING_PASSWORD" not in stack
     boot_text = (REPO_ROOT / "docker" / "hermes" / "sandbox_boot.py").read_text(encoding="utf-8")
