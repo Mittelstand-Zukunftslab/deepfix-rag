@@ -182,3 +182,18 @@ shows no chat request.
 - [ ] Browser verification recorded in a verification note appended to this file
 - [ ] `bun run typecheck`, `bun run lint`, and `bun run build` pass
 - [ ] Committed on its own before CHAT-011 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`, on Assistant UI's official AI SDK runtime (PRD D-7).
+
+`web/src/test/admin-chat-page.test.tsx` (7 cases) covers the disabled state with **zero** fetch calls, the denied
+page, the misconfigured message, the Admin navigation placement (directly after Optimization, admin only), exactly
+one active item at `/admin` and at `/admin/chat`, the neighbouring-path rule, and the composer's label. The rest of
+`bun run test` passes (90 tests), as do `bun run typecheck`, `bun run lint`, and `bun run build`.
+
+`GET /admin/optimization` gained `chat_enabled` with a pytest case in `tests/test_api_optimization.py`, and the
+`status()` fixture in `web/src/test/optimization-page.test.tsx` gained the field the generated type now requires.
+
+Not done here: the browser walkthrough of J1-J4. It needs the deployment, and CHAT-012 is the story that runs it;
+the procedure is `docs/admin-hermes-chat-verification.md`.

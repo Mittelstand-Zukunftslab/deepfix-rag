@@ -138,3 +138,17 @@ and the terminal `data-deepfix-turn` part carries the stored status. Nothing els
 - [ ] Docs updated if any route list is documented
 - [ ] `uv run ruff check`, `uv run ruff format --check`, the fast pytest suite, and `bun run typecheck` pass
 - [ ] Committed on its own before CHAT-006 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`.
+
+Tests in `tests/test_admin_chat_threads.py` (10 cases) cover the thread list's `last_turn_status`, the thread
+detail, a resume that replays the stored text once and then closes with the stored status, a 404 for another admin's
+turn, a restart settling a `running` turn `failed` with the interruption sentence before the first request, a retry
+whose `retry_of` is in another thread giving 400, a delete that removes messages and keeps the audit rows, the
+check order (401, then 403, then 503), and the gate-or-exempt property of every registered chat path.
+
+The live-tail half is `src/deepfix_rag/api/chat_turns.py`: a dict of subscribers per running turn, published to from
+the relay and closed in the same `finally` that settles the row. One uvicorn worker (PRD A4) is why that is enough;
+the stored-text fallback is what makes a second worker degrade instead of break.

@@ -127,3 +127,15 @@ from `web/`; run it from a shell where the repository's `.venv` resolves.
 - `code` extraction: read `detail.code` when `detail` is an object, else `undefined`, which
   agrees with CHAT-003's `ChatErrorDetail`.
 - Do not import `@assistant-ui/react` from the data layer; it is a transport, not a renderer.
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`, on the Vercel AI SDK (PRD D-7).
+
+`web/src/test/admin-chat-stream.test.ts` (10 cases) and `web/src/test/admin-chat-boundary.test.ts` (5 cases) pass,
+along with the rest of `bun run test` (90 tests, 14 files). `bun run typecheck` and `bun run lint` (0 errors) pass.
+
+`@assistant-ui/react` moved from `0.15.28` to `0.15.36` and `assistant-stream` is pinned to `0.3.57` in
+`overrides`, because the AI SDK adapter needs the newer core/store and a second nested `assistant-stream` made the
+runtime's types diverge from the renderer's. Every added version was chosen to be older than
+`web/bunfig.toml`'s 24-hour release guard rather than bypassing it.

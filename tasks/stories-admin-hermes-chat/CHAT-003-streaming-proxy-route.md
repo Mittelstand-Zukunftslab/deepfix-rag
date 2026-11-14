@@ -198,3 +198,24 @@ now runs on the AI SDK through Assistant UI's official adapter. Concretely:
 - [ ] `uv run ruff check`, `uv run ruff format --check`, the fast pytest suite, `bun run typecheck`, and
       `bun run lint` pass
 - [ ] Committed on its own before CHAT-004 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`.
+
+The route is `POST /admin/chat/completions` in `src/deepfix_rag/api/routes/admin_chat.py`, and the translation from
+Hermes's OpenAI frames to the AI SDK UI message stream is `src/deepfix_rag/api/chat_stream.py`. Tests in
+`tests/test_admin_chat_routes.py` (25 cases) drive a real `ThreadingHTTPServer` stand-in on `127.0.0.1:0`, so the
+stream, the keepalive, the dropped non-JSON frame, the tool-progress part, the terminal part, the model-id strip, the
+400s, the 502, and both 503s are exercised over TCP.
+
+Two deliberate shape choices, recorded because a reader will look for the original AC wording:
+
+- A refusal **before the first byte** is a `502` with a JSON sentence, not a stream that opens and then reports
+  failure. Once the response has started, the only honest failure is an `error` part, which is what a mid-stream
+  failure produces.
+- A browser disconnect arrives as ASGI task cancellation or `GeneratorExit` as well as the receive channel's
+  disconnect, so all three settle the turn `cancelled`. The disconnect case is also driven through a real uvicorn
+  server, because a `TestClient` never produces a disconnect.
+
+`web/openapi.json` and `web/src/client` were regenerated in this commit.

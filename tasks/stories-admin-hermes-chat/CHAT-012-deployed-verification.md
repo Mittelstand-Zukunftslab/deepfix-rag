@@ -4,7 +4,7 @@
 Chore
 
 ## Status
-Draft
+Blocked on the deployment (operator-only)
 
 ## Summary
 One end-to-end pass on the deployed stack proves the feature works outside this VM: both chat states behave as
@@ -140,6 +140,24 @@ Browser: the four journeys on the deployed admin account, with the network panel
 - [ ] No push to `dev` or `main`
 
 ## Verification note
-Fill in on execution: date, deploy id, both memory readings, process and port listings in both states, the two
-retention checks (row deleted, row inside the window kept, both with chat off), the four journey outcomes, the
-trace inspection, and the holdout search result.
+
+Not executed. This story is operator-only by its own AC 1 and by the task that
+produced CHAT-001 through CHAT-011: there is no deployment access from the
+implementing environment, and no deployment was attempted.
+
+What *is* delivered, so the pass is a checklist rather than an investigation:
+
+- `docs/admin-hermes-chat-verification.md` is the full procedure, with the exact
+  commands for both states, the retention probe (including the chat-off case),
+  the four journeys, the trace inspection, the holdout search, the memory
+  readings, and the thread-load timing.
+- The two env keys the pass depends on (`HERMES_CHAT_ENABLED`,
+  `HERMES_CHAT_API_SERVER_KEY`) and the four optional ones are documented in
+  `example.env`, `README.md`, and `docker-compose.yml`.
+- CHAT-001, CHAT-011, and this note all record the same limitation: the
+  container checks (a second gateway process, port 8643, `/health`,
+  `/v1/chat/completions`, the `/p/chat/` negative, and the disconnect
+  measurement) need a container runtime the implementing VM did not have.
+
+Status: **blocked on the deployment**, not skipped. The code stories are
+committed and green; this one is the measurement pass on the real stack.

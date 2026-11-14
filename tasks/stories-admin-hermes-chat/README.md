@@ -93,6 +93,27 @@ Both questions that needed Fadel are settled (2026-11-14) and are decisions, not
   optimization scheduler and running whether chat is on or off. D-6 and FR-030. The function is CHAT-002's; the
   job registration is CHAT-006's; the deployed check is CHAT-012's.
 
+## Implementation status (2026-11-14)
+
+One commit per story on `feat/hermes-optimizer`, each tested and pushed before the next began.
+
+| Id | Status | Commit |
+| :--- | :--- | :--- |
+| CHAT-001 | Done | `5e38596` |
+| CHAT-002 | Done | `7c7eac0` |
+| CHAT-003 | Done | `d56bd5e` |
+| CHAT-004 | Done | `4f48162` |
+| CHAT-005 | Done | `dd29f12` |
+| CHAT-006 | Done | `d4281c8`, `e3d96b8` |
+| CHAT-007 | Done | `9f8ae9d`, `91fcddc` |
+| CHAT-008 | Done | `434ea3d` |
+| CHAT-009 | Done | `08b333d` |
+| CHAT-010 | Done | `456363a` |
+| CHAT-011 | Done | `e5444a5` |
+| CHAT-012 | **Blocked on the deployment** — operator-only; procedure in `docs/admin-hermes-chat-verification.md` | — |
+
+Each story's `## Verification note` records what ran and what could not, and why.
+
 ## Amendment: the chat UI uses the Vercel AI SDK (D-7, owner request 2026-11-14)
 
 After these stories were written, the owner required the frontend to use the Vercel AI SDK, wired to Assistant UI
