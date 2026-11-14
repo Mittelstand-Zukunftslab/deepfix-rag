@@ -32,12 +32,13 @@ not want chat pays nothing for it.
 Settings and plumbing:
 
 1. Given a clean environment, when `Settings()` is built, then `HERMES_CHAT_ENABLED` is `False`,
-   `HERMES_CHAT_BASE_URL` is `"http://hermes:8643"`, and the ten `ADMIN_CHAT_*` settings exist with the PRD
+   `HERMES_CHAT_BASE_URL` is `"http://hermes:8643"`, and the eleven `ADMIN_CHAT_*` settings exist with the PRD
    defaults: `ADMIN_CHAT_MAX_PROMPT_CHARS=48000`, `ADMIN_CHAT_MAX_MESSAGES=60`,
    `ADMIN_CHAT_TURN_TIMEOUT_SECONDS=300`, `ADMIN_CHAT_DIGEST_MAX_CHARS=6000`,
    `ADMIN_CHAT_MAX_TURNS_PER_WINDOW=30`, `ADMIN_CHAT_TURN_WINDOW_SECONDS=300`,
    `ADMIN_CHAT_MAX_CONCURRENT_TURNS=2`, `ADMIN_CHAT_ACTION_TTL_SECONDS=600`, `ADMIN_CHAT_STEP_TAIL=50`,
-   `ADMIN_CHAT_STEP_READ_BYTES=65536`. `MLFLOW_HERMES_CHAT_EXPERIMENT` defaults to `"deepfix_hermes_chat"`.
+   `ADMIN_CHAT_STEP_READ_BYTES=65536`, `ADMIN_CHAT_AUDIT_RETENTION_DAYS=14` (D-6).
+   `MLFLOW_HERMES_CHAT_EXPERIMENT` defaults to `"deepfix_hermes_chat"`.
 2. Given `docker-compose.yml`, when the `backend-api` service is parsed, then its environment contains
    `HERMES_CHAT_ENABLED`, `HERMES_CHAT_MODEL`, `HERMES_CHAT_API_SERVER_KEY`, `HERMES_CHAT_BASE_URL`,
    `MLFLOW_HERMES_CHAT_EXPERIMENT`, and every `ADMIN_CHAT_*` name from AC 1. Every non-`str` field uses a
@@ -49,7 +50,8 @@ Settings and plumbing:
    construction succeeds and no field raises `bool_parsing` or `int_parsing`.
 5. Given `example.env`, when it is read, then it documents `HERMES_CHAT_ENABLED=false`,
    `HERMES_CHAT_MODEL` (commented out), `HERMES_CHAT_BASE_URL` (commented out, default shown),
-   `MLFLOW_HERMES_CHAT_EXPERIMENT`, and every `ADMIN_CHAT_*` name, each with a one-line comment.
+   `MLFLOW_HERMES_CHAT_EXPERIMENT`, `ADMIN_CHAT_AUDIT_RETENTION_DAYS=14` (with a comment that `0` keeps audit
+   rows forever, D-6), and every other `ADMIN_CHAT_*` name, each with a one-line comment.
 6. Given the tree, when a plumbing test runs, then every `ADMIN_CHAT_*`, `HERMES_CHAT_*`, and
    `MLFLOW_HERMES_CHAT_EXPERIMENT` name read by `Settings` or by `sandbox_boot.py` appears in `example.env` and
    in the matching Compose service environment (`backend-api` for API reads, `hermes` for boot reads).

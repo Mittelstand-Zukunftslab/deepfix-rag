@@ -12,15 +12,17 @@ HTTP routes added later stay thin adaptors. It also owns the audit trail, the re
 delete the admin's Delete button will call.
 
 ## PRD traceability
-- Related: FR-010, FR-016, FR-018, FR-021
-- Decisions: D-4 (hard delete, audit rows survive without message content)
+- Related: FR-010, FR-016, FR-018, FR-021, FR-030 (the prune function; CHAT-006 wires it)
+- Decisions: D-4 (hard delete, audit rows survive without message content, and a delete never removes one), D-6
+  (audit rows are pruned by age through a setting, `0` disables it)
 - Journeys: J4 (thread delete and surviving audit rows)
 - NFR touchpoints: NFR-5 (conversation text stays in SQLite, never in S3 or MLflow), NFR-1 (no `running` row
   left by a restart), NFR-2 (audit and transcript data are small)
 
 ## Dependencies
 - Requires: CHAT-001 (settings exist, and the chat key can be redacted once it is in `_SECRET_ENVS`).
-- Blocks: CHAT-003, CHAT-004, CHAT-005, CHAT-006, CHAT-007, CHAT-008.
+- Blocks: CHAT-003, CHAT-004, CHAT-005, CHAT-006 (which wires this story's prune into the scheduler), CHAT-007,
+  CHAT-008.
 
 ## Acceptance criteria
 
@@ -57,8 +59,8 @@ API surface:
 5. Given the module, when its public names are listed, then these typed functions exist:
    `init_admin_chat`, `create_thread`, `list_threads`, `get_thread`, `delete_thread`, `append_message`,
    `update_assistant_text`, `start_turn`, `finish_turn`, `thread_runs`, `record_audit`, `count_recent_turns`,
-   `redact`. Every signature is fully annotated, uses `Path` for paths, and uses `X | None` rather than
-   `Optional`.
+   `prune_audit`, `redact`. Every signature is fully annotated, uses `Path` for paths, and uses `X | None` rather
+   than `Optional`.
 6. Given a thread created by admin A, when admin B calls `get_thread` or `list_threads` for it, then
    `get_thread` raises `KeyError` and `list_threads("B")` does not contain it. The same holds for the thread's
    turns and messages.
@@ -88,13 +90,30 @@ Audit and redaction:
     `fail_interrupted_chat_turns(db_path)` run, then the row stores `INTERRUPTED` wording and never remains
     `running`. `fail_interrupted_chat_turns` is exported here and called from the API lifespan in CHAT-005.
 
+Retention (D-6, FR-030):
+
+14. Given `prune_audit(db_path, retention_days, *, now=None) -> int`, when rows exist at 1, 13, 15, and 400 days
+    old against a fixed `now`, then exactly the 15- and 400-day rows are deleted and the return value is `2`.
+    `retention_days` has no default of its own: the caller supplies it, and the API supplies
+    `settings.ADMIN_CHAT_AUDIT_RETENTION_DAYS` (default 14). No `14` literal exists in this module.
+15. Given `retention_days=0` or a negative value, when `prune_audit` runs, then it deletes nothing and returns
+    `0`. This is the documented way to keep rows forever, and it is the only branch that skips the `DELETE`.
+16. Given a second `prune_audit` immediately after the first with the same `now`, then it returns `0`.
+17. Given a prune, when it runs, then it touches only `admin_chat_audit`: `admin_chat_threads`,
+    `admin_chat_messages`, `admin_chat_turns`, `admin_chat_actions`, `admin_chat_thread_runs`, and
+    `optimization_runs` row counts are unchanged, and no audit row is written to record the prune.
+18. Given rows written by `record_audit` and rows a test inserts directly, when they are pruned, then the
+    comparison is on `admin_chat_audit.at` as stored ISO-8601 UTC, so two writers with different formats cannot
+    make a row immortal. A test inserts an `at` in the repo's `_now()` format and asserts it is pruned on
+    schedule.
+
 Tests:
 
-14. Given `tmp_path` and a real SQLite file (no mocks), when the test module runs, then it covers: create / list
+19. Given `tmp_path` and a real SQLite file (no mocks), when the test module runs, then it covers: create / list
     / get / delete isolation between two admin ids; an unknown audit `kind` rejected; `expires_at` round-trip;
     `updated_at` descending order; a delete removing turns, messages, actions, and thread-run links while
-    leaving audit rows and the `optimization_runs` row; a second delete writing no new `thread_deleted` row; and
-    the two `PRAGMA` schema checks from AC 4.
+    leaving audit rows and the `optimization_runs` row; a second delete writing no new `thread_deleted` row; the
+    two `PRAGMA` schema checks from AC 4; and the four retention cases (AC 14–17).
 
 ## Test commands
 
@@ -113,7 +132,12 @@ Mark the new module `pytestmark = [pytest.mark.unit, pytest.mark.integration]`, 
 - Any HTTP route (CHAT-003, CHAT-005, CHAT-006, CHAT-007, CHAT-008).
 - The action-card parser and its status transitions beyond storing `payload` and `expires_at` (CHAT-007).
 - Rate-limit decisions (CHAT-006); this story only supplies `count_recent_turns`.
-- Retention or purging of audit and transcript rows (open question, not this release).
+- **Wiring the prune to a schedule.** This story ships `prune_audit` as a function with an injected clock; CHAT-006
+  calls it from the optimization scheduler tick. A prune that nothing calls is not yet retention, and the two
+  halves are separate commits on purpose — the function is storage, the schedule is the API's lifecycle.
+- Pruning `admin_chat_turns`, `admin_chat_messages`, or `admin_chat_threads`. Retention is audit-only; transcripts
+  are bounded by thread delete (D-4).
+- Archiving pruned rows anywhere. They are deleted.
 - MLflow tracing of a chat turn (CHAT-011).
 
 ## Notes
@@ -130,6 +154,14 @@ Mark the new module `pytestmark = [pytest.mark.unit, pytest.mark.integration]`, 
   audit writes must never inflate the limiter's count.
 - Thread titles are derived, never model-generated. Keep the derivation pure so its test needs no database write
   beyond the fixture.
+- `prune_audit` takes `retention_days` and `now` as arguments, so a test moves the clock instead of sleeping 14
+  days and no retention literal enters the module. Build the predicate as
+  `at < (now - timedelta(days=retention_days)).isoformat()` against stored UTC ISO-8601, which is what
+  `optimization._now()` and `feedback._now()` already write. Do not compare against a local-time datetime.
+- `retention_days <= 0` short-circuits before the `DELETE`. Make that an explicit guard clause rather than relying
+  on a `timedelta` of zero, so the "keep forever" branch is testable by its own assertion.
+- Keep `prune_audit` free of settings access: it never imports `Settings`, which is what lets CHAT-006 inject it
+  into the scheduler and lets a caller pass any window.
 
 ## Definition of done
 - [ ] Code complete

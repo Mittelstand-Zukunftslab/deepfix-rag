@@ -76,9 +76,11 @@ History and delete:
     delete control per thread. Selecting a thread loads its messages; a reload reopens the thread from
     `?thread=<id>` or the newest thread.
 12. Given the delete control, when pressed, then a confirmation dialog names what is removed (the conversation, its
-    messages, and any pending action cards) and states that the record of any run started from it — who started it,
-    not what was said — is kept (D-4). Confirm calls `deleteThread` and removes the row only after the server
-    answers; there is no optimistic removal, and the dialog is the only place a thread is deleted.
+    messages, and any pending action cards) and states that the record of any run started from it — who started
+    it, not what was said — is kept (D-4). Confirm calls `deleteThread` and removes the row only after the server
+    answers; there is no optimistic removal, and the dialog is the only place a thread is deleted. The copy does
+    not promise an unbounded record: the audit trail is kept and ages out after the server's retention window
+    (D-6), so the sentence is about the delete, not about forever.
 
 Rendering:
 

@@ -1,10 +1,33 @@
 # Story validation: CHAT-005 — Threads, resume, and cancel
 
 - Story file: tasks/stories-admin-hermes-chat/CHAT-005-threads-resume-and-cancel.md
-- Validated: 2026-11-14
+- Validated: 2026-11-14 (first pass), 2026-11-14 (second pass, after D-6)
 - Verdict: **Pass with actions**
 
-## Findings
+## Second pass — after the retention decision (D-6)
+
+### Blockers
+None.
+
+### Should-fix
+
+1. **The settled delete rule was pinned only in the storage story.** Fadel confirmed that a thread delete never
+   removes an audit row (D-4), and CHAT-002 asserts it at the module level. But the admin's Delete button is this
+   route, so a route-level regression — a stray cascade, or a later edit that deletes the thread's audit rows in the
+   handler — would pass CHAT-002's test and fail the decision.
+   *Fixed:* AC 4 now requires a route-level test that the delete response is 204 and that the `admin_chat_audit` row
+   count for that thread is unchanged, so the decision is pinned where the admin touches it.
+
+2. **The retention prune does not change this story.** The route still deletes nothing from the audit table, and the
+   prune is elsewhere (CHAT-002, CHAT-006). No AC changed beyond the new assertion in AC 4; a reader should not
+   expect thread delete and retention to interact.
+
+### PRD alignment (second pass)
+- FRs: FR-008, FR-009, FR-010, FR-011, FR-012 — unchanged.
+- Decisions: D-4 (now pinned at the route as well as the module), D-6 (no interaction: this route never prunes).
+- Gaps: none.
+
+## First pass
 
 ### Blockers
 
@@ -29,9 +52,9 @@ result.
   constants so the test cannot drift from the queries it checks.
 
 ## Suggested edits (concrete)
-- None outstanding.
+- None outstanding. Every finding in both passes is applied in the story file.
 
-## PRD alignment
+## PRD alignment (first pass)
 - FRs: FR-008, FR-009, FR-010 (the delete half), FR-011, FR-012. All present.
 - Decisions: D-4 (the delete order and its audit row are inherited from CHAT-002, and the route stays reachable when
   chat is off).

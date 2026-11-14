@@ -39,7 +39,9 @@ Thread routes:
 4. Given `DELETE /admin/chat/threads/{thread_id}` (`delete_admin_chat_thread`), when an admin deletes their thread,
    then the response is 204, the delete is the children-before-parent hard delete audited as `thread_deleted`, and
    a second delete is also 204 with no second audit row. Audit rows and `optimization_runs` rows are untouched.
-   This route answers 204 even when `HERMES_CHAT_ENABLED` is false (D-4).
+   This route answers 204 even when `HERMES_CHAT_ENABLED` is false (D-4). A route-level test asserts the delete
+   removes no `admin_chat_audit` row, so Fadel's settled decision is pinned at the surface the admin touches and not
+   only in the storage test.
 
 Resume:
 

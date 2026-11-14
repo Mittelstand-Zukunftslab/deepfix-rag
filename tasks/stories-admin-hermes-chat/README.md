@@ -25,7 +25,7 @@ Stories are implemented one at a time, on `feat/hermes-optimizer`, each tested a
 | 3 | CHAT-003 | The streaming proxy route | CHAT-001, CHAT-002 |
 | 4 | CHAT-004 | Server prompt and status digest | CHAT-002, CHAT-003 |
 | 5 | CHAT-005 | Threads, resume, and cancel | CHAT-002, CHAT-003 |
-| 6 | CHAT-006 | Rate limit and audit read | CHAT-003, CHAT-005 |
+| 6 | CHAT-006 | Rate limit, audit read, and the retention prune wiring | CHAT-002, CHAT-003, CHAT-005 |
 | 7 | CHAT-007 | Action cards | CHAT-002, CHAT-003, CHAT-006 |
 | 8 | CHAT-008 | Run progress for a thread | CHAT-002, CHAT-007 |
 | 9 | CHAT-009 | Web data layer for admin chat | CHAT-003…CHAT-008 (all routes exist) |
@@ -48,7 +48,9 @@ No cycles: the graph above is a topological order, and CHAT-011 sits late only b
   its limits, its relay, and its error contract; CHAT-010 is one page.
 - Where a story genuinely risked doing two things at once, the split has been made instead: the gate predicate ships
   in CHAT-001 and is applied to routes in CHAT-003; `chat_enabled` on the optimization payload sits in CHAT-010 with
-  its pytest case rather than in a story of its own.
+  its pytest case rather than in a story of its own; and the audit retention is split between CHAT-002 (the
+  `prune_audit` function) and CHAT-006 (the scheduler wiring), because a function with no caller and a schedule
+  with no function are separately testable and neither is useful alone.
 
 The one real risk of this shape is CHAT-003's test surface, which is the place an implementer is most likely to run
 out of a session. If that happens, the honest split is relay-and-gate first, error framing second, keeping the
@@ -67,6 +69,8 @@ out of a session. If that happens, the honest split is relay-and-gate first, err
 - Holdout (`feedback.is_holdout`) and `apply_candidate` stay in the backend and are unreachable from chat.
 - Chat is off by default (`HERMES_CHAT_ENABLED=false`) and, when off, runs no gateway process and binds no port.
 - No model id is hardcoded in Python or TypeScript. `HERMES_CHAT_MODEL` falls back to `HERMES_MODEL`.
+- Audit rows are never deleted by a thread delete, only by age: `ADMIN_CHAT_AUDIT_RETENTION_DAYS` (default 14, `0`
+  keeps them forever), pruned from the existing scheduler tick whether chat is on or off.
 - The Hermes secret scrub (`optimization._secrets` / `_redact`, extended with the chat key) stays in force on every outbound string.
 
 ## Open questions
@@ -80,15 +84,13 @@ exactly one story; a reader should not expect a fourth decision document.
 | 2. Should the chat page one run's step log on demand? | No. The 50-line tail answers "what is it doing now"; a paged route would be an additive story. | CHAT-008 (out of scope) |
 | 3. May a confirmed start run while a chat turn is still streaming? | Yes. The conversation plane and the job plane are separate, and `start_optimization_run` already refuses a second concurrent run. | CHAT-007 AC 10 |
 
-Two questions need Fadel rather than a story:
+Both questions that needed Fadel are settled (2026-11-14) and are decisions, not questions:
 
-1. **Audit retention.** The PRD keeps `admin_chat_audit` unbounded (assumption A6). At tens of rows per admin per day
-   this is fine for the pilot, but nothing in these stories prunes or expires a row, so the first decision is
-   "leave it" versus "add a retention job", not a design change. CHAT-006 lists retention as out of scope and points
-   here.
-2. **Whether a thread delete should erase audit rows too.** D-4 keeps them and says so plainly, naming the one-line
-   change if the stricter reading should win. Every story here implements D-4 as written (CHAT-002, CHAT-005,
-   CHAT-006, CHAT-010's dialog copy). If Fadel reverses it, four stories change together, not one.
+- **Deleting a thread never deletes audit rows.** D-4 as written. Applied by CHAT-002 (the delete order), CHAT-005
+  (the route), CHAT-006 (`thread_deleted` on read) and CHAT-010 (the dialog copy).
+- **Audit retention is 14 days**, by `ADMIN_CHAT_AUDIT_RETENTION_DAYS`, pruned from the existing scheduler tick and
+  running whether chat is on or off. D-6 and FR-030. The function is CHAT-002's; the wiring and its hourly wake-up
+  are CHAT-006's; the deployed check is CHAT-012's.
 
 ## Test commands
 
@@ -118,6 +120,7 @@ Focused, when a full run is slow:
 ```bash
 uv run --env-file .env pytest -v tests/test_admin_chat.py
 uv run --env-file .env pytest -v tests/test_admin_chat_routes.py
+uv run --env-file .env pytest -v tests/test_optimization_schedule.py
 uv run --env-file .env pytest -v tests/test_api_optimization.py
 ```
 
@@ -126,11 +129,11 @@ uv run --env-file .env pytest -v tests/test_api_optimization.py
 | Story | New Python test modules | New web test modules |
 | :--- | :--- | :--- |
 | CHAT-001 | `tests/test_hermes_chat_profile.py` (plus the rewritten case in `tests/test_hermes_sandbox.py`) | — |
-| CHAT-002 | `tests/test_admin_chat.py` | — |
+| CHAT-002 | `tests/test_admin_chat.py` (includes the `prune_audit` cases) | — |
 | CHAT-003 | `tests/test_admin_chat_routes.py` | — (edits `web/src/test/api-boundary.test.ts` only if the client changes shape) |
 | CHAT-004 | `tests/test_admin_chat_prompt.py` | — |
 | CHAT-005 | `tests/test_admin_chat_threads.py` | — |
-| CHAT-006 | `tests/test_admin_chat_limits.py` | — |
+| CHAT-006 | `tests/test_admin_chat_limits.py`, plus new cases in `tests/test_optimization_schedule.py` for the prune hook and `_idle_delay` | — |
 | CHAT-007 | `tests/test_admin_chat_actions.py` | — |
 | CHAT-008 | `tests/test_admin_chat_runs.py` | — |
 | CHAT-009 | — | `src/test/admin-chat-stream.test.ts`, `src/test/admin-chat-boundary.test.ts` |
@@ -143,16 +146,18 @@ Every Python module carries an explicit `pytestmark` (`unit`, `integration`, `ap
 
 ## FR coverage
 
-Every FR is claimed by at least one story; CHAT-012 verifies the whole set end to end.
+Every FR is claimed by at least one story; CHAT-012 verifies the whole set end to end. FR-030 is split by design:
+CHAT-002 ships `prune_audit`, CHAT-006 calls it from the scheduler tick, and CHAT-012 proves it on the deployment
+with chat off.
 
 | Story | FRs |
 | :--- | :--- |
 | CHAT-001 | FR-001, FR-002, FR-020, FR-029 |
-| CHAT-002 | FR-010, FR-016, FR-018, FR-021 |
+| CHAT-002 | FR-010, FR-016, FR-018, FR-021, FR-030 |
 | CHAT-003 | FR-003, FR-004, FR-005, FR-007, FR-019, FR-021, FR-028 |
 | CHAT-004 | FR-006 |
 | CHAT-005 | FR-008, FR-009, FR-010, FR-011, FR-012 |
-| CHAT-006 | FR-017, FR-018 |
+| CHAT-006 | FR-017, FR-018, FR-030 |
 | CHAT-007 | FR-013, FR-014, FR-015 |
 | CHAT-008 | FR-016 |
 | CHAT-009 | FR-003, FR-022 |

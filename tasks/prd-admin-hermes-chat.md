@@ -70,7 +70,7 @@ The create-prd skill asks three to five questions before a PRD is written. The b
 
 ## Decisions
 
-Fadel answered the open questions from the first draft on 2026-11-13. These five are settled and the stories assume them. Each records what it replaces, so a reader can see the draft it supersedes.
+Fadel answered the open questions from the first draft on 2026-11-13, and settled the last two (audit deletion and retention) on 2026-11-14. These six are settled and the stories assume them. Each records what it replaces, so a reader can see the draft it supersedes.
 
 ### D-1: The chat gateway runs only while chat is enabled, and costs no memory when it is off
 
@@ -118,7 +118,7 @@ Audit rows **are kept**. Recommendation, which this PRD adopts: keep a minimal a
 - `turn_id` also survives the delete. `admin_chat_turns` is hard-deleted, so a `turn_id` in an audit row after a delete is not resolvable — the same `thread_deleted` flag covers it.
 - One extra audit `kind` is added for this: `thread_deleted`, written before the rows are removed, with the deleted thread id and counts in `detail`. The deletion becomes its own auditable event.
 
-Disagreement I am flagging, as asked: keeping audit rows that name an admin while the conversation is gone is the right trade-off for an admin-only security log, but it does mean a “delete” does not fully erase everything the admin did. If a stricter reading is wanted (delete the audit rows too), the cost is losing the record of who started a run — which is the one thing the audit log exists for. I recommend keeping them, and D-4's tests pin the behaviour either way. If you want the stricter variant, the change is one line in `delete_thread` plus an FR-018 edit.
+**Settled by Fadel on 2026-11-14: a thread delete never deletes audit rows.** The stricter variant flagged in the first draft (delete the audit rows too) is rejected. The trade-off it avoids is real and accepted: a “delete” does not fully erase everything the admin did, because the record of who started or cancelled a run must outlive the conversation. What eventually bounds that record is retention, not deletion (D-6). D-4's tests pin the behaviour: `delete_thread` writes `thread_deleted` and removes no `admin_chat_audit` row.
 
 Two consequences that follow from keeping the rows, and are part of the decision rather than left to the implementer:
 
@@ -128,6 +128,21 @@ Two consequences that follow from keeping the rows, and are part of the decision
 ### D-5: Chat traces go to a separate `deepfix_hermes_chat` experiment
 
 Confirmed, not assumed: chat spans go to their own MLflow experiment, named by `MLFLOW_HERMES_CHAT_EXPERIMENT` (default `deepfix_hermes_chat`). The optimization profile keeps `deepfix_hermes`. CHAT-011 already specified this; it is now a decision rather than an assumption, so open question 5 is closed.
+
+### D-6: Audit rows are pruned after 14 days, by a setting, whether chat is on or off
+
+Fadel settled the retention question on 2026-11-14: audit rows older than **14 days** are deleted. D-4 says a delete never removes one, and “keep the security record” is not the same as “keep it indefinitely”, so the time bound is now explicit and the only thing that removes an audit row is age.
+
+- The window is a setting, **`ADMIN_CHAT_AUDIT_RETENTION_DAYS`**, default **14**, plumbed like every other chat setting (CHAT-001's `Settings` field, the `backend-api` Compose environment with a non-empty default `${ADMIN_CHAT_AUDIT_RETENTION_DAYS:-14}`, `example.env` with a one-line comment, and the plumbing test). No literal 14 exists in Python; a test that changes the setting changes what is pruned.
+- **`0` or a negative value disables pruning** and is the only way to keep rows forever. It is a deliberate operator choice, documented in `example.env`, not a silent default. This is also what makes the prune testable both ways without waiting 14 days.
+- The prune is a plain SQLite `DELETE` on `admin_chat_audit` for rows whose `at` is older than the window, run by the API itself. It is not a chat feature and it touches no Hermes endpoint, so **it keeps running when `HERMES_CHAT_ENABLED=false`** — the audit route is one of the two routes D-4 keeps reachable when chat is off, and a table that only ages out while chat is on would grow without bound on exactly the deployments that stopped using chat.
+  - **Where it runs: the existing optimization scheduler tick.** The prune is at most once per hour per process, guarded by a last-run timestamp held in memory, and it runs before the due-run check so a slow prune can never delay a run. It is not a new thread, not a new process, and not a Celery-style job: the API is one uvicorn worker (A4), and a background thread for a once-a-day `DELETE` would be a second lifecycle to get wrong.
+    - One change to the loop is required and is part of this decision. Today it waits until the *next scheduled run*: `delay = 3600.0` only when the schedule is paused, and otherwise the whole gap to the next run, which with the default 02:00 cron is up to 24 hours. The wait becomes `min(seconds_until_next_run, 3600)` in every case, so the thread wakes at least hourly, keeps the existing paused-schedule behaviour, and a tick with nothing due does nothing. Without that cap a prune tied to the tick would effectively run once a day at whatever hour the run happens.
+  - Rejected: `fail_stale_runs` (a request-path function, so a `DELETE` would run on every status poll), a startup-only prune (an API that is never restarted never prunes), and a separate retention thread (a second daemon to start, stop, and test).
+  - If the scheduler is later removed, the prune moves with it as one function call in `app.py`'s lifespan; that is a one-line move precisely because the function lives in `admin_chat` and takes `now` as an argument.
+- The prune is **not audited**. Writing an audit row for a prune would itself be a row that ages out, and the prune's own log line (one structured line with the deleted count) is the operational record.
+- `ADMIN_CHAT_AUDIT_RETENTION_DAYS` is read on each prune, not cached at boot, so an operator changing it and restarting the API takes effect without a code change.
+- Rows are pruned by `at`, which every row has (`admin_chat_audit.at`, written by `record_audit`). Time is compared as stored ISO-8601 UTC, the same format `_now()` writes elsewhere in the repo.
 
 ## Amendments required in `tasks/prd-hermes-optimizer.md`
 
@@ -146,7 +161,8 @@ Do not reopen or uncheck US-001 through US-010 of that document.
 - **Admin chat** — the chat area in the Admin section that talks to the `chat` Hermes profile. Not the member Ask screen.
 - **Chat profile** — the Hermes profile named `chat`. Own home, own `config.yaml`, own `.env`, own bearer key, and a **standalone** gateway on port 8643 that runs only while `HERMES_CHAT_ENABLED` is true. Optimization uses the default profile on 8642.
 - **Disabled state** — the `/admin/chat` presentation when `HERMES_CHAT_ENABLED` is false: an explanatory page, no composer, no chat route calls.
-- **Thread delete** — a hard delete of the thread, its turns, its messages, and its action cards. Audit rows survive without message content (D-4).
+- **Thread delete** — a hard delete of the thread, its turns, its messages, and its action cards. Audit rows survive, without message content, until the retention window removes them (D-4, D-6).
+- **Retention window** — `ADMIN_CHAT_AUDIT_RETENTION_DAYS` (default 14). An audit row older than it is deleted by the prune; `0` disables the prune (D-6).
 - **Turn** — one user message plus the assistant reply streamed for it. Identified by `turn_id`. A turn is not a job.
 - **Thread** — an ordered list of turns, shown in the chat's history list. Identified by `thread_id`.
 - **Job / run** — one optimization round owned by `optimization_runs`, identified by the DeepFix `run_id`. A job outlives the chat turn that started it.
@@ -250,7 +266,7 @@ Stories are ordered. Each is one implementation session on `feat/hermes-optimize
 - [ ] **Disabled costs no memory:** with chat off, exactly one Hermes gateway process runs in the container (the optimizer's) and nothing is bound to 8643. With chat on, a second gateway process exists for the `chat` profile and 8643 is bound. The check matches on the process arguments and profile (the pin's process line is a Python interpreter running the gateway, so a literal `hermes gateway` name match is not reliable) — for example count processes whose args contain `gateway` and distinguish them by the profile they serve. Container RSS is recorded for information in both states but is not the guarantee (summed RSS double-counts shared pages). CHAT-012 repeats the check on the deployment; this story records what it could not run on this VM.
 - [ ] The chat profile's `.env` contains `API_SERVER_ENABLED=true`, `API_SERVER_HOST=0.0.0.0`, `API_SERVER_PORT=8643`, and `API_SERVER_KEY` taken from `HERMES_CHAT_API_SERVER_KEY` only when it passes `validate_api_key` (at least 16 characters, no placeholder). It contains no `OPENROUTER_API_KEY`, no `S3_*`, no `LLM_API_KEY`, and not the optimization `API_SERVER_KEY`. **`test_chat_profile_env_is_replaced` in `tests/test_hermes_sandbox.py` must change, and that change is part of this story:** it currently asserts `"API_SERVER_KEY" not in text` for the chat `.env`, which is exactly what this story reverses. The new assertions are: the chat `.env` `API_SERVER_KEY` equals `HERMES_CHAT_API_SERVER_KEY`; it does **not** equal the optimization `API_SERVER_KEY`; the optimization `.env` still carries its own key; and no `OPENROUTER_API_KEY`, `S3_`, or `LLM_API_KEY` appears in the chat file. The test's `_env()` fixture gains `HERMES_CHAT_API_SERVER_KEY` (`CHAT_KEY`, "b" * 32) so the enabled case is exercised.
 - [ ] The chat profile's model comes from `HERMES_CHAT_MODEL`, falling back to `HERMES_MODEL` when unset or blank (D-3). Both are written into the chat `config.yaml` by `chat_profile_config`. A test covers the three cases: chat model set, chat model blank, chat model unset. No model literal appears in `sandbox_boot.py`, the Compose file, or the image.
-- [ ] **The API container can see its own settings.** `docker-compose.yml` gives `backend-api` an explicit environment allowlist and no `env_file`, so a variable added only to `compose.hermes.yml` is invisible to the API. The `backend-api` service gains `HERMES_CHAT_ENABLED`, `HERMES_CHAT_MODEL`, `HERMES_CHAT_API_SERVER_KEY`, `HERMES_CHAT_BASE_URL`, `MLFLOW_HERMES_CHAT_EXPERIMENT`, and every `ADMIN_CHAT_*` setting that CHAT-003, CHAT-004, CHAT-006, CHAT-007, CHAT-008, and CHAT-009 introduce (`ADMIN_CHAT_MAX_PROMPT_CHARS`, `ADMIN_CHAT_MAX_MESSAGES`, `ADMIN_CHAT_TURN_TIMEOUT_SECONDS`, `ADMIN_CHAT_DIGEST_MAX_CHARS`, `ADMIN_CHAT_MAX_TURNS_PER_WINDOW`, `ADMIN_CHAT_TURN_WINDOW_SECONDS`, `ADMIN_CHAT_MAX_CONCURRENT_TURNS`, `ADMIN_CHAT_ACTION_TTL_SECONDS`, `ADMIN_CHAT_STEP_TAIL`, `ADMIN_CHAT_STEP_READ_BYTES`). The same names are added to `Settings` in `src/deepfix_rag/config/settings.py`, with `HERMES_CHAT_ENABLED: bool = False` (D-1) and `HERMES_CHAT_BASE_URL: str = "http://hermes:8643"`.
+- [ ] **The API container can see its own settings.** `docker-compose.yml` gives `backend-api` an explicit environment allowlist and no `env_file`, so a variable added only to `compose.hermes.yml` is invisible to the API. The `backend-api` service gains `HERMES_CHAT_ENABLED`, `HERMES_CHAT_MODEL`, `HERMES_CHAT_API_SERVER_KEY`, `HERMES_CHAT_BASE_URL`, `MLFLOW_HERMES_CHAT_EXPERIMENT`, and every `ADMIN_CHAT_*` setting that CHAT-002, CHAT-003, CHAT-004, CHAT-006, CHAT-007, CHAT-008, and CHAT-009 introduce (`ADMIN_CHAT_MAX_PROMPT_CHARS`, `ADMIN_CHAT_MAX_MESSAGES`, `ADMIN_CHAT_TURN_TIMEOUT_SECONDS`, `ADMIN_CHAT_DIGEST_MAX_CHARS`, `ADMIN_CHAT_MAX_TURNS_PER_WINDOW`, `ADMIN_CHAT_TURN_WINDOW_SECONDS`, `ADMIN_CHAT_MAX_CONCURRENT_TURNS`, `ADMIN_CHAT_ACTION_TTL_SECONDS`, `ADMIN_CHAT_STEP_TAIL`, `ADMIN_CHAT_STEP_READ_BYTES`, `ADMIN_CHAT_AUDIT_RETENTION_DAYS`). The same names are added to `Settings` in `src/deepfix_rag/config/settings.py`, with `HERMES_CHAT_ENABLED: bool = False` (D-1), `HERMES_CHAT_BASE_URL: str = "http://hermes:8643"`, and `ADMIN_CHAT_AUDIT_RETENTION_DAYS: int = 14` (D-6).
 - [ ] **The `hermes` container can see what boot reads.** `chat_profile_config` reads `HERMES_CHAT_MODEL` and CHAT-011's boot reads `MLFLOW_HERMES_CHAT_EXPERIMENT`, both inside the `hermes` service, whose environment is also an explicit allowlist. Both names are added to the `hermes` service in `compose.hermes.yml`, and `HERMES_MODEL` stays there because it is the fallback D-3 reads.
 - [ ] **Empty values must not crash boot or the API.** Typed settings reject an empty string: a `bool` field with `FLAG=''` raises `bool_parsing` and an `int` with `N=''` raises `int_parsing` under this repo's pydantic-settings (verified locally). So `HERMES_CHAT_ENABLED` and every `ADMIN_CHAT_*` integer use a **non-empty default in the Compose line** (`${HERMES_CHAT_ENABLED:-false}`, `${ADMIN_CHAT_MAX_PROMPT_CHARS:-48000}`, …), matching how `OPTIMIZATION_MIN_DEV_QUESTIONS: ${…:-50}` already does it. Only `str` fields may use `${VAR:-}`. A test composes the file with all chat variables unset and asserts `Settings()` builds.
 - [ ] The plumbing test covers both services: every `ADMIN_CHAT_*`, `HERMES_CHAT_*`, and `MLFLOW_HERMES_CHAT_EXPERIMENT` name read by `Settings` or by `sandbox_boot.py` appears in `example.env`, in the `backend-api` environment, or in the `hermes` environment as appropriate, so a future setting cannot be added without being plumbed.
@@ -291,6 +307,8 @@ Stories are ordered. Each is one implementation session on `feat/hermes-optimize
 - [ ] Tests use `tmp_path` and the real SQLite file. No mocks. They cover: create/list/get/delete isolation between two admin ids; audit `kind` rejection of an unknown value; `expires_at` handling; ordering by `updated_at` descending; a delete removing turns, messages, and actions but leaving the audit rows and the `optimization_runs` row intact; and a second delete being a no-op with one `thread_deleted` row.
 - [ ] Secret redaction covers the chat key. The redaction helper the module exposes is built on `optimization._secrets` / `optimization._redact`, and `HERMES_CHAT_API_SERVER_KEY` is added to the `_SECRET_ENVS` tuple in `src/deepfix_rag/optimization.py` (today it lists `API_SERVER_KEY`, `OPENROUTER_API_KEY`, `S3_SECRET_ACCESS_KEY`, `HERMES_S3_SECRET_ACCESS_KEY`, and `LLM_API_KEY` only). A test sets a chat key, passes it through the helper, and asserts `[redacted]` and no substring of the key.
 - [ ] A thread title defaults to the first 60 characters of its first user message (whitespace collapsed), with no model call.
+- [ ] `prune_audit(db_path, retention_days, *, now=None) -> int` deletes `admin_chat_audit` rows whose `at` is older than `retention_days` and returns the number deleted. `retention_days` is an argument with no default literal of its own; the setting is `ADMIN_CHAT_AUDIT_RETENTION_DAYS` (default 14). A value of `0` or less deletes nothing and returns `0`, which is the documented way to keep rows forever (D-6). A test writes rows at 1, 13, 15, and 400 days old against a fixed `now` and asserts exactly the old ones go, that a second prune deletes nothing, and that `retention_days=0` deletes nothing.
+- [ ] The prune is not itself audited and touches no other table. A test asserts `admin_chat_audit` has no row of a prune-specific kind and that `admin_chat_threads`, `admin_chat_messages`, and `optimization_runs` row counts are unchanged by a prune.
 - [ ] `uv run ruff check` and `uv run ruff format --check` pass, and `uv run --env-file .env pytest -m "not network and not e2e"` includes the new tests.
 
 ### CHAT-003: The streaming proxy route
@@ -364,6 +382,12 @@ Stories are ordered. Each is one implementation session on `feat/hermes-optimize
 - [ ] `thread_deleted` is `true` for a row whose `thread_id` no longer exists in `admin_chat_threads` (D-4). The flag is computed at read time with one `LEFT JOIN`, not stored, so it cannot go stale. Rows for a deleted thread are still returned, and their `turn_id` is not resolvable — the flag already says so. A test deletes a thread and asserts its audit rows come back with `thread_deleted: true`, their `kind` and `detail` intact, and no message text anywhere in the response.
 - [ ] A `rate_limited` row is written by the limiter itself and never causes a second limiter pass: the count used by the limiter is `count_recent_turns`, which reads `admin_chat_turns`, so audit writes cannot inflate it and a refusal cannot ratchet itself. The “one per minute per admin” rule is a `SELECT` on the newest `rate_limited` row for that admin.
 - [ ] Every audit `detail` is redacted through the same helper as the step log and truncated to 500 characters, matching `STEP_PREVIEW_LIMIT`.
+- [ ] **The retention prune is wired into the existing scheduler tick (D-6, FR-030).** `OptimizationScheduler` gains an optional `prune_audit` hook (a callable taking no arguments, injected by `app.py` as `lambda: admin_chat.prune_audit(db_path, settings.ADMIN_CHAT_AUDIT_RETENTION_DAYS)`), invoked from `_loop` at most once per hour and **before** the due-run check so a slow prune never delays a run.
+- [ ] **The loop must be able to wake hourly.** Today `_loop` waits until the next scheduled run, which with the default 02:00 cron is up to 24 hours, so a prune hung off the tick alone would run about once a day at an unpredictable hour. The wait becomes `_idle_delay(seconds_until_next_run: float | None) -> float`, returning `PRUNE_MAX_IDLE_SECONDS = 3600` when the schedule is paused (`None`) and `min(seconds_until_next_run, 3600)` otherwise, so the thread wakes at least hourly and `run_due()` returns immediately when nothing is due. A unit test asserts 3600 for a run 24 hours away, the real gap for a run 90 seconds away, and 3600 (not 0 or negative) when the schedule is paused, so a paused schedule still prunes.
+- [ ] The hourly guard on the prune itself is an in-memory last-run timestamp on the scheduler instance; a restart therefore prunes on its first tick, which is the desired behaviour after a settings change.
+- [ ] The wiring is **not** gated on `HERMES_CHAT_ENABLED`: the prune runs from the scheduler loop, which knows nothing about chat. A test constructs the scheduler with `HERMES_CHAT_ENABLED=False`, inserts an audit row past the window, drives one tick, and asserts the row is gone. Another drives two ticks inside the hour and asserts the injected callable ran once (the counter is the callable's own, so the test needs no clock).
+- [ ] The prune reads `ADMIN_CHAT_AUDIT_RETENTION_DAYS` on each invocation, not at construction, so a changed setting takes effect on the next tick. A test sets the value to `0` and asserts nothing is deleted.
+- [ ] The scheduler logs one line per prune that deleted something — `chat audit prune deleted=<n> retention_days=<d>` — and nothing when the count is zero (NFR-8). A failure inside the prune is caught and logged, never fatal to the scheduler thread: the existing `except Exception: LOGGER.exception("Scheduled optimization failed")` pattern is the model, and a test injects a raising callable and asserts the tick returns normally.
 - [ ] Tests: the 31st turn in a window is 429; two `running` turns for one admin is 429; the global cap is enforced with two admins; a member gets 403 on the audit route; a `detail` containing a secret is stored redacted.
 - [ ] `uv run ruff check` and `uv run ruff format --check` pass.
 
@@ -486,7 +510,7 @@ Priority is **Must** (the release is incomplete without it), **Should** (planned
 | FR-015 | No chat code path may call `apply_candidate`, write `configs/champion.yaml` or `indexes/current`, or read holdout. | Must | G3. Stated constraint; the gate is not negotiable. |
 | FR-016 | The run-to-thread link must persist in a `admin_chat_thread_runs` join table, and `GET /admin/chat/threads/{thread_id}/runs` must return each linked run's status, reason, deltas, MLflow link, and a redacted step tail capped at `ADMIN_CHAT_STEP_TAIL` lines, and must call `fail_stale_runs`. | Must | G1, G4. Progress display is what makes a multi-hour run usable, and it must survive a reload. |
 | FR-017 | Rate limits must be enforced from persisted turns: per admin per window, one running turn per admin, and a global concurrent cap; a breach is 429 with `Retry-After`. | Must | G5. The container is 4 GB shared by two gateways. |
-| FR-018 | Every chat-initiated action must write an audit row from the closed `kind` list, with the admin id and email, thread id, turn id, and a redacted 500-character detail; `GET /admin/chat/audit` must return them to admins only. Audit rows must never be deleted by a thread delete, must contain no message text, and must report `thread_deleted` for a gone thread. | Must | G6, D-4. The security record of who started a run must outlive the conversation. |
+| FR-018 | Every chat-initiated action must write an audit row from the closed `kind` list, with the admin id and email, thread id, turn id, and a redacted 500-character detail; `GET /admin/chat/audit` must return them to admins only. Audit rows must never be deleted by a thread delete — only by age, through the FR-030 prune — must contain no message text, and must report `thread_deleted` for a gone thread. | Must | G6, D-4, D-6. The security record of who started a run must outlive the conversation, and must not outlive its retention window. |
 | FR-019 | Per-turn wall clock must be bounded by `ADMIN_CHAT_TURN_TIMEOUT_SECONDS`, and request size by `ADMIN_CHAT_MAX_PROMPT_CHARS` and `ADMIN_CHAT_MAX_MESSAGES`; exceeding a bound is a readable 400 or a terminal error frame. | Must | G5. |
 | FR-020 | The chat model must come from `HERMES_CHAT_MODEL` and fall back to `HERMES_MODEL` when unset or blank, read from the environment; when both are empty while chat is enabled the route must return a 503 naming both variables, and no model literal may exist in Python or TypeScript. `HERMES_CHAT_MODEL` ships commented out in `example.env`. | Must | D-3, and the repo's existing `require_model` rule. |
 | FR-021 | Every error frame, audit `detail`, step tail, digest, and SSE error must pass through the existing secret redaction, extended to include `HERMES_CHAT_API_SERVER_KEY`; no response may contain `API_SERVER_KEY`, `HERMES_CHAT_API_SERVER_KEY`, `OPENROUTER_API_KEY`, an S3 secret, or a path under `PRODUCT_DATA_DIR`. | Must | G2, G6. The current `_SECRET_ENVS` tuple in `optimization.py` does not list the chat key, so extending it is part of the work, not an assumption. |
@@ -498,6 +522,7 @@ Priority is **Must** (the release is incomplete without it), **Should** (planned
 | FR-027 | When `HERMES_CHAT_ENABLED` is false, `/admin/chat` must render an explicit disabled state that names `HERMES_CHAT_ENABLED=true` as the switch and must make zero requests to any `/admin/chat/*` route. The flag must reach the page through the existing `GET /admin/optimization` payload as `chat_enabled`, not through a chat or new route, and the sidebar entry must remain visible so the state is discoverable. | Must | D-2. A silent or hidden page looks like a broken deploy; a status route would break the locked route list. |
 | FR-028 | A chat 503 must distinguish “turned off” from “turned on but misconfigured”: each carries a stable machine-readable `code` (`chat_disabled` and `chat_misconfigured`) alongside its sentence, the disabled body is the D-2 sentence, the misconfigured body names the missing variables, and the UI renders a different message for each. The client switches on `code`, never on the sentence. | Must | D-1, D-3. Two different operator actions must not look identical, and string matching would break on an edit. |
 | FR-029 | With chat disabled, the container must have **exactly one `hermes gateway` process and nothing listening on 8643**. “Costs no memory” must be demonstrated by that process-and-port check, recorded from the deployment, with container RSS reported on and off for information only. | Must | D-1. Summed RSS cannot prove the claim; process and port absence can. |
+| FR-030 | `admin_chat_audit` rows older than `ADMIN_CHAT_AUDIT_RETENTION_DAYS` (default 14, `0` or negative disables the prune) must be deleted, by a prune that runs from the existing optimization scheduler tick at most once per hour and keeps running when `HERMES_CHAT_ENABLED=false`. No literal retention window may exist in Python. | Must | D-6, G6, NFR-5. Keep the audit trail without letting it grow forever, on deployments that have chat off as much as on. |
 
 ## Non-Functional Requirements
 
@@ -505,10 +530,10 @@ Priority is **Must** (the release is incomplete without it), **Should** (planned
 - **NFR-2 Resource limits.** One optimization job at a time remains enforced by `start_optimization_run` raising `RunInProgress`. Chat adds at most `ADMIN_CHAT_MAX_CONCURRENT_TURNS` (default 2) concurrent turns and one `running` turn per admin. **With `HERMES_CHAT_ENABLED=false` the chat costs no resident memory: no chat gateway process and no listener.** No story raises `mem_limit: 4g`, `cpus: "2"`, `agent.max_turns: 40`, or `OPTIMIZATION_RUN_TIMEOUT_HOURS`.
 - **NFR-3 Latency.** Time to first token is a property of Hermes and OpenRouter, not of this proxy; the proxy must not add buffering, so the first byte the browser sees is the first byte Hermes sent. A thread load must be two indexed reads, not a scan: a test asserts `EXPLAIN QUERY PLAN` for the messages-by-thread and threads-by-admin queries reports an index search, and that an index exists on `admin_chat_messages (thread_id, seq)` and `admin_chat_threads (created_by, updated_at)`. The numeric target of 300 ms on the pilot data (tens of threads, hundreds of messages) is a measurement recorded in CHAT-012, not a test assertion, because a wall-clock assertion on a shared CI machine is flaky.
 - **NFR-4 Security.** Every `/admin/chat/*` route requires admin, and there are exactly eleven of them: `POST /admin/chat/completions`, `GET /admin/chat/turns/{turn_id}/stream`, `GET /admin/chat/threads`, `POST /admin/chat/threads`, `GET /admin/chat/threads/{thread_id}`, `DELETE /admin/chat/threads/{thread_id}`, `GET /admin/chat/threads/{thread_id}/runs`, `POST /admin/chat/threads/{thread_id}/runs/{run_id}`, `POST /admin/chat/actions/{action_id}/confirm`, `POST /admin/chat/actions/{action_id}/reject`, and `GET /admin/chat/audit`. Nine of them are Hermes-facing and gated on `HERMES_CHAT_ENABLED` and configuration; two (`GET /admin/chat/audit`, `DELETE /admin/chat/threads/{thread_id}`) are SQLite-only and stay reachable when chat is disabled, so an admin can still read the audit trail and delete their own conversation (D-4). A test walks `app.routes` and asserts every path starting `/admin/chat` is registered with the admin dependency, that none is unauthenticated, and that the exempt pair is exactly the two named here. The bearer key is sent only on the `Authorization` header to Hermes. The browser's better-auth cookie never leaves the web server (`src/api-proxy.ts` already strips `cookie` and `authorization`). No route accepts a URL that could be used to redirect the upstream call (the base URL is configuration, never request data). The chat profile keeps no terminal, so the `deepfix` shim, its secret scrub, and the read-only skill tree stay optimization-only.
-- **NFR-5 Privacy.** Conversation content is stored in the API's SQLite store, which already holds feedback text and run reasons; it is not copied to S3, not returned to members, and not captured in MLflow. Holdout content is never in scope of any chat read. Audit rows hold no message text, only counts, statuses, ids, and the redacted detail.
+- **NFR-5 Privacy.** Conversation content is stored in the API's SQLite store, which already holds feedback text and run reasons; it is not copied to S3, not returned to members, and not captured in MLflow. Holdout content is never in scope of any chat read. Audit rows hold no message text, only counts, statuses, ids, and the redacted detail, and they are pruned after `ADMIN_CHAT_AUDIT_RETENTION_DAYS` (D-6), so the trail is bounded in time as well as in content.
 - **NFR-6 Accessibility.** Keyboard reachable composer, stop, retry, confirm, dismiss, and thread list; visible focus; `aria-live` for streaming text; error text is announced via `role="alert"` as the existing pages do.
 - **NFR-7 Compatibility.** `@assistant-ui/react` stays at `^0.15.28`; no new chat runtime package is added. The web app stays on the existing proxy and generated client; no new origin, no new server.
-- **NFR-8 Operability.** The chat failure modes are visible in the API log with the same structured style as `optimization run=… event=…`: one line per turn start, per terminal state, and per refused action. The audit table is the durable record.
+- **NFR-8 Operability.** The chat failure modes are visible in the API log with the same structured style as `optimization run=… event=…`: one line per turn start, per terminal state, and per refused action. The audit table is the durable record. The retention prune writes one line per run with the deleted count, and only when it deleted something, so an idle day adds no log noise.
 - **NFR-9 Compliance.** N/A for a new regulatory obligation: the pilot handles no new personal data category (an admin's email is already stored on `optimization_runs` and in Better Auth), no payment data, and no special-category data. The applicable existing obligation is data minimisation, which NFR-5 satisfies by keeping conversation text out of MLflow and out of the audit table. Revisit if a member-facing chat is ever proposed.
 
 ## Acceptance criteria (release level)
@@ -522,8 +547,9 @@ Priority is **Must** (the release is incomplete without it), **Should** (planned
 7. No response, audit row, log line, or trace contains a Hermes key, an OpenRouter key, an S3 secret, a private path, or holdout content.
 8. With `HERMES_CHAT_ENABLED=false` — **the default** — no chat gateway process exists, nothing listens on 8643, the page shows the disabled state and makes no chat request, and the API returns 503 with the disabled sentence. Every other screen works exactly as before.
 9. With chat on but misconfigured (no chat key, or no model), the API and the page say which variables are missing, and that message differs from the disabled one.
-10. Deleting a thread removes its conversation and messages, leaves the runs it started intact, and leaves audit rows that still record who did what, flagged `thread_deleted`.
-11. `uv run --env-file .env pytest -m "not network and not e2e"`, `uv run ruff check`, `uv run ruff format --check`, `bun run typecheck`, `bun run lint`, and `bun run test` are green, with the same known `tests/test_incremental_index.py` exception the Hermes PRD already carries if it is still open.
+10. Deleting a thread removes its conversation and messages, leaves the runs it started intact, and leaves audit rows that still record who did what, flagged `thread_deleted`. Audit rows disappear only when they are older than `ADMIN_CHAT_AUDIT_RETENTION_DAYS`.
+11. With chat disabled, the retention prune still removes audit rows past the window; neither the audit route nor the prune depends on `HERMES_CHAT_ENABLED`.
+12. `uv run --env-file .env pytest -m "not network and not e2e"`, `uv run ruff check`, `uv run ruff format --check`, `bun run typecheck`, `bun run lint`, and `bun run test` are green, with the same known `tests/test_incremental_index.py` exception the Hermes PRD already carries if it is still open.
 
 ## Dependencies & assumptions
 
@@ -542,7 +568,7 @@ Priority is **Must** (the release is incomplete without it), **Should** (planned
 - **(assumption)** `POST /v1/chat/completions` on the chat profile emits `chat.completion.chunk` frames plus `event: hermes.tool.progress` for its toolsets, as the verified facts table in the Hermes PRD records for that pin. The stream relay treats unknown frames as opaque text and does not depend on their schema.
 - **(assumption)** The API keeps running one uvicorn worker (`Dockerfile` CMD has no `--workers`). The rate limit is computed from persisted rows, so it stays correct if that changes; the in-process subscriber registry for a live resume is per process, and the resume endpoint degrades to “stored text plus terminal status” when it is not the owning process.
 - **(assumption)** A chat turn is short by design. Nothing in the profile allows shell work, so a 300-second cap does not cut off a legitimate operation; a task longer than that is a job, and the job has its own timeout.
-- **(assumption)** Audit volume is small (tens of rows per admin per day), so an unbounded SQLite table with no retention job is acceptable for the pilot. The open question records the retention decision.
+- **(assumption)** Audit volume stays small (tens of rows per admin per day), so the 14-day prune of D-6 keeps the table within a few thousand rows and needs no archive, partitioning, or index beyond the retention delete. If volume is far higher, the prune stays correct and only the row count grows.
 - **(assumption)** Hermes's chat completion does not need the DeepFix `run_id`; the trace correlation is the chat thread and turn id, not an optimization run id.
 
 ## Risks & mitigations
@@ -554,7 +580,7 @@ Priority is **Must** (the release is incomplete without it), **Should** (planned
 5. **A long reply looks dead and the admin reloads repeatedly.** Mitigation: SSE keepalives are forwarded, the composer becomes a stop button immediately, the partial text is persisted so a reload resumes, and the resume endpoint degrades safely after a restart.
 6. **The proxy buffers and the stream arrives all at once.** The web server relays the body, and FastAPI's `StreamingResponse` plus `X-Accel-Buffering: no` is what prevents an intermediary from accumulating. CHAT-003 asserts the relay emits the first frame before the upstream stream closes, against a local server that deliberately delays its second chunk, so a buffering regression fails the test. CHAT-012 checks the same through the deployed proxy.
 7. **A delete is mistaken for a full erase, and an admin expects their words to be gone everywhere.** Mitigation: D-4 states exactly what is deleted and what survives; the delete dialog says so in the UI; the audit row holds no message text and never did. Residual risk: an admin reading “delete” may still expect the audit entry to vanish. The flagged alternative in D-4 is the one-line change if that expectation should win.
-8. **Audit and transcript tables grow without limit.** Mitigation: a bounded read API and an open question for retention. No message text is duplicated into the audit table.
+8. **Audit and transcript tables grow without limit.** Mitigation: a bounded read API, and a retention prune by age (`ADMIN_CHAT_AUDIT_RETENTION_DAYS`, default 14, D-6) that runs from the existing scheduler tick so it keeps working with chat off. Transcript tables are bounded by thread delete; no message text is duplicated into the audit table.
 
 ## Traceability
 
@@ -573,6 +599,7 @@ Priority is **Must** (the release is incomplete without it), **Should** (planned
 | FR-023 | G3 (the Admin-section boundary) |
 | FR-026 | G1, G4 (no regression) |
 | FR-029 | G5, D-1 |
+| FR-030 | G6, NFR-5 (the audit trail is bounded in time, D-6) |
 
 No FR is unlinked to a goal, and no goal is without FRs.
 
@@ -581,11 +608,11 @@ No FR is unlinked to a goal, and no goal is without FRs.
 | Story | FRs |
 | :--- | :--- |
 | CHAT-001 | FR-001, FR-002, FR-020, FR-029 |
-| CHAT-002 | FR-010, FR-016, FR-018 |
+| CHAT-002 | FR-010, FR-016, FR-018, FR-030 (the prune function) |
 | CHAT-003 | FR-004, FR-005, FR-007, FR-019, FR-021, FR-028 |
 | CHAT-004 | FR-006 |
 | CHAT-005 | FR-008, FR-009, FR-010, FR-011, FR-012 |
-| CHAT-006 | FR-017, FR-018 |
+| CHAT-006 | FR-017, FR-018, FR-030 (the scheduler wiring) |
 | CHAT-007 | FR-013, FR-014, FR-015 |
 | CHAT-008 | FR-016 |
 | CHAT-009 | FR-003, FR-022 |
@@ -652,7 +679,7 @@ The optimization job is the expensive tenant. Chat is cheap by comparison but no
 | :--- | :--- | :--- |
 | 1. Server surface | CHAT-001, CHAT-002 | The chat profile answers on 8643 while enabled and starts nothing while disabled, and the tables exist. |
 | 2. Conversation | CHAT-003, CHAT-004, CHAT-005 | A turn streams through the API against a local stand-in and survives a reload. |
-| 3. Safety and jobs | CHAT-006, CHAT-007, CHAT-008 | Limits, audit, action cards, and the run panel work with real domain calls. |
+| 3. Safety and jobs | CHAT-006, CHAT-007, CHAT-008 | Limits, audit, the retention prune, action cards, and the run panel work with real domain calls. |
 | 4. UI | CHAT-009, CHAT-010 | The admin chats in the browser, sees the disabled state when chat is off, and a member is denied. |
 | 5. Evidence | CHAT-011, CHAT-012 | A trace exists in `deepfix_hermes_chat`, and the deployed pass is recorded. |
 
@@ -680,7 +707,7 @@ The optimization job is the expensive tenant. Chat is cheap by comparison but no
 
 ## Validation (validate-prd)
 
-Run three times. The first pass validated the original draft. The second (2026-11-13, after the D-1…D-5 decisions) was an independent review against the `validate-prd` dimensions and found four blockers. The third verified those fixes and found six consistency gaps the fixes had not been carried through to. All ten are now closed. Verdict: **Pass with actions**, and the only remaining actions are the three open questions, each with a recommended default implemented in a story.
+Run four times. The first pass validated the original draft. The second (2026-11-13, after the D-1…D-5 decisions) was an independent review against the `validate-prd` dimensions and found four blockers. The third verified those fixes and found six consistency gaps the fixes had not been carried through to. The fourth (2026-11-14, after D-6) verified the audit-retention decision. All are closed. Verdict: **Pass with actions**, and the only remaining actions are the three open questions, each with a recommended default implemented in a story; neither remaining item is a table, route, or setting decision.
 
 ### Second pass: the four blockers, and how they were closed
 
@@ -720,16 +747,25 @@ A third review checked whether the second pass's fixes were applied consistently
 
 Also tightened: a non-JSON `data:` frame is dropped rather than forwarded (an opaque payload could carry the `model` id FR-003 forbids); `admin-chat-sse.ts` must be exempted by relative path; and the `code` field's mechanism is specified.
 
-### Scores (final, after the third pass)
+### Fourth pass (2026-11-14): the retention decision
+
+Fadel closed the last open decision. D-6 records it, FR-030 carries it, and four things had to change consistently rather than in one place:
+
+1. **Retention was a literal waiting to happen.** It is now `ADMIN_CHAT_AUDIT_RETENTION_DAYS` (default 14), plumbed like every other chat setting — `Settings`, the `backend-api` Compose environment with `${ADMIN_CHAT_AUDIT_RETENTION_DAYS:-14}`, `example.env`, and CHAT-001's plumbing test. `0` or negative disables the prune, which is the only way to keep rows forever.
+2. **The prune needed a home, and the tick needed a wake-up cap.** It runs from the existing `OptimizationScheduler._loop` tick. That loop already wakes hourly when the schedule is paused but sleeps the full gap to the next run otherwise, so a prune hung off it alone would run about once a day; the wait is now `min(gap, 3600)` in every case. Rejected: `fail_stale_runs` (a request path, so a `DELETE` on every status poll), a startup-only prune (an API that never restarts never prunes), and a separate daemon thread. The scheduler tick also makes "keeps working when chat is disabled" free, since the scheduler is not gated on `HERMES_CHAT_ENABLED`.
+3. **Delete and retention had to be told apart.** D-4 settled that a delete never removes an audit row; FR-018 now says a row goes only by age, and D-4's disagreement paragraph is replaced by the decision rather than left as a recommendation.
+4. **Assumption A6 and risk 8 still described an unbounded table.** Both now describe the prune, and the open-questions list no longer carries retention. The release acceptance criteria gained one item (the prune works with chat off) and the traceability and story-FR maps gained FR-030, in CHAT-002 (the prune function) and CHAT-006 (the scheduler wiring).
+
+### Scores (final, after the fourth pass)
 
 | Dimension | Status | Evidence |
 | :--- | :--- | :--- |
-| Completeness | Green | Overview, goals, five decisions, non-goals (three tiers), personas, four journeys, 12 stories, 29 FRs, 9 NFRs, release acceptance, dependencies, assumptions, 8 risks, 3 open questions with defaults, glossary, traceability, story map. |
-| Consistency | Green | D-1…D-5 are cited in the stories, FRs, risks, glossary, journeys, and metrics; delete order, the model-id rule, and the 503 codes match wherever they appear. |
+| Completeness | Green | Overview, goals, six decisions, non-goals (three tiers), personas, four journeys, 12 stories, 30 FRs, 9 NFRs, release acceptance, dependencies, assumptions, 8 risks, 3 open questions with defaults, glossary, traceability, story map. |
+| Consistency | Green | D-1…D-6 are cited in the stories, FRs, risks, glossary, journeys, and metrics; delete order, the retention window, the model-id rule, and the 503 codes match wherever they appear. |
 | Testability | Green | Every Must FR names a route, a setting, a status code plus `code`, a frame, a process/port check, or a visible control. The one wall-clock target is a CHAT-012 measurement, not a test. |
-| Traceability | Green | 29 FRs, all in the FR table and the story map, no gaps or duplicates; every FR maps to a goal; every goal has FRs. |
+| Traceability | Green | 30 FRs, all in the FR table and the story map, no gaps or duplicates; every FR maps to a goal; every goal has FRs. |
 | Feasibility | Amber | Unchanged and deliberately so: two gateways in one 4 GB container and `gateway.standalone` on the pinned image are unmeasured here, recorded as A1/A2 with two fallbacks. CHAT-001 and CHAT-012 turn them into measurements. |
-| Security & privacy | Green | Admin on all eleven routes with a check order specified per route class, the audit and delete routes deliberately reachable when chat is off, `_SECRET_ENVS` extended to the chat key, `model` stripped from frames, holdout excluded, audit without message text, prompt-injection delimiters. |
+| Security & privacy | Green | Admin on all eleven routes with a check order specified per route class, the audit and delete routes deliberately reachable when chat is off, `_SECRET_ENVS` extended to the chat key, `model` stripped from frames, holdout excluded, audit without message text and pruned by age even with chat off, prompt-injection delimiters. |
 
 ### Still Amber, and why that is correct
 
@@ -747,11 +783,11 @@ Next step after this PRD is accepted: **`create-story`** for CHAT-001. Its accep
 
 ## Open questions / assumptions
 
-Five questions from the first draft are now decisions and have moved to the **Decisions** section: the opt-in switch and the no-memory guarantee (D-1), the disabled UI state (D-2), the model fallback (D-3), hard delete with surviving audit rows (D-4), and the separate chat experiment (D-5).
+Five questions from the first draft are now decisions and have moved to the **Decisions** section: the opt-in switch and the no-memory guarantee (D-1), the disabled UI state (D-2), the model fallback (D-3), hard delete with surviving audit rows (D-4), and the separate chat experiment (D-5). Audit retention was the sixth open question and is now **D-6** (14 days, `ADMIN_CHAT_AUDIT_RETENTION_DAYS`). Two open threads from the earlier drafts are closed: delete never removes audit rows (Fadel, 2026-11-14), and retention is bounded rather than unbounded.
 
 ### Still open, with a recommended default
 
-Each of these is implemented the recommended way unless Fadel says otherwise. None of them blocks CHAT-001.
+Each of these is implemented the recommended way unless Fadel says otherwise. None of them blocks CHAT-001, and none is a decision that changes a table, a route, or a setting — they are measurements and future additions.
 
 1. **Does Hermes abort an in-flight chat turn when the client disconnects?**
    - *Facts:* the runs API has `POST /v1/runs/{run_id}/stop`; the chat completions surface documents no stop route. CHAT-001 can measure it in one request by closing the socket mid-turn and watching the container's token usage or the gateway log.
@@ -776,5 +812,5 @@ Each is also labelled where it matters in “Dependencies & assumptions”.
 - A3. The chat profile speaks `chat.completion.chunk` plus `hermes.tool.progress`; unknown frames are relayed as opaque text.
 - A4. One uvicorn worker, so an in-process resume registry is sufficient; the resume endpoint degrades to stored text otherwise.
 - A5. A 300-second turn cap is far above a legitimate chat turn, because the chat profile cannot run shell work.
-- A6. Audit and transcript volume is small enough for unbounded SQLite in the pilot. Retention is the only part of the old question 3 still undecided, and it is not a blocker: rows are small and the read is bounded.
+- A6. Audit volume stays small enough that the D-6 prune (14 days by default) keeps the table bounded without an archive: rows are small and the read is bounded.
 - A7. Chat correlation is the thread and turn id, not an optimization `run_id`.

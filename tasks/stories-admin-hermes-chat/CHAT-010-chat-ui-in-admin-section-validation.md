@@ -1,10 +1,32 @@
 # Story validation: CHAT-010 — The chat UI in the Admin section
 
 - Story file: tasks/stories-admin-hermes-chat/CHAT-010-chat-ui-in-admin-section.md
-- Validated: 2026-11-14
-- Verdict: **Pass with actions**
+- Validated: 2026-11-14 (first pass), 2026-11-14 (second pass, after D-6)
+- Verdict: **Pass**
 
-## Findings
+## Second pass — after the retention decision (D-6)
+
+### Blockers
+None. The only change was to copy, and it stayed a UI concern.
+
+### Should-fix
+One, closed while revising:
+
+1. **The delete dialog promised a permanent record.** It said the record of a started run "is kept" (D-4), which was
+   true when the table was unbounded and is now too strong: audit rows age out after
+   `ADMIN_CHAT_AUDIT_RETENTION_DAYS` (D-6). A dialog that over-promises is a product defect even when the code is
+   right.
+   *Fixed:* AC 12 keeps the D-4 sentence about *what the delete removes and what it does not*, and adds that the copy
+   must not promise an unbounded record — the trail is kept and ages out after the server's retention window. The
+   dialog's accessible name and its two buttons are still asserted by AC 20, unchanged.
+
+### PRD alignment (second pass)
+- FRs: FR-022, FR-023, FR-025, FR-026, FR-027, FR-028 — unchanged.
+- Decisions: D-4 (the dialog still names what survives the delete), D-6 (the copy no longer implies forever).
+- Gaps: none. The retention window is not surfaced as a number in the UI, deliberately: it is an operator setting,
+  and the dialog should not read a runtime value into user-facing copy.
+
+## First pass
 
 ### Blockers
 
@@ -33,9 +55,9 @@
 - The verification note checklist mirrors the PRD's CHAT-010 verification sentence exactly.
 
 ## Suggested edits (concrete)
-- None outstanding.
+- None outstanding. Every finding in both passes is applied in the story file.
 
-## PRD alignment
+## PRD alignment (first pass)
 - FRs: FR-022, FR-023, FR-025, FR-026, FR-027, FR-028 — all six present as ACs.
 - Decisions: D-2 (disabled page, zero requests, sidebar entry stays visible), D-3 (misconfigured message distinct from
   disabled), D-4 (delete dialog copy names what survives).

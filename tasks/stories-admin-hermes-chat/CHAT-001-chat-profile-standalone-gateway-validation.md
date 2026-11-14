@@ -1,10 +1,38 @@
 # Story validation: CHAT-001 — Start the chat profile as a gated standalone gateway
 
 - Story file: tasks/stories-admin-hermes-chat/CHAT-001-chat-profile-standalone-gateway.md
-- Validated: 2026-11-14
+- Validated: 2026-11-14 (first pass), 2026-11-14 (second pass, after D-6)
 - Verdict: **Pass with actions**
 
-## Findings
+## Second pass — after the retention decision (D-6)
+
+### Blockers
+
+1. **The new retention setting would have been invisible to the API container.** This story owns the plumbing that
+   makes every later setting reachable, and `docker-compose.yml` gives `backend-api` an explicit allowlist with no
+   `env_file`. A setting added to `Settings` but not to that allowlist is silently empty at runtime — the exact
+   failure the PRD's second validation pass closed for the other chat settings.
+   *Fixed:* AC 1 now requires eleven `ADMIN_CHAT_*` settings including `ADMIN_CHAT_AUDIT_RETENTION_DAYS=14`; AC 2
+   includes it in the `backend-api` environment list; AC 5 documents it in `example.env` with the `0` case; AC 6's
+   plumbing test covers it automatically because it walks every `ADMIN_CHAT_*` name.
+
+### Should-fix
+
+2. **`example.env` had no place to explain `0`.** AC 5 now requires the comment to say that `0` keeps audit rows
+   forever, because an operator who wants the unbounded behaviour has no other way to learn it.
+
+### Nice-to-have
+- AC 2's non-empty-Compose-default rule already covered the new `int` field; no new rule was needed, which is the
+  point of having stated it once.
+
+### PRD alignment (second pass)
+- FRs: FR-001, FR-002, FR-020, FR-029, and the plumbing that makes FR-030 reachable.
+- Decisions: D-1 and D-3 unchanged; D-6 added (the retention setting is plumbed like the rest, with a non-empty
+  Compose default).
+- Gaps: none. The prune itself is CHAT-002's function and CHAT-006's wiring; this story only makes the setting exist
+  where the API can read it.
+
+## First pass
 
 ### Blockers
 
@@ -40,9 +68,9 @@
    to the AC that proves it, rather than left as folklore.
 
 ## Suggested edits (concrete)
-- None outstanding. The five findings above are applied in the story file.
+- None outstanding. Every finding in both passes is applied in the story file.
 
-## PRD alignment
+## PRD alignment (first pass)
 - FRs: FR-001, FR-002, FR-020, FR-029 — all present, all traceable to the PRD's story-to-FR map.
 - Decisions: D-1 (default off, standalone, no memory when off, boot refuses without `gateway.standalone`), D-3
   (fallback and the commented-out `example.env` line).
