@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 import uuid
 
@@ -47,6 +48,27 @@ def _fixture_model_env() -> None:
     yield
     for name, value in previous.items():
         setattr(settings, name, value)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _wide_help_output() -> None:
+    """Pin the terminal width so Rich-wrapped `--help` text is the same everywhere.
+
+    Typer renders help through Rich, which wraps to the detected terminal width.
+    CI runs without a TTY and Rich then assumes 80 columns, so an option's flag
+    and its description can land on different lines and a substring assertion
+    that passes locally fails there. A wide fixed width keeps each option on one
+    line on both.
+    """
+    previous = {name: os.environ.get(name) for name in ("COLUMNS", "LINES")}
+    os.environ["COLUMNS"] = "240"
+    os.environ["LINES"] = "60"
+    yield
+    for name, value in previous.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 @pytest.fixture(scope="session")
