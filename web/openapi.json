@@ -1974,6 +1974,162 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/chat/actions/{action_id}/confirm": {
+      "post": {
+        "description": "Run the action the assistant proposed, because the admin pressed Confirm.\n\nThis is the only chat path that can change run state, and it reaches the\nsame ``start_run_for``/``cancel_run_for`` helpers the Optimization screen\nuses. A card is confirmable while its turn still streams: the conversation\nplane and the job plane are separate, and ``RunInProgress`` is the real\nguard against two runs.",
+        "operationId": "confirm_admin_chat_action",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Confirm a proposed action and run it",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/actions/{action_id}/reject": {
+      "post": {
+        "description": "Mark a proposed card dismissed. A decided card is 409.",
+        "operationId": "reject_admin_chat_action",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          }
+        },
+        "summary": "Dismiss a proposed action",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
     "/admin/chat/audit": {
       "get": {
         "description": "The newest audit rows, admin only, with `thread_deleted` computed at read time.\n\nOne of the two SQLite-only routes: it answers with chat off and with the\nchat key unset, because turning chat off must not hide what chat did (D-4).",

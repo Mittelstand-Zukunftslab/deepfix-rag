@@ -147,13 +147,24 @@ def test_a_refusal_cannot_ratchet_itself(tmp_path: Path) -> None:
 
 
 def test_at_most_one_rate_limited_row_per_minute(tmp_path: Path) -> None:
+    """The check is a plain SELECT over the newest row for that admin and kind."""
     db_path = tmp_path / "product.db"
     admin_chat.init_admin_chat(db_path)
-    assert admin_chat.should_audit_rate_limit(db_path, ADMIN_ID, now=NOW) is True
-    admin_chat.record_audit(db_path, admin_id=ADMIN_ID, kind="rate_limited", detail="x")
-    assert admin_chat.should_audit_rate_limit(db_path, ADMIN_ID, now=NOW) is False
+    moment = datetime.now(timezone.utc)
+    assert admin_chat.should_audit_rate_limit(db_path, ADMIN_ID, now=moment) is True
+    event_id = admin_chat.record_audit(db_path, admin_id=ADMIN_ID, kind="rate_limited", detail="x")
+    # `record_audit` stamps the real clock, so pin the row to the clock this
+    # test holds; otherwise the assertion depends on how long the run took.
+    with connect(db_path) as conn:
+        conn.execute(
+            "UPDATE admin_chat_audit SET at = ? WHERE event_id = ?",
+            (moment.isoformat(), event_id),
+        )
+    assert admin_chat.should_audit_rate_limit(db_path, ADMIN_ID, now=moment) is False
     assert (
-        admin_chat.should_audit_rate_limit(db_path, ADMIN_ID, now=NOW + timedelta(seconds=61))
+        admin_chat.should_audit_rate_limit(
+            db_path, ADMIN_ID, now=moment + timedelta(seconds=61)
+        )
         is True
     )
 

@@ -38,6 +38,7 @@ from deepfix_rag.api.deps import get_settings, require_admin
 from deepfix_rag.api.errors import (
     BAD_GATEWAY,
     BAD_REQUEST,
+    CONFLICT,
     FORBIDDEN,
     INTERNAL_SERVER_ERROR,
     NOT_FOUND,
@@ -47,6 +48,7 @@ from deepfix_rag.api.errors import (
     error_responses,
 )
 from deepfix_rag.api.identity import User
+from deepfix_rag.api.routes.optimization import cancel_run_for, start_run_for
 from deepfix_rag.api.schemas import (
     ChatActionResponse,
     ChatAuditResponse,
@@ -56,6 +58,7 @@ from deepfix_rag.api.schemas import (
     ChatThreadResponse,
     ChatThreadSummaryResponse,
     ChatTurnResponse,
+    OptimizationRunResponse,
 )
 from deepfix_rag.config.settings import LOGGER, Settings
 
@@ -441,6 +444,7 @@ async def _relay(
     first_token_ms: int | None = None
     status = "failed"
     failure: str | None = None
+    actions: list[admin_chat.Action] = []
     deadline = started + settings.ADMIN_CHAT_TURN_TIMEOUT_SECONDS
     yield chat_stream.sse(chat_stream.start_part(turn_id))
     yield chat_stream.sse(chat_stream.text_start(text_id))
@@ -496,10 +500,57 @@ async def _relay(
         )
     if status == "cancelled":
         return
+    if status == "completed":
+        # Only a completed reply proposes anything: a cancelled or failed turn
+        # must never hand the admin a live action.
+        actions = _store_actions(settings, user, thread_id=thread_id, turn_id=turn_id)
     yield chat_stream.sse(chat_stream.text_end(text_id))
-    yield chat_stream.sse(chat_stream.turn_part(turn_id, status, []))
+    yield chat_stream.sse(
+        chat_stream.turn_part(turn_id, status, [_action_card(a) for a in actions])
+    )
     yield chat_stream.sse(chat_stream.finish_part("stop" if status == "completed" else "error"))
     yield chat_stream.DONE_FRAME
+
+
+def _store_actions(
+    settings: Settings, user: User, *, thread_id: str, turn_id: str
+) -> list[admin_chat.Action]:
+    """Scan the stored reply, store up to two cards, and audit what happened."""
+    text = admin_chat.stored_assistant_text(settings.product_db_path, turn_id)
+    parsed = admin_chat.parse_actions(text, db_path=settings.product_db_path)
+    stored = admin_chat.store_actions(
+        settings.product_db_path,
+        thread_id=thread_id,
+        turn_id=turn_id,
+        parsed=parsed,
+        ttl_seconds=settings.ADMIN_CHAT_ACTION_TTL_SECONDS,
+    )
+    for action in stored:
+        _audit(
+            settings,
+            user,
+            turn_id,
+            thread_id,
+            "action_proposed",
+            f"kind={action.kind} action={action.action_id}",
+        )
+    if parsed.dropped:
+        # A dropped block is counted, never surfaced as an error the admin must
+        # handle: the reply still reads normally, the audit row says why.
+        _audit(settings, user, turn_id, thread_id, "action_proposed", parsed.summary())
+    return stored
+
+
+def _action_card(action: admin_chat.Action) -> dict[str, Any]:
+    return {
+        "action_id": action.action_id,
+        "turn_id": action.turn_id,
+        "kind": action.kind,
+        "payload": json.loads(action.payload) if action.payload else {},
+        "status": action.status,
+        "created_at": action.created_at,
+        "expires_at": action.expires_at,
+    }
 
 
 class _ClientGone(Exception):
@@ -783,3 +834,100 @@ def list_admin_chat_audit(request: Request, limit: int = 50) -> list[ChatAuditRe
         )
         for entry in admin_chat.list_audit(settings.product_db_path, limit=limit)
     ]
+
+
+@router.post(
+    "/admin/chat/actions/{action_id}/confirm",
+    operation_id="confirm_admin_chat_action",
+    response_model=OptimizationRunResponse,
+    responses=error_responses(UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT, SERVICE_UNAVAILABLE),
+    summary="Confirm a proposed action and run it",
+)
+def confirm_admin_chat_action(action_id: str, request: Request) -> OptimizationRunResponse:
+    """Run the action the assistant proposed, because the admin pressed Confirm.
+
+    This is the only chat path that can change run state, and it reaches the
+    same ``start_run_for``/``cancel_run_for`` helpers the Optimization screen
+    uses. A card is confirmable while its turn still streams: the conversation
+    plane and the job plane are separate, and ``RunInProgress`` is the real
+    guard against two runs.
+    """
+    user = require_admin(request, "Only admins can confirm a chat action.")
+    settings = get_settings(request)
+    chat_gate(request)
+    action = _owned_action(settings, action_id, user.id)
+    action = admin_chat.expire_if_due(settings.product_db_path, action.action_id)
+    if action.status == "expired":
+        _audit(
+            settings, user, action.turn_id, action.thread_id, "action_expired", action.action_id
+        )
+        raise HTTPException(
+            status_code=CONFLICT, detail="This action has expired. Ask the assistant again."
+        )
+    if action.status != "proposed":
+        raise HTTPException(status_code=CONFLICT, detail="This action has already been decided.")
+    payload = json.loads(action.payload) if action.payload else {}
+    try:
+        if action.kind == "start_optimization_run":
+            response = start_run_for(request)
+        elif action.kind == "cancel_optimization_run":
+            response = cancel_run_for(request, str(payload.get("run_id") or ""))
+        else:
+            raise HTTPException(
+                status_code=BAD_REQUEST, detail="This action kind is not supported."
+            )
+    except HTTPException:
+        # A retryable failure (conflict, unavailable) leaves the card proposed.
+        raise
+    admin_chat.decide_action(
+        settings.product_db_path,
+        action.action_id,
+        status="confirmed",
+        admin_id=user.id,
+        result=json.dumps({"run_id": response.run_id, "status": response.status}, sort_keys=True),
+    )
+    _audit(
+        settings,
+        user,
+        action.turn_id,
+        action.thread_id,
+        "action_confirmed",
+        f"kind={action.kind} run={response.run_id} status={response.status}",
+    )
+    _log(action.thread_id, action.turn_id, "action_confirmed")
+    if response.run_id:
+        admin_chat.link_run(settings.product_db_path, action.thread_id, response.run_id)
+    return response
+
+
+@router.post(
+    "/admin/chat/actions/{action_id}/reject",
+    operation_id="reject_admin_chat_action",
+    response_model=ChatActionResponse,
+    responses=error_responses(UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT),
+    summary="Dismiss a proposed action",
+)
+def reject_admin_chat_action(action_id: str, request: Request) -> ChatActionResponse:
+    """Mark a proposed card dismissed. A decided card is 409."""
+    user = require_admin(request, "Only admins can dismiss a chat action.")
+    settings = get_settings(request)
+    chat_gate(request)
+    action = _owned_action(settings, action_id, user.id)
+    action = admin_chat.expire_if_due(settings.product_db_path, action.action_id)
+    if action.status != "proposed":
+        raise HTTPException(status_code=CONFLICT, detail="This action has already been decided.")
+    admin_chat.decide_action(
+        settings.product_db_path, action.action_id, status="rejected", admin_id=user.id
+    )
+    _audit(settings, user, action.turn_id, action.thread_id, "action_rejected", action.kind)
+    return _action_response(admin_chat.get_action(settings.product_db_path, action.action_id))
+
+
+def _owned_action(settings: Settings, action_id: str, admin_id: str) -> admin_chat.Action:
+    """The caller's own card. Another admin's id is 404, never 403."""
+    try:
+        action = admin_chat.get_action(settings.product_db_path, action_id)
+        admin_chat.get_thread(settings.product_db_path, action.thread_id, admin_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=NOT_FOUND, detail="No chat action with that id.") from exc
+    return action

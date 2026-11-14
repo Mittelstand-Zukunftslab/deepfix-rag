@@ -1160,6 +1160,94 @@ export type VoteCountsResponse = {
     up: number;
 };
 
+export type ConfirmAdminChatActionData = {
+    body?: never;
+    path: {
+        /**
+         * Action Id
+         */
+        action_id: string;
+    };
+    query?: never;
+    url: '/admin/chat/actions/{action_id}/confirm';
+};
+
+export type ConfirmAdminChatActionErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * The request conflicts with the current state.
+     */
+    409: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type ConfirmAdminChatActionError = ConfirmAdminChatActionErrors[keyof ConfirmAdminChatActionErrors];
+
+export type ConfirmAdminChatActionResponses = {
+    /**
+     * Successful Response
+     */
+    200: OptimizationRunResponse;
+};
+
+export type ConfirmAdminChatActionResponse = ConfirmAdminChatActionResponses[keyof ConfirmAdminChatActionResponses];
+
+export type RejectAdminChatActionData = {
+    body?: never;
+    path: {
+        /**
+         * Action Id
+         */
+        action_id: string;
+    };
+    query?: never;
+    url: '/admin/chat/actions/{action_id}/reject';
+};
+
+export type RejectAdminChatActionErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * The request conflicts with the current state.
+     */
+    409: ErrorResponse;
+};
+
+export type RejectAdminChatActionError = RejectAdminChatActionErrors[keyof RejectAdminChatActionErrors];
+
+export type RejectAdminChatActionResponses = {
+    /**
+     * Successful Response
+     */
+    200: ChatActionResponse;
+};
+
+export type RejectAdminChatActionResponse = RejectAdminChatActionResponses[keyof RejectAdminChatActionResponses];
+
 export type ListAdminChatAuditData = {
     body?: never;
     path?: never;

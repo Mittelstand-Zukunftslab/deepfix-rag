@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type ServerSentEventsResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AdminChatCompletionData, AdminChatCompletionErrors, AdminChatCompletionResponse, AdminChatCompletionResponses, AskQuestionData, AskQuestionErrors, AskQuestionResponses, CancelOptimizationRunData, CancelOptimizationRunErrors, CancelOptimizationRunResponses, CreateAdminChatThreadData, CreateAdminChatThreadErrors, CreateAdminChatThreadResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteAdminChatThreadData, DeleteAdminChatThreadErrors, DeleteAdminChatThreadResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetAdminChatThreadData, GetAdminChatThreadErrors, GetAdminChatThreadResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListAdminChatAuditData, ListAdminChatAuditErrors, ListAdminChatAuditResponses, ListAdminChatThreadsData, ListAdminChatThreadsErrors, ListAdminChatThreadsResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, ResumeAdminChatTurnData, ResumeAdminChatTurnErrors, ResumeAdminChatTurnResponse, ResumeAdminChatTurnResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
+import type { AdminChatCompletionData, AdminChatCompletionErrors, AdminChatCompletionResponse, AdminChatCompletionResponses, AskQuestionData, AskQuestionErrors, AskQuestionResponses, CancelOptimizationRunData, CancelOptimizationRunErrors, CancelOptimizationRunResponses, ConfirmAdminChatActionData, ConfirmAdminChatActionErrors, ConfirmAdminChatActionResponses, CreateAdminChatThreadData, CreateAdminChatThreadErrors, CreateAdminChatThreadResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteAdminChatThreadData, DeleteAdminChatThreadErrors, DeleteAdminChatThreadResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetAdminChatThreadData, GetAdminChatThreadErrors, GetAdminChatThreadResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListAdminChatAuditData, ListAdminChatAuditErrors, ListAdminChatAuditResponses, ListAdminChatThreadsData, ListAdminChatThreadsErrors, ListAdminChatThreadsResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RejectAdminChatActionData, RejectAdminChatActionErrors, RejectAdminChatActionResponses, ResumeAdminChatTurnData, ResumeAdminChatTurnErrors, ResumeAdminChatTurnResponse, ResumeAdminChatTurnResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -17,6 +17,26 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
      */
     meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
 };
+
+/**
+ * Confirm a proposed action and run it
+ *
+ * Run the action the assistant proposed, because the admin pressed Confirm.
+ *
+ * This is the only chat path that can change run state, and it reaches the
+ * same ``start_run_for``/``cancel_run_for`` helpers the Optimization screen
+ * uses. A card is confirmable while its turn still streams: the conversation
+ * plane and the job plane are separate, and ``RunInProgress`` is the real
+ * guard against two runs.
+ */
+export const confirmAdminChatAction = <ThrowOnError extends boolean = false>(options: Options<ConfirmAdminChatActionData, ThrowOnError>): RequestResult<ConfirmAdminChatActionResponses, ConfirmAdminChatActionErrors, ThrowOnError> => (options.client ?? client).post<ConfirmAdminChatActionResponses, ConfirmAdminChatActionErrors, ThrowOnError>({ url: '/admin/chat/actions/{action_id}/confirm', ...options });
+
+/**
+ * Dismiss a proposed action
+ *
+ * Mark a proposed card dismissed. A decided card is 409.
+ */
+export const rejectAdminChatAction = <ThrowOnError extends boolean = false>(options: Options<RejectAdminChatActionData, ThrowOnError>): RequestResult<RejectAdminChatActionResponses, RejectAdminChatActionErrors, ThrowOnError> => (options.client ?? client).post<RejectAdminChatActionResponses, RejectAdminChatActionErrors, ThrowOnError>({ url: '/admin/chat/actions/{action_id}/reject', ...options });
 
 /**
  * List the chat audit trail

@@ -87,20 +87,7 @@ def start_optimization_run_route(
 ) -> OptimizationRunResponse:
     """Export feedback and start one run, or skip it when too little is labeled."""
     require_admin(request, "Only admins can start an optimization run.")
-    settings = get_settings(request)
-    try:
-        run = start_optimization_run(
-            settings.product_db_path,
-            settings.workspace_dir,
-            trigger="manual",
-            options=settings_from(settings),
-            coordinator=getattr(request.app.state, "index", None),
-        )
-    except RunInProgress as exc:
-        raise HTTPException(status_code=CONFLICT, detail=str(exc)) from exc
-    except AgentUnavailable as exc:
-        raise HTTPException(status_code=SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    return _response(run)
+    return start_run_for(request)
 
 
 @router.post(
@@ -113,6 +100,35 @@ def start_optimization_run_route(
 def cancel_optimization_run_route(run_id: str, request: Request) -> OptimizationRunResponse:
     """Stop a running optimization. A row that is not running is left unchanged."""
     require_admin(request, "Only admins can cancel an optimization run.")
+    return cancel_run_for(request, run_id)
+
+
+def start_run_for(request: Request, *, trigger: str = "manual") -> OptimizationRunResponse:
+    """The one place a run is started from an HTTP request.
+
+    Run now and a confirmed chat action both come here, with the same options,
+    workspace, database, and coordinator, so the two cannot drift. ``trigger``
+    is a ``RunTrigger``; the parameter exists so a future caller does not
+    invent a second copy of this function.
+    """
+    settings = get_settings(request)
+    try:
+        run = start_optimization_run(
+            settings.product_db_path,
+            settings.workspace_dir,
+            trigger=trigger,  # type: ignore[arg-type]
+            options=settings_from(settings),
+            coordinator=getattr(request.app.state, "index", None),
+        )
+    except RunInProgress as exc:
+        raise HTTPException(status_code=CONFLICT, detail=str(exc)) from exc
+    except AgentUnavailable as exc:
+        raise HTTPException(status_code=SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return run_response(run)
+
+
+def cancel_run_for(request: Request, run_id: str) -> OptimizationRunResponse:
+    """The one place a run is cancelled from an HTTP request. Same reason."""
     settings = get_settings(request)
     try:
         run = cancel_optimization_run(
@@ -128,7 +144,7 @@ def cancel_optimization_run_route(run_id: str, request: Request) -> Optimization
         ) from exc
     except RunNotRunning as exc:
         raise HTTPException(status_code=CONFLICT, detail=str(exc)) from exc
-    return _response(run)
+    return run_response(run)
 
 
 def _status(request: Request) -> OptimizationStatusResponse:
@@ -181,7 +197,7 @@ def _scalar(value: Any) -> str | int | float | bool | None:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _response(run: OptimizationRun) -> OptimizationRunResponse:
+def run_response(run: OptimizationRun) -> OptimizationRunResponse:
     return OptimizationRunResponse(
         run_id=run.run_id,
         status=run.status,

@@ -1115,3 +1115,169 @@ def list_audit(db_path: Path, limit: int = 50) -> list[AuditEntry]:
         )
         for row in rows
     ]
+
+
+ACTION_KINDS: tuple[str, ...] = ("start_optimization_run", "cancel_optimization_run")
+MAX_ACTIONS_PER_REPLY = 2
+_ACTION_BLOCK = re.compile(r"```deepfix-action[ \t]*\n(.*?)```", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class ParsedAction:
+    """One recognised action block, before it is stored."""
+
+    kind: str
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ParseResult:
+    """Every block a reply proposed, and how many were dropped and why."""
+
+    actions: tuple[ParsedAction, ...]
+    dropped: tuple[str, ...]
+
+    def summary(self) -> str:
+        """A one-line audit detail: what was kept and what was refused."""
+        kept = ", ".join(action.kind for action in self.actions) or "none"
+        dropped = ", ".join(self.dropped) or "none"
+        return f"actions kept={kept} dropped={dropped}"
+
+
+def parse_actions(
+    text: str,
+    *,
+    db_path: Path | None = None,
+) -> ParseResult:
+    """Scan a completed reply for ``deepfix-action`` blocks. Never raises.
+
+    The allowlist is the whole safety property: only
+    ``start_optimization_run`` and ``cancel_optimization_run`` are recognised,
+    a malformed block or an unknown kind is counted rather than surfaced, and
+    at most two cards are kept per reply. A ``cancel_optimization_run`` that
+    names a run which does not exist is dropped too, so a card can never be
+    offered for a run this server does not have.
+    """
+    kept: list[ParsedAction] = []
+    dropped: list[str] = []
+    for raw in _ACTION_BLOCK.findall(text):
+        if len(kept) >= MAX_ACTIONS_PER_REPLY:
+            dropped.append("extra")
+            continue
+        try:
+            payload = json.loads(raw.strip())
+        except json.JSONDecodeError:
+            dropped.append("malformed")
+            continue
+        if not isinstance(payload, dict):
+            dropped.append("malformed")
+            continue
+        kind = payload.get("kind")
+        if kind not in ACTION_KINDS:
+            dropped.append(f"unknown_kind:{kind}")
+            continue
+        run_id = payload.get("run_id")
+        if kind == "cancel_optimization_run":
+            if not isinstance(run_id, str) or not run_id.strip():
+                dropped.append("missing_run_id")
+                continue
+            if db_path is not None and not _run_exists(db_path, run_id):
+                dropped.append("unknown_run")
+                continue
+        kept.append(ParsedAction(kind=str(kind), payload=payload))
+    return ParseResult(actions=tuple(kept), dropped=tuple(dropped))
+
+
+def _run_exists(db_path: Path, run_id: str) -> bool:
+    try:
+        optimization.get_run(db_path, run_id)
+    except KeyError:
+        return False
+    return True
+
+
+def store_actions(
+    db_path: Path,
+    *,
+    thread_id: str,
+    turn_id: str,
+    parsed: ParseResult,
+    ttl_seconds: int,
+    now: datetime | None = None,
+) -> list[Action]:
+    """Store each recognised block as one ``proposed`` card that expires by TTL."""
+    moment = _as_utc(now)
+    expires = (moment + timedelta(seconds=ttl_seconds)).isoformat()
+    created = moment.isoformat()
+    stored: list[Action] = []
+    for action in parsed.actions:
+        action_id = _new_id()
+        with connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO admin_chat_actions
+                    (action_id, thread_id, turn_id, kind, payload, status,
+                     created_at, expires_at, decided_at, decided_by, result)
+                VALUES (?, ?, ?, ?, ?, 'proposed', ?, ?, NULL, NULL, NULL)
+                """,
+                (
+                    action_id,
+                    thread_id,
+                    turn_id,
+                    action.kind,
+                    json.dumps(action.payload, sort_keys=True),
+                    created,
+                    expires,
+                ),
+            )
+        stored.append(get_action(db_path, action_id))
+    return stored
+
+
+def get_action(db_path: Path, action_id: str) -> Action:
+    """One action card."""
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM admin_chat_actions WHERE action_id = ?", (action_id,)
+        ).fetchone()
+    if row is None:
+        raise KeyError(action_id)
+    return _action_from_row(row)
+
+
+def expire_if_due(db_path: Path, action_id: str, *, now: datetime | None = None) -> Action:
+    """Mark a ``proposed`` card ``expired`` once its TTL has passed, and return it.
+
+    Expiry is evaluated on read, never by a background job, so an API that was
+    down cannot leave a card confirmable past its deadline.
+    """
+    action = get_action(db_path, action_id)
+    if action.status != "proposed":
+        return action
+    if _as_utc(now).isoformat() < action.expires_at:
+        return action
+    decide_action(db_path, action_id, status="expired", admin_id="system")
+    return get_action(db_path, action_id)
+
+
+def decide_action(
+    db_path: Path,
+    action_id: str,
+    *,
+    status: str,
+    admin_id: str,
+    result: str | None = None,
+) -> bool:
+    """Move a ``proposed`` card to a decided status. ``False`` when it already was."""
+    if status not in {"confirmed", "rejected", "expired", "failed"}:
+        raise ValueError(f"not a decided action status: {status!r}")
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            UPDATE admin_chat_actions
+            SET status = ?, decided_at = ?, decided_by = ?, result = ?
+            WHERE action_id = ? AND status = 'proposed'
+            """,
+            (status, _now(), admin_id, result, action_id),
+        )
+        return cursor.rowcount == 1
