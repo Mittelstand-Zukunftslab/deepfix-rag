@@ -158,6 +158,12 @@ def test_failed_insert_leaves_indexed_documents_searchable(
 def test_startup_resumes_indexing_and_deleting(
     index_settings: Settings, identity: IdentityIssuer
 ) -> None:
+    """A restart finishes the interrupted upload and delete without rebuilding the index.
+
+    Both documents were written incrementally, so the serving build already
+    matches the corpus. Rebuilding on startup would hand back a new build id and
+    re-embed the whole corpus, which is the regression this test guards.
+    """
     embed_model = MockEmbedding(embed_dim=16)
     with TestClient(
         create_app(index_settings, embed_model=embed_model, token_verifier=identity.verifier())
@@ -166,7 +172,6 @@ def test_startup_resumes_indexing_and_deleting(
         doc_a = _upload(client, "a.txt", "Alpha harbor budget was approved.")
         doc_b = _upload(client, "b.txt", "Beta lighthouse schedule remains.")
         build_id = client.get("/index").json()["serving_build_id"]
-        kept = _chunks(client)[doc_a]
         with connect(index_settings.product_db_path) as conn:
             conn.execute(
                 "UPDATE documents SET status = 'indexing' WHERE doc_id = ?",
@@ -193,5 +198,5 @@ def test_startup_resumes_indexing_and_deleting(
         chunks = _chunks(restarted)
         assert doc_b not in chunks
         assert chunks[doc_a]
-        assert kept
+        assert [hit["doc_id"] for hit in _hits(restarted, "harbor")] == [doc_a]
         assert not (index_settings.workspace_dir / "corpus" / f"{doc_b}.json").exists()

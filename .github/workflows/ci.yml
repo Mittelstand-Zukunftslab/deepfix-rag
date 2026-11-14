@@ -16,7 +16,7 @@ jobs:
       - run: uv sync --frozen --link-mode=copy
       - run: uv run ruff check src/deepfix_rag/api tests/test_api_skeleton.py
       - run: uv run ruff format --check src/deepfix_rag/api tests/test_api_skeleton.py
-      - run: uv run pytest -m api -v
+      - run: uv run pytest -m "api and not network" -v
 
   cli:
     runs-on: ubuntu-latest

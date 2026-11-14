@@ -736,8 +736,37 @@ def _start_hermes_thread(
             )
         except Exception as exc:
             _fail_running(db_path, workspace, run_id, _hermes_failure(exc, options))
+        _log_run_settled(db_path, run_id, options)
 
     _start_registered_thread(run_id, _target)
+
+
+def _log_run_settled(
+    db_path: Path,
+    run_id: str,
+    options: OptimizationSettings,
+) -> None:
+    """One console line saying how the background thread left the row.
+
+    A run outlives the request that started it, so this is the only place a
+    scheduled or manual run reports its outcome. ``_fail_running`` and the
+    cancel path already log the reason with the row; the status is repeated
+    here so every terminal state has a line. The reason is agent-supplied, so
+    it is redacted and shortened before it reaches the console.
+    """
+    try:
+        stored = get_run(db_path, run_id)
+    except KeyError:
+        return
+    if stored.status == "running":
+        return
+    reason = _one_line(_redact(stored.reason or "-", _secrets(options)))
+    LOGGER.info(
+        "Optimization run %s finished status=%s reason=%s",
+        stored.run_id,
+        stored.status,
+        reason[:STEP_PREVIEW_LIMIT],
+    )
 
 
 def _hermes_failure(exc: Exception, options: OptimizationSettings) -> str:

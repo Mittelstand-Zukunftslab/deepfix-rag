@@ -11,6 +11,7 @@ from fastapi.routing import APIRoute
 from starlette.formparsers import MultiPartParser
 
 from deepfix_rag.api.identity import TokenVerifier
+from deepfix_rag.api.logging_config import configure_logging
 from deepfix_rag.api.routes import (
     documents,
     feedback,
@@ -86,6 +87,10 @@ def create_app(
     keys from ``settings.auth_jwks_url``.
     """
     app_settings = app_settings or default_settings
+    # Before anything else logs: without this the ``deepfix_rag`` and
+    # ``apscheduler`` records have no handler and the container console shows
+    # only uvicorn's own lines.
+    configure_logging(app_settings.DEEPFIX_LOG_LEVEL)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

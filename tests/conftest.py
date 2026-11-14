@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import re
 import uuid
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -48,6 +49,37 @@ def _fixture_model_env() -> None:
     yield
     for name, value in previous.items():
         setattr(settings, name, value)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Deselect ``network`` tests unless this run asked for them.
+
+    A command-line ``-m`` replaces the expression in ``addopts`` instead of
+    intersecting with it, so ``pytest -m cli`` also selected the twenty CLI cases
+    that call a live embedding or judge endpoint, and a combined selection such as
+    ``pytest -m "unit or cli"`` reached Hugging Face and OpenRouter until it was
+    killed for memory. The live tests stay reachable by naming ``network`` or
+    ``e2e`` in the expression, or by pointing at a file, which is how
+    ``tests/test_rustfs_prefix_iam.py`` documents itself.
+    """
+    if _asked_for_live_tests(config):
+        return
+    kept: list[pytest.Item] = []
+    live: list[pytest.Item] = []
+    for item in items:
+        (live if item.get_closest_marker("network") else kept).append(item)
+    if live:
+        config.hook.pytest_deselected(items=live)
+    items[:] = kept
+
+
+def _asked_for_live_tests(config: pytest.Config) -> bool:
+    """True when the run named ``network``/``e2e``, or asked for one file by path."""
+    expression = str(config.getoption("markexpr") or "")
+    without_negations = re.sub(r"not\s+\(?\s*(?:network|e2e)\s*\)?", "", expression)
+    if re.search(r"\b(?:network|e2e)\b", without_negations):
+        return True
+    return any("::" in argument or argument.endswith(".py") for argument in config.args)
 
 
 @pytest.fixture(autouse=True, scope="session")

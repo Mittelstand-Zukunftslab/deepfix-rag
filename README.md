@@ -302,6 +302,17 @@ MLFLOW_CORS_ALLOWED_ORIGINS=http://localhost:5000
 # Optional overrides. MLflow 3.x matches Host exactly (include hostname:port).
 MLFLOW_SERVER_ALLOWED_HOSTS=hermes,localhost,diagnostic-agent,mlflow,mlflow:5000,localhost:5000,127.0.0.1,127.0.0.1:5000,backend-api,deepfix-mlflow.mittelstand-zukunftslab.de
 MLFLOW_SERVER_CORS_ALLOWED_ORIGINS=http://hermes,http://localhost,http://diagnostic-agent,http://mlflow:5000,http://backend-api:8000,https://deepfix-mlflow.mittelstand-zukunftslab.de
+
+# ------------------------------------------------------------------------------
+# Product API (FastAPI)
+# ------------------------------------------------------------------------------
+# Console log level for the API container (`docker logs backend-api`). The
+# deepfix_rag and apscheduler loggers print to stdout at this level, so the
+# nightly optimization schedule, each scheduled run's outcome, and APScheduler's
+# misfire warnings are visible. One of DEBUG, INFO, WARNING, ERROR, CRITICAL;
+# the default is INFO and an unknown value warns and falls back to it. Set
+# ERROR to keep the console to failures. The value is never logged.
+DEEPFIX_LOG_LEVEL=INFO
 ```
 ---
 ## Quickstart: Step-by-Step Optimization Walkthrough
@@ -586,6 +597,12 @@ Tests are categorized using markers registered in `pyproject.toml` to allow targ
 | `integration` | Tests requiring local filesystem, LanceDB tables, or loaders | `test_index_creation.py`, local loader tests |
 | `e2e` | Full end-to-end pipeline ingestion, embedding & retrieval | `test_end_to_end.py` |
 | `network` | Tests interacting with live Hugging Face Hub APIs | Live dataset download tests |
+
+`tests/conftest.py` deselects every `network` test unless the run names `network`
+or `e2e` in `-m`, or points at a file such as `tests/test_rustfs_prefix_iam.py`.
+A command-line `-m` replaces `addopts` instead of intersecting with it, so without
+that guard `pytest -m cli` also ran the live-endpoint cases and hit Hugging Face
+and OpenRouter.
 
 #### Run Fast Unit Tests Only
 ```bash

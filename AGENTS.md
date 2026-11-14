@@ -144,6 +144,12 @@ The project uses [pytest](https://docs.pytest.org/) with registered markers in `
 | `network` | Tests interacting with live Hugging Face Hub APIs | Live dataset download tests |
 | `api` | FastAPI product API routes, schemas, and the OpenAPI contract | `test_api_*.py` |
 
+`tests/conftest.py` deselects every `network` test unless the run names `network`
+or `e2e` in `-m`, or points at a file such as `tests/test_rustfs_prefix_iam.py`.
+A command-line `-m` replaces `addopts` instead of intersecting with it, so without
+that guard `pytest -m cli` also ran the live-endpoint cases and hit Hugging Face
+and OpenRouter.
+
 ### Test Execution Commands
 
 ```bash
