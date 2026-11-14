@@ -133,8 +133,9 @@ Mark the new module `pytestmark = [pytest.mark.unit, pytest.mark.integration]`, 
 - The action-card parser and its status transitions beyond storing `payload` and `expires_at` (CHAT-007).
 - Rate-limit decisions (CHAT-006); this story only supplies `count_recent_turns`.
 - **Wiring the prune to a schedule.** This story ships `prune_audit` as a function with an injected clock; CHAT-006
-  calls it from the optimization scheduler tick. A prune that nothing calls is not yet retention, and the two
-  halves are separate commits on purpose — the function is storage, the schedule is the API's lifecycle.
+  registers it as an hourly job on the optimization scheduler. A prune that nothing calls is not yet retention,
+  and the two halves are separate commits on purpose — the function is storage, the schedule is the API's
+  lifecycle.
 - Pruning `admin_chat_turns`, `admin_chat_messages`, or `admin_chat_threads`. Retention is audit-only; transcripts
   are bounded by thread delete (D-4).
 - Archiving pruned rows anywhere. They are deleted.

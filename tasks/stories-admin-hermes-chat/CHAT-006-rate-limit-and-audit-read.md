@@ -13,9 +13,9 @@ started a run whose conversation has since been deleted — and that trail ages 
 window, whether chat is on or off.
 
 ## PRD traceability
-- Related: FR-017, FR-018, FR-030 (the scheduler wiring; CHAT-002 ships the prune function)
+- Related: FR-017, FR-018, FR-030 (the prune's hourly job; CHAT-002 ships the prune function)
 - Decisions: D-4 (audit rows survive a delete and report `thread_deleted`; audit route stays available when chat
-  is off), D-6 (the prune is by age, from the scheduler tick, and runs with chat off)
+  is off), D-6 (the prune is by age, from an hourly scheduler job, and runs with chat off)
 - Journeys: J4 step 4 (the audit view after a delete)
 - NFR touchpoints: NFR-2 (chat's share of the 4 GB envelope), NFR-4 (audit is admin-only), NFR-5 (no message
   text in audit; the trail is bounded in time), NFR-8 (a refusal is one structured log line, and so is a prune
@@ -23,12 +23,13 @@ window, whether chat is on or off.
 
 ## Dependencies
 - Requires: CHAT-002 (`count_recent_turns`, `record_audit`, `prune_audit`, the audit `CHECK` list), CHAT-003 (the
-  route the limiter wraps), CHAT-005 (threads and turns to count against).
+  route the limiter wraps), CHAT-005 (threads and turns to count against), and the `OptimizationScheduler`
+  as it already stands: it is now an APScheduler `BackgroundScheduler`, so this story registers the prune on it
+  as an hourly interval job rather than introducing a scheduler or a wake-up cap.
 - Blocks: CHAT-007 (action audit kinds are written through the same helper and the limiter must not be bypassed
   by the confirm route), CHAT-009 (the client reads the 429 shape), CHAT-010 (the audit view, if built).
 
 ## Acceptance criteria
-
 Per-admin limits:
 
 1. Given `ADMIN_CHAT_MAX_TURNS_PER_WINDOW` (30) inside `ADMIN_CHAT_TURN_WINDOW_SECONDS` (300), when an admin's
@@ -64,28 +65,29 @@ Audit content:
 
 Retention wiring (D-6, FR-030):
 
-10. Given `OptimizationScheduler`, when a `prune_audit` callable is passed at construction, then it is invoked from
-    the thread's loop at most once per hour, **before** the due-run check so a slow prune cannot delay a run, and
-    the call is skipped entirely when the callable is `None` (the default), so no existing scheduler test changes.
-11. Given the loop, when the next scheduled run is 24 hours away (the default 02:00 cron), then the loop still
-    wakes within an hour: `_idle_delay(seconds_until_next_run: float | None) -> float` returns `3600` for `None`
-    (a paused schedule) and `min(seconds_until_next_run, 3600)` otherwise. A unit test asserts 3600 for a 24-hour
-    gap, the real gap for a 90-second gap, and 3600 rather than 0 or a negative for `None`. Without this cap a
-    prune tied to the tick would run about once a day at whatever hour the run happens, which is not a retention
-    policy.
-12. Given `HERMES_CHAT_ENABLED=false`, when a tick runs, then the prune still runs and still deletes rows past the
+10. Given `OptimizationScheduler`, when a `prune_audit` callable is passed at construction, then it is registered
+    as an APScheduler interval job with `id="admin-chat-audit-prune"`, `IntervalTrigger(hours=1)`,
+    `max_instances=1`, `coalesce=True`, and `misfire_grace_time=None`, and it is an independent job, so a slow
+    prune cannot delay the cron run and a cron run cannot delay the prune. The job is not registered at all when
+    the callable is `None` (the default), so no existing scheduler test changes.
+11. Given the prune job, when the scheduler starts, then it fires once at startup and again an hour later.
+    A test drives the scheduler's own tick at startup, an hour later, and in between, and asserts the injected
+    callable ran once, then twice, with the in-between tick adding nothing. A restart therefore prunes on its
+    first tick, which is the desired behaviour after the process was down.
+12. Given `HERMES_CHAT_ENABLED=false`, when the prune job fires, then it still runs and still deletes rows past the
     window. The scheduler has no knowledge of the chat flag. A test constructs the scheduler with the flag off,
     inserts an audit row past the window, drives one tick, and asserts the row is gone.
-13. Given two ticks inside the same hour, then the injected callable is invoked once. The guard is an in-memory
-    last-run timestamp on the scheduler instance, so a restart prunes on its first tick.
-14. Given the injected callable raises, when a tick runs, then the exception is caught and logged
-    (`LOGGER.exception`) and the tick returns normally; the scheduler thread survives. This matches the existing
-    `Scheduled optimization failed` handling.
+13. Given a paused optimization schedule, when the prune job's hour arrives, then the prune still runs: the two
+    jobs are independent, so pausing one has no effect on the other. A test pauses the schedule and asserts the
+    prune still fires.
+14. Given the injected callable raises, when the prune job fires, then the exception is caught and logged
+    (`LOGGER.exception("Chat audit prune failed")`) and the tick returns normally; the scheduler survives. This
+    matches the existing `Scheduled optimization failed` handling in `_fire`.
 15. Given a prune that deleted `n > 0` rows, then one structured line `chat audit prune deleted=<n>
     retention_days=<d>` is logged; when `n == 0`, nothing is logged (NFR-8).
-16. Given `ADMIN_CHAT_AUDIT_RETENTION_DAYS` is `0`, when a tick runs, then nothing is deleted and no line is
-    written. The setting is read on each invocation, not captured at construction, so a change takes effect on
-    the next tick.
+16. Given `ADMIN_CHAT_AUDIT_RETENTION_DAYS` is `0`, when the prune job fires, then nothing is deleted and no line
+    is written. The setting is read on each invocation, not captured at construction, so a change takes effect on
+    the next fire.
 
 Tests:
 
@@ -93,7 +95,7 @@ Tests:
     `running` turns for one admin is 429; the global cap with two admins; a member gets 403 on the audit route;
     a `detail` containing a secret is stored redacted; a deleted thread's rows come back with
     `thread_deleted: true` and no message text; the audit route answers with chat disabled and with the chat key
-    unset; and the six retention-wiring cases (AC 10–16).
+    unset; and the seven retention-wiring cases (AC 10–16).
 
 ## Test commands
 
@@ -109,8 +111,8 @@ cd web && npm run generate:api && bun run typecheck
 ```
 
 Use a temp SQLite file and a controllable clock (pass `now` into the limiter rather than sleeping); no test may
-sleep 300 seconds. For the scheduler cases, drive `_loop`'s tick body and `_idle_delay` directly rather than
-starting the thread and waiting — no test may sleep an hour either.
+sleep 300 seconds. For the scheduler cases, use the scheduler's injectable clock and drive its tick body rather
+than starting the thread and waiting — no test may sleep an hour either.
 
 ## Out of scope
 - The prune implementation itself (CHAT-002's `prune_audit`).
@@ -119,8 +121,8 @@ starting the thread and waiting — no test may sleep an hour either.
 - A UI for the audit view. The PRD lists the audit read as an API route; CHAT-010 builds the chat page only. If
   the audit is shown in the UI, that is a follow-up story, not this one.
 - Any change to the job-plane limits (`start_optimization_run`'s `RunInProgress`).
-- Making the loop's hourly wake configurable. `3600` is a constant; if it ever needs tuning, it becomes a setting
-  in a follow-up rather than a hidden magic number now.
+- The scheduler itself. This story adds one job to the APScheduler instance that already exists; the cron job,
+  its `reschedule_job`/`pause_job`/`resume_job` handling, and its `misfire_grace_time` are not touched.
 
 ## Notes
 - Put the limiter in `admin_chat` as a unit-testable function,
@@ -135,18 +137,19 @@ starting the thread and waiting — no test may sleep an hour either.
 - Audit `detail` for a limit refusal names the cap and the wait, never the admin's text.
 - Add the prune hook to `OptimizationScheduler.__init__` as an optional keyword
   (`prune_audit: Callable[[], int] | None = None`), not as a subclass or a monkeypatched method: every existing
-  scheduler test constructs the scheduler without it, so the default must be a no-op.
-- `_idle_delay` is a small module-level helper rather than inline arithmetic in `_loop`, so its three cases are
-  unit-testable without a thread. Keep `_loop`'s `if self._wake.wait(delay)` shape; only the value it waits on
-  changes.
+  scheduler test constructs the scheduler without it, so the default must be a no-op. `_arm_prune` adds it with
+  `self._scheduler.add_job(self._prune, IntervalTrigger(hours=1), id=PRUNE_JOB_ID, ...)`.
+- `PRUNE_INTERVAL_HOURS` is a module constant next to `MISFIRE_GRACE_SECONDS`, not a magic number in the body; it
+  is not a setting, because retention is by day and an hourly prune is a scheduling detail.
 - Inject the callable from `app.py` as
   `lambda: admin_chat.prune_audit(settings.product_db_path, settings.ADMIN_CHAT_AUDIT_RETENTION_DAYS)`. Capture no
   `HERMES_CHAT_ENABLED` here; that is what makes AC 12 true by construction rather than by care.
 - Log with the existing `LOGGER` (the scheduler already imports it from `deepfix_rag.config.settings`). One line,
-  `deleted` and `retention_days` fields, no per-row output.
-- Keep `tests/test_optimization_schedule.py`'s existing cases untouched; the new ones go beside them, and if any
-  existing case breaks on the `_idle_delay` change, the case was asserting the old 24-hour wait and needs its
-  expectation updated with a comment saying why.
+  `deleted` and `retention_days` fields, no per-row output. `_prune` catches and logs its own failures, so a
+  raising prune never reaches APScheduler's error handling.
+- Keep `tests/test_optimization_schedule.py`'s existing cases untouched; the new ones go beside them. The module
+  already has a `FakeClock` and a `TickableScheduler`, so the prune cases reuse them rather than adding a second
+  harness.
 
 ## Definition of done
 - [ ] Code complete
