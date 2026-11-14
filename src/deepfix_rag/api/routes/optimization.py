@@ -5,12 +5,12 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from deepfix_rag.agent_process import AgentUnavailable
-from deepfix_rag.api.deps import current_user, get_settings
+from deepfix_rag.api.deps import get_settings, require_admin
 from deepfix_rag.api.errors import (
     BAD_REQUEST,
     CONFLICT,
     FORBIDDEN,
+    NOT_FOUND,
     SERVICE_UNAVAILABLE,
     UNAUTHORIZED,
     error_responses,
@@ -24,8 +24,12 @@ from deepfix_rag.api.schemas import (
     UpdateOptimizationRequest,
 )
 from deepfix_rag.optimization import (
+    AgentUnavailable,
     OptimizationRun,
     RunInProgress,
+    RunNotRunning,
+    cancel_optimization_run,
+    fail_stale_runs,
     mlflow_run_url,
     recent_runs,
     settings_from,
@@ -46,7 +50,7 @@ router = APIRouter(tags=["optimization"])
 )
 def get_optimization_status(request: Request) -> OptimizationStatusResponse:
     """Return the nightly schedule, the champion diff, and recent runs."""
-    _require_admin(request, "Only admins can view optimization.")
+    require_admin(request, "Only admins can view optimization.")
     return _status(request)
 
 
@@ -62,7 +66,7 @@ def update_optimization_schedule(
     request: Request,
 ) -> OptimizationStatusResponse:
     """Store a five-field cron expression. An invalid one leaves the schedule unchanged."""
-    _require_admin(request, "Only admins can change the optimization schedule.")
+    require_admin(request, "Only admins can change the optimization schedule.")
     try:
         request.app.state.optimization.update(payload.cron, payload.enabled)
     except InvalidSchedule as exc:
@@ -82,7 +86,7 @@ def start_optimization_run_route(
     request: Request,
 ) -> OptimizationRunResponse:
     """Export feedback and start one run, or skip it when too little is labeled."""
-    _require_admin(request, "Only admins can start an optimization run.")
+    require_admin(request, "Only admins can start an optimization run.")
     settings = get_settings(request)
     try:
         run = start_optimization_run(
@@ -99,14 +103,41 @@ def start_optimization_run_route(
     return _response(run)
 
 
-def _require_admin(request: Request, detail: str) -> None:
-    user = current_user(request)
-    if user.role != "admin":
-        raise HTTPException(status_code=FORBIDDEN, detail=detail)
+@router.post(
+    "/admin/optimization/runs/{run_id}/cancel",
+    operation_id="cancel_optimization_run",
+    response_model=OptimizationRunResponse,
+    responses=error_responses(UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT),
+    summary="Cancel the optimization run that is in progress",
+)
+def cancel_optimization_run_route(run_id: str, request: Request) -> OptimizationRunResponse:
+    """Stop a running optimization. A row that is not running is left unchanged."""
+    require_admin(request, "Only admins can cancel an optimization run.")
+    settings = get_settings(request)
+    try:
+        run = cancel_optimization_run(
+            settings.product_db_path,
+            settings.workspace_dir,
+            run_id,
+            settings_from(settings),
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=NOT_FOUND,
+            detail="No optimization run with that id.",
+        ) from exc
+    except RunNotRunning as exc:
+        raise HTTPException(status_code=CONFLICT, detail=str(exc)) from exc
+    return _response(run)
 
 
 def _status(request: Request) -> OptimizationStatusResponse:
     settings = get_settings(request)
+    fail_stale_runs(
+        settings.product_db_path,
+        timeout_seconds=settings.OPTIMIZATION_RUN_TIMEOUT_HOURS * 60 * 60,
+        options=settings_from(settings),
+    )
     schedule = request.app.state.optimization.view()
     workspace = settings.workspace_dir
     runs = [
@@ -132,7 +163,9 @@ def _status(request: Request) -> OptimizationStatusResponse:
         timezone=schedule.timezone,
         enabled=schedule.enabled,
         next_run_at=schedule.next_run_at,
+        agent=schedule.agent,
         agent_available=schedule.agent_available,
+        agent_unavailable_message=schedule.agent_unavailable_message,
         champion_config_path=str(workspace / "configs" / "champion.yaml"),
         champion_diff={
             key: ConfigChange(before=_scalar(change["before"]), after=_scalar(change["after"]))

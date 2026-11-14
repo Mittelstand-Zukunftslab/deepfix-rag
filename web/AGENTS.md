@@ -15,5 +15,6 @@
 - All data access goes through `src/services/*` (currently mocks); query options live in `src/features/*/*-queries.ts` — backends can be swapped without touching UI.
 - Data contracts are Zod schemas in `src/schemas/` — one source of truth for types and validation.
 - Client UI state uses Zustand stores in `src/stores/`; server state uses TanStack Query — clear separation of concerns.
-- Env access only via `src/lib/config.ts`; formatting (DD/MM/YYYY, European numbers) only via `src/lib/format.ts` — consistent localization.
+- Env access only via `src/lib/config.ts` (browser) and `src/lib/server-config.ts` (server only: auth secret, database path, FastAPI origin); formatting (DD/MM/YYYY, European numbers) only via `src/lib/format.ts` — consistent localization.
 - Design tokens (colors, typography utilities, shadows) are defined in `src/styles.css`; components use semantic tokens and shadcn variants, never raw colors.
+- Authentication is Better Auth in `src/lib/auth.server.ts`; server-only modules end in `.server.ts`. Guard server functions with `requireSession` / `requireRole` from `src/lib/auth-middleware.ts`, never by trusting client-sent roles.

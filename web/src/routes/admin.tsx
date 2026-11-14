@@ -37,6 +37,10 @@ function OptimizationAdmin() {
         const next = await optimizationService.update({ cron, enabled });
         queryClient.setQueryData(optimizationQueryOptions().queryKey, next);
       }}
+      onCancel={async (runId) => {
+        await optimizationService.cancel(runId);
+        await queryClient.invalidateQueries({ queryKey: optimizationQueryOptions().queryKey });
+      }}
     />
   );
 }

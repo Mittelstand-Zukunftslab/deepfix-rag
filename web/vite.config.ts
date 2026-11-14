@@ -4,25 +4,28 @@
 //     nitro (build-only using cloudflare as a default target), VITE_* env injection, @ path alias,
 //     React/TanStack dedupe, error logger plugins, and sandbox detection (port/host/strictPort).
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
+import { existsSync } from "node:fs";
+
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
-const apiTarget = process.env["API_INTERNAL_URL"] ?? "http://127.0.0.1:8000";
+// Server code (Better Auth, the /api proxy) reads process.env. Vite only exposes VITE_* to the
+// client, so load the env files here for `vite dev`. The shell wins, then .env.local, then .env.
+for (const file of [".env.local", ".env"]) {
+  if (existsSync(file)) process.loadEnvFile(file);
+}
 
 export default defineConfig({
   tanstackStart: {
-    // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
+    // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper,
+    // Better Auth's /api/auth routes, and the authenticated /api proxy to FastAPI).
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  // The app runs as a local Node server with a SQLite auth database, not on Cloudflare.
+  nitro: { preset: "node-server" },
   vite: {
-    server: {
-      proxy: {
-        "/api": {
-          target: apiTarget,
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, "") || "/",
-        },
-      },
-    },
+    // Better Auth needs zod 4 while the app uses zod 3. Bundling Better Auth would resolve its
+    // zod import against the app's copy, so it stays a runtime import from node_modules.
+    ssr: { external: ["better-auth", "@better-auth/core"] },
   },
 });

@@ -1,4 +1,4 @@
-"""Vote on a shown passage or answer, and summarize feedback for admins."""
+"""Vote on a shown passage or answer, comment on a vote, and summarize feedback for admins."""
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -12,16 +12,21 @@ from deepfix_rag.api.errors import (
 )
 from deepfix_rag.api.schemas import (
     ConfigApprovalResponse,
+    FeedbackCommentRequest,
+    FeedbackCommentResponse,
     FeedbackRequest,
     FeedbackResponse,
     FeedbackSummaryResponse,
 )
 from deepfix_rag.feedback import (
     AnswerMissingError,
+    InvalidCommentError,
+    NoVoteError,
     UnknownInteractionError,
     UnknownPassageError,
     feedback_summary,
     record_vote,
+    save_comment,
 )
 
 router = APIRouter(tags=["feedback"])
@@ -57,6 +62,36 @@ def submit_feedback(payload: FeedbackRequest, request: Request) -> FeedbackRespo
         rank=payload.rank if payload.target == "passage" else None,
         vote=vote,
     )
+
+
+@router.post(
+    "/feedback/comments",
+    operation_id="submit_feedback_comment",
+    status_code=201,
+    response_model=FeedbackCommentResponse,
+    responses=error_responses(BAD_REQUEST, UNAUTHORIZED, NOT_FOUND),
+    summary="Comment on a vote",
+)
+def submit_feedback_comment(
+    payload: FeedbackCommentRequest, request: Request
+) -> FeedbackCommentResponse:
+    """Append a comment to the user's current vote. MLflow gets it as the rationale later."""
+    user = current_user(request)
+    try:
+        comment = save_comment(
+            get_settings(request).product_db_path,
+            user_id=user.id,
+            interaction_id=payload.interaction_id,
+            target=payload.target,
+            rank=payload.rank,
+            reason=payload.reason,
+            text=payload.text,
+        )
+    except UnknownInteractionError as exc:
+        raise HTTPException(status_code=NOT_FOUND, detail=str(exc)) from exc
+    except (UnknownPassageError, NoVoteError, InvalidCommentError) as exc:
+        raise HTTPException(status_code=BAD_REQUEST, detail=str(exc)) from exc
+    return FeedbackCommentResponse(comment_id=comment.comment_id, created_at=comment.created_at)
 
 
 @router.get(

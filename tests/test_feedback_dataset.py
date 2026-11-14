@@ -6,9 +6,9 @@ from pathlib import Path
 import mlflow
 import pytest
 
-from deepfix_rag.accounts import create_admin, init_db
 from deepfix_rag.documents import init_documents
 from deepfix_rag.feedback import (
+    UnknownInteractionError,
     build_questions,
     export_feedback,
     is_holdout,
@@ -22,9 +22,8 @@ from deepfix_rag.pipeline import RetrievalResult
 pytestmark = pytest.mark.unit
 
 
-def _user(db_path: Path, email: str) -> str:
-    init_db(db_path)
-    return create_admin(db_path, email, "correct-horse").id
+def _user(email: str) -> str:
+    return f"user-{email}"
 
 
 def _ask(
@@ -78,8 +77,8 @@ def test_net_votes_roll_up_to_documents_and_skip_holdout_files(tmp_path: Path) -
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlflow.db'}")
-    ada = _user(db_path, "ada@example.com")
-    bea = _user(db_path, "bea@example.com")
+    ada = _user("ada@example.com")
+    bea = _user("bea@example.com")
     dev_query, holdout_query = _pair()
     same = _ask(
         db_path,
@@ -92,7 +91,10 @@ def test_net_votes_roll_up_to_documents_and_skip_holdout_files(tmp_path: Path) -
     _vote(db_path, ada, same, 3, "down")
     tied = _ask(db_path, ada, f"{dev_query} tied", [("doc-c", "tied passage")])
     _vote(db_path, ada, tied, 1, "up")
-    _vote(db_path, bea, tied, 1, "down")
+    tied_again = _ask(db_path, bea, f"{dev_query} tied", [("doc-c", "tied passage")])
+    _vote(db_path, bea, tied_again, 1, "down")
+    with pytest.raises(UnknownInteractionError):
+        _vote(db_path, bea, tied, 1, "down")
     negative_only = _ask(db_path, ada, f"{dev_query} negative", [("doc-d", "negative passage")])
     _vote(db_path, ada, negative_only, 1, "down")
     unlabeled = _ask(
@@ -107,7 +109,7 @@ def test_net_votes_roll_up_to_documents_and_skip_holdout_files(tmp_path: Path) -
     )
     _vote(db_path, ada, deleted_question, 1, "up")
     init_documents(db_path)
-    from deepfix_rag.accounts import connect
+    from deepfix_rag.storage import connect
 
     with connect(db_path) as conn:
         conn.execute(

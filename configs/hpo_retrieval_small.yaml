@@ -1,0 +1,71 @@
+version: "1.0"
+
+# Query-time retrieval search for one API-driven Hermes round.
+#
+# Twelve trials on 20 seeded questions, then one full-dev confirmation. In an
+# API-driven round the agent passes this file as `--config` and the champion
+# snapshot from the run bundle as `--base-config`, so the `base_config` below
+# (a local manual-use default) is not what an agent round uses.
+#
+# In scope (everything here is query-time, so no trial re-indexes):
+#   rerank.enabled, rerank.top_n, retrieval.top_k, retrieval.fusion_mode and,
+#   under a fusion mode that reads them, retrieval.dense_weight.
+# Out of scope on purpose: retrieval.bm25_k1, retrieval.bm25_b, query expansion
+# above 1 (it calls an LLM the agent does not have), and every chunking.* key
+# (chunking is a separate re-index hypothesis, never part of this sweep).
+base_config: configs/champion.yaml
+
+study_name: hermes_hpo_retrieval_small
+# The study is file-backed so a restart resumes with load_if_exists. The agent
+# overrides this with sqlite:///<run_dir>/hpo.db; a local manual run that passes
+# --run-dir gets <run_dir>/hpo.db too.
+storage_uri: "sqlite:///hpo.db"
+n_trials: 12
+tune_chunking: false
+retrieval_only: true
+limit: 20
+seed: 0
+timeout: 2400
+
+metrics:
+  retrieval_only_targets:
+    - recall
+    - ndcg
+  aliases:
+    recall:
+      - recall
+      - R@5
+    ndcg:
+      - ndcg
+      - nDCG@5
+
+search_space:
+  hybrid:
+    # top_k is the candidate pool the reranker sees. Without rerank a pool wider
+    # than eval.cutoff_k does not move dense or bm25 scores.
+    top_k_choices:
+      - 10
+      - 20
+      - 50
+    query_expansion_num_min: 1
+    query_expansion_num_max: 1
+    # Sampled only when rerank is on; always <= the trial's top_k.
+    rerank_choices:
+      - false
+      - true
+    rerank_top_n_choices:
+      - 5
+      - 10
+    # `simple` is excluded: it ignores the fusion weights and scored worst.
+    fusion_modes:
+      - reciprocal_rerank
+      - relative_score
+      - dist_based_score
+    # Only read under relative_score / dist_based_score.
+    weights_only_with_score_fusion: true
+    dense_weight_choices:
+      - 0.3
+      - 0.5
+      - 0.7
+    # Neither moved a score on the Bundestag slice, so they stay out of the space.
+    tune_bm25_params: false

@@ -164,6 +164,41 @@ class DenseSearchSpace(ChunkingSearchSpace):
 class HybridSearchSpace(DenseSearchSpace):
     """Parameter bounds for Hybrid (Dense + BM25) retrieval paradigm."""
 
+    top_k_choices: list[int] | None = Field(
+        default=None,
+        description=(
+            "Explicit top_k candidates. When set, top_k is sampled from this list "
+            "instead of the top_k_min..top_k_max interval."
+        ),
+    )
+    rerank_choices: list[bool] | None = Field(
+        default=None,
+        description=(
+            "Sample rerank.enabled from this list. None leaves rerank exactly as the "
+            "base config has it, so a manual study can opt out of rerank entirely."
+        ),
+    )
+    rerank_top_n_choices: list[int] = Field(
+        default_factory=lambda: [5, 10],
+        description="rerank.top_n candidates, filtered to those <= the trial's top_k.",
+    )
+    tune_bm25_params: bool = Field(
+        default=True,
+        description=(
+            "Sample retrieval.bm25_k1 and retrieval.bm25_b. The shipped small agent "
+            "space turns this off, because neither moved a score under the default "
+            "fusion mode."
+        ),
+    )
+    weights_only_with_score_fusion: bool = Field(
+        default=True,
+        description=(
+            "Sample retrieval.dense_weight and bm25_weight only when fusion_mode reads "
+            "them (relative_score, dist_based_score). They are documented no-ops under "
+            "reciprocal_rerank and simple."
+        ),
+    )
+
     bm25_k1_min: float = Field(default=0.5, ge=0.0)
     bm25_k1_max: float = Field(default=3.0, ge=0.0)
     bm25_b_min: float = Field(default=0.1, ge=0.0, le=1.0)
@@ -171,6 +206,13 @@ class HybridSearchSpace(DenseSearchSpace):
 
     dense_weight_min: float = Field(default=0.0, ge=0.0, le=1.0)
     dense_weight_max: float = Field(default=1.0, ge=0.0, le=1.0)
+    dense_weight_choices: list[float] | None = Field(
+        default=None,
+        description=(
+            "Explicit dense_weight candidates. When set, the weight is sampled from "
+            "this list instead of the dense_weight_min..dense_weight_max interval."
+        ),
+    )
 
     fusion_modes: list[FusionMode] = Field(
         default_factory=lambda: [
@@ -189,26 +231,101 @@ class HybridSearchSpace(DenseSearchSpace):
             raise ValueError("bm25_b_min must be <= bm25_b_max")
         if self.dense_weight_min > self.dense_weight_max:
             raise ValueError("dense_weight_min must be <= dense_weight_max")
+        if self.dense_weight_choices is not None:
+            if not self.dense_weight_choices:
+                raise ValueError("dense_weight_choices must not be empty when it is set")
+            if any(not (0.0 <= choice <= 1.0) for choice in self.dense_weight_choices):
+                raise ValueError("dense_weight_choices must all be within 0.0 and 1.0")
+        if self.top_k_choices is not None:
+            if not self.top_k_choices:
+                raise ValueError("top_k_choices must not be empty when it is set")
+            if any(choice < 1 for choice in self.top_k_choices):
+                raise ValueError("top_k_choices must all be >= 1")
+        if self.rerank_choices is not None and not self.rerank_choices:
+            raise ValueError("rerank_choices must not be empty when it is set")
+        if self.rerank_top_n_choices and any(choice < 1 for choice in self.rerank_top_n_choices):
+            raise ValueError("rerank_top_n_choices must all be >= 1")
+        if not self.fusion_modes:
+            raise ValueError("fusion_modes must contain at least one mode")
         return self
+
+    @staticmethod
+    def fusion_modes_that_read_weights() -> set[str]:
+        """Fusion modes whose retriever weights change the ranking."""
+        return {FusionMode.RELATIVE_SCORE.value, FusionMode.DIST_BASED_SCORE.value}
+
+    def suggest_top_k(self, trial: optuna.Trial) -> int:
+        """top_k from the explicit candidates when the space names them."""
+        if not self.top_k_choices:
+            return trial.suggest_int("retrieval.top_k", self.top_k_min, self.top_k_max)
+        return int(trial.suggest_categorical("retrieval.top_k", list(self.top_k_choices)))
 
     def suggest_hybrid(self, trial: optuna.Trial, tune_chunking: bool = False) -> dict[str, Any]:
         """Sample trial parameters for hybrid retrieval."""
-        params = self.suggest_dense(trial, tune_chunking=tune_chunking)
-        params["retrieval.bm25_k1"] = trial.suggest_float(
-            "retrieval.bm25_k1", self.bm25_k1_min, self.bm25_k1_max
+        params: dict[str, Any] = {}
+        if tune_chunking:
+            params.update(self.suggest_chunking(trial))
+        top_k = self.suggest_top_k(trial)
+        params["retrieval.top_k"] = top_k
+        params["retrieval.query_expansion_num"] = trial.suggest_int(
+            "retrieval.query_expansion_num",
+            self.query_expansion_num_min,
+            self.query_expansion_num_max,
         )
-        params["retrieval.bm25_b"] = trial.suggest_float(
-            "retrieval.bm25_b", self.bm25_b_min, self.bm25_b_max
-        )
-        dense_w = trial.suggest_float(
-            "retrieval.dense_weight", self.dense_weight_min, self.dense_weight_max
-        )
-        params["retrieval.dense_weight"] = round(dense_w, 4)
-        params["retrieval.bm25_weight"] = round(1.0 - dense_w, 4)
-        params["retrieval.fusion_mode"] = trial.suggest_categorical(
+
+        fusion_mode = trial.suggest_categorical(
             "retrieval.fusion_mode", [m.value for m in self.fusion_modes]
         )
+        params["retrieval.fusion_mode"] = fusion_mode
+
+        if self.tune_bm25_params:
+            params["retrieval.bm25_k1"] = trial.suggest_float(
+                "retrieval.bm25_k1", self.bm25_k1_min, self.bm25_k1_max
+            )
+            params["retrieval.bm25_b"] = trial.suggest_float(
+                "retrieval.bm25_b", self.bm25_b_min, self.bm25_b_max
+            )
+
+        if not self.weights_only_with_score_fusion or fusion_mode in (
+            self.fusion_modes_that_read_weights()
+        ):
+            if self.dense_weight_choices:
+                dense_w = float(
+                    trial.suggest_categorical(
+                        "retrieval.dense_weight", list(self.dense_weight_choices)
+                    )
+                )
+            else:
+                dense_w = trial.suggest_float(
+                    "retrieval.dense_weight", self.dense_weight_min, self.dense_weight_max
+                )
+            params["retrieval.dense_weight"] = round(dense_w, 4)
+            params["retrieval.bm25_weight"] = round(1.0 - dense_w, 4)
+
+        params.update(self._suggest_rerank(trial, top_k))
         return params
+
+    def _suggest_rerank(self, trial: optuna.Trial, top_k: int) -> dict[str, Any]:
+        """Sample rerank on/off and, when on, a top_n inside the retrieved pool.
+
+        ``RAGConfig`` rejects ``rerank.top_n > retrieval.top_k`` and
+        ``eval.cutoff_k > rerank.top_n``, so only a ``top_n`` that fits the
+        trial's pool is suggested. A pool no candidate fits keeps rerank off
+        without suggesting the flag, so the study never records an enabled
+        rerank it did not measure.
+        """
+        if self.rerank_choices is None:
+            return {}
+        choices = sorted({choice for choice in self.rerank_top_n_choices if choice <= top_k})
+        if not choices:
+            return {"rerank.enabled": False}
+        enabled = bool(trial.suggest_categorical("rerank.enabled", list(self.rerank_choices)))
+        if not enabled:
+            return {"rerank.enabled": False}
+        return {
+            "rerank.enabled": True,
+            "rerank.top_n": int(trial.suggest_categorical("rerank.top_n", choices)),
+        }
 
 
 class GraphSearchSpace(ChunkingSearchSpace):
@@ -469,6 +586,26 @@ class HPOConfig(BaseModel):
     output: Path | str | None = Field(
         default=None,
         description="Optional destination path to export the best configuration YAML.",
+    )
+    run_dir: Path | str | None = Field(
+        default=None,
+        description=(
+            "Optional run directory for the HPO artifacts (hpo_trials.json, the "
+            "best-so-far YAML, and the default idx-cache). Defaults to the output "
+            "file's directory."
+        ),
+    )
+    seed: int | None = Field(
+        default=None,
+        description=(
+            "With a limit, draw a deterministic sample of that many rows with this "
+            "seed. Applied to every trial."
+        ),
+    )
+    timeout: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Optional wall-clock budget in seconds for the whole study.",
     )
     metrics: HPOMetricConfig = Field(
         default_factory=HPOMetricConfig, description="Target metrics configuration."

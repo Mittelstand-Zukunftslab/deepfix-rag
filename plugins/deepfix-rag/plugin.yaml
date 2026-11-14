@@ -9,6 +9,7 @@ compatibility:
 skills_directory: "../../.agents/skills"
 skills:
   - "../../.agents/skills/optimization-loop/SKILL.md"
+  - "../../.agents/skills/hpo-search/SKILL.md"
   - "../../.agents/skills/diagnostic-server/SKILL.md"
   - "../../.agents/skills/chunking-tuning/SKILL.md"
   - "../../.agents/skills/hybrid-fusion-tuning/SKILL.md"

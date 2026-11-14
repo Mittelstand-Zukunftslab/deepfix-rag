@@ -29,6 +29,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!web/src/lib/
 lib64/
 parts/
 sdist/
@@ -209,3 +210,6 @@ knowledge/
 *.db
 .env.bak*
 .agents/runs/
+
+# Scratch LanceDB indexes built by ad-hoc scripts under tests/
+tests/.idx_tmp/

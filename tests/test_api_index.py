@@ -9,13 +9,13 @@ from fastapi.testclient import TestClient
 from llama_index.core.embeddings import MockEmbedding
 import pytest
 
-from deepfix_rag.accounts import create_admin
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.schema import DataLoaderConfig, DataSourceType, RAGConfig, RetrievalBackend
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.data import DataLoader, LocalFileLoader
 from deepfix_rag.documents import prepare_workspace
 from deepfix_rag.indexing import IndexCoordinator, bind_locations
+from tests.identity import IdentityIssuer
 
 pytestmark = [pytest.mark.api, pytest.mark.integration]
 
@@ -53,7 +53,6 @@ def index_settings(tmp_path: Path) -> Settings:
     return Settings(
         PRODUCT_DATA_DIR=tmp_path / "private",
         WORKSPACE_DIR=tmp_path / "workspace",
-        ALLOWED_EMAIL_DOMAINS="example.com",
         WEB_ORIGIN="http://localhost:8080",
     )
 
@@ -132,7 +131,7 @@ def test_rebuild_switches_the_pointer_and_keeps_the_old_index_on_failure(
     assert ready.chunk_count > 0
     assert ready.document_count == 0
     pointer = workspace / "indexes" / "current"
-    assert pointer.is_symlink()
+    assert pointer.is_symlink() or (hasattr(pointer, "is_junction") and pointer.is_junction())
     assert Path(os.readlink(pointer)).name == ready.serving_build_id
     build_dir = workspace / "indexes" / "builds" / ready.serving_build_id
     assert (build_dir / "deepfix-build.json").is_file()
@@ -229,31 +228,20 @@ def test_graph_backend_is_rejected(index_settings: Settings) -> None:
     assert not builds.exists() or not any(builds.iterdir())
 
 
-def test_index_routes_enforce_role_conflict_and_errors(index_settings: Settings) -> None:
+def test_index_routes_enforce_role_conflict_and_errors(
+    index_settings: Settings, identity: IdentityIssuer
+) -> None:
     gate = Gate()
     embed_model = _gated_embedding(gate)
-    with TestClient(create_app(index_settings, embed_model=embed_model)) as client:
+    app = create_app(index_settings, embed_model=embed_model, token_verifier=identity.verifier())
+    with TestClient(app) as client:
         assert client.get("/index").status_code == 401
-        created = client.post(
-            "/auth/register",
-            json={"email": "ada@example.com", "password": "correct-horse"},
-        )
-        assert created.status_code == 201
-        signed_member = client.post(
-            "/auth/login",
-            json={"email": "ada@example.com", "password": "correct-horse"},
-        )
-        assert signed_member.status_code == 200
+        identity.sign_in(client, "ada@example.com")
         denied = client.post("/admin/index/rebuild")
         assert denied.status_code == 403
         assert denied.json()["detail"] == "Only admins can rebuild the index."
 
-        create_admin(index_settings.product_db_path, "admin@example.com", "correct-horse")
-        signed_in = client.post(
-            "/auth/login",
-            json={"email": "admin@example.com", "password": "correct-horse"},
-        )
-        assert signed_in.status_code == 200
+        identity.sign_in(client, "admin@example.com", "admin")
         missing = client.post("/admin/index/rebuild")
         assert missing.status_code == 400
         assert missing.json()["detail"] == "There are no documents to index."

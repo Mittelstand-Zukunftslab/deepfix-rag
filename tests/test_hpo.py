@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from optuna.trial import TrialState
 import pytest
 from typer.testing import CliRunner
 import yaml
@@ -48,7 +49,11 @@ def test_hyperparameter_opt_retrieval_only_run(
     )
 
     assert isinstance(result, HPOResult)
-    assert len(result.study.trials) == 2
+    # `n_trials` is the number of evaluated trials. A duplicate that Optuna
+    # redraws is pruned without spending an evaluation, so the study may hold
+    # more trial records than completed ones.
+    completed = [t for t in result.study.trials if t.state == TrialState.COMPLETE]
+    assert len(completed) == 2
     assert result.best_trial is not None
     assert result.best_config is not None
     assert "retrieval.dense_weight" in result.best_trial.params
@@ -59,8 +64,8 @@ def test_hyperparameter_opt_retrieval_only_run(
     assert "trial_number" in df.columns
 
     res_dict = result.to_dict()
-    assert res_dict["total_trials"] == 2
     assert res_dict["completed_trials"] == 2
+    assert res_dict["total_trials"] >= 2
 
     # Verify YAML export
     yaml_out = tmp_path / "best_optimized_config.yaml"

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Run before 01-hermes-setup. Stage2 refreshes the venv stamp from the volume
+# before the sandbox boot can replace an older hermes-otel plugin.
+set -eu
+
+if [ -x /command/with-contenv ]; then
+    exec /command/with-contenv /opt/hermes/.venv/bin/python /opt/deepfix/seal_volume.py
+fi
+
+exec /opt/hermes/.venv/bin/python /opt/deepfix/seal_volume.py

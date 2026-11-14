@@ -99,6 +99,18 @@ def mlflow_sqlite_experiment(tmp_path: Path):
 
 
 @pytest.mark.unit
+def test_a_missing_experiment_fails_before_scoring(tmp_path: Path) -> None:
+    previous = mlflow.get_tracking_uri()
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'empty-mlflow.db'}")
+    try:
+        with pytest.raises(RuntimeError, match="does not exist") as caught:
+            EvaluationTracker().setup()
+    finally:
+        mlflow.set_tracking_uri(previous)
+    assert settings.MLFLOW_DEV_RAG_EXPERIMENT in str(caught.value)
+
+
+@pytest.mark.unit
 def test_summary_mlflow_run_id_defaults_to_none_and_is_in_to_dict():
     """An unpersisted summary reports mlflow_run_id as null and still compares as a dict."""
     summary = EvaluationSummary(total=1, scored=1, errors=0, metrics={"recall": 1.0})

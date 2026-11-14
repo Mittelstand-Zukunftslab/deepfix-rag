@@ -1,0 +1,11 @@
+#!/bin/sh
+# Apply the DeepFix sandbox config after stage2 and before profile reconcile.
+# s6 stores the Compose environment in container_environment; with-contenv
+# puts those values back into the process environment for this script.
+set -eu
+
+if [ -x /command/with-contenv ]; then
+    exec /command/with-contenv /opt/deepfix/.venv/bin/python /opt/deepfix/sandbox_boot.py
+fi
+
+exec /opt/deepfix/.venv/bin/python /opt/deepfix/sandbox_boot.py

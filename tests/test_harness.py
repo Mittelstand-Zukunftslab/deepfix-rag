@@ -331,8 +331,8 @@ def test_seeded_limit_is_stable_and_not_the_prefix() -> None:
 
 
 def test_ledger_row_records_the_skill_and_omits_holdout(tmp_path: Path) -> None:
-    from deepfix_rag.accounts import connect
     from deepfix_rag.optimization import init_optimization
+    from deepfix_rag.storage import connect
 
     workspace = tmp_path / "workspace"
     run_dir = workspace / "runs" / "run-1"

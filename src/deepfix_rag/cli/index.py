@@ -16,9 +16,14 @@ from deepfix_rag.cli.ui import (
 )
 from deepfix_rag.cli.utils import load_rag_config
 from deepfix_rag.config.settings import settings
-from deepfix_rag.data import DataLoaderConfig
+from deepfix_rag.data import with_dataset_path
 from deepfix_rag.index_manifest import manifest_matches, read_index_manifest
-from deepfix_rag.pipeline import RAGWorkflow
+from deepfix_rag.pipeline import RAGWorkflow, index_workflow_timeout
+from deepfix_rag.run_bundle import (
+    RunBundleError,
+    S3ObjectStore,
+    clear_index_prefix,
+)
 
 
 def index_cmd(
@@ -31,11 +36,14 @@ def index_cmd(
         "-d",
         help="Path to corpus documents or dataset preset (overrides config.data.path_or_repo).",
     ),
-    index_dir: Path | None = typer.Option(
+    index_dir: str | None = typer.Option(
         None,
         "--index-dir",
         "-o",
-        help="Target directory for generated index (overrides config.retrieval.lancedb_index_dir).",
+        help=(
+            "Target directory or s3:// URI for the generated index "
+            "(overrides config.retrieval.lancedb_index_dir)."
+        ),
     ),
     force: bool = typer.Option(
         False, "--force", "-f", help="Overwrite existing index directory if present."
@@ -71,8 +79,9 @@ def index_cmd(
             json_output=json_output,
         )
 
+    # Keep this a string. pathlib.Path collapses s3://bucket/key to s3:/bucket/key.
     target_index_dir = (
-        str(index_dir)
+        index_dir
         if index_dir is not None
         else (rag_config.retrieval.lancedb_index_dir if rag_config.retrieval else None)
     )
@@ -84,7 +93,7 @@ def index_cmd(
         )
 
     rag_config.retrieval.lancedb_index_dir = str(target_index_dir)
-    rag_config.data = DataLoaderConfig(path_or_repo=target_dataset)
+    rag_config.data = with_dataset_path(rag_config.data, target_dataset)
 
     if not str(target_index_dir).startswith("s3://") and manifest_matches(
         target_index_dir, rag_config
@@ -120,9 +129,11 @@ def index_cmd(
                 local_path.mkdir(parents=True, exist_ok=True)
         else:
             local_path.mkdir(parents=True, exist_ok=True)
+    elif force:
+        _clear_remote_index(str(target_index_dir), json_output=json_output)
 
     try:
-        workflow = RAGWorkflow(config=rag_config)
+        workflow = RAGWorkflow(config=rag_config, timeout=index_workflow_timeout())
 
         print_info("Triggering asynchronous RAGWorkflow data ingestion...")
 
@@ -159,3 +170,34 @@ def index_cmd(
         print_success(
             f"Indexed documents successfully via Workflow into LanceDB at {target_index_dir}."
         )
+
+
+def _clear_remote_index(uri: str, *, json_output: bool) -> None:
+    """Delete objects under this index URI before a forced rebuild.
+
+    The prefix comes from the URI itself and refuses an empty path, so a
+    force rebuild of ``s3://bucket/dev`` cannot wipe the rest of the bucket.
+    """
+    if not settings.S3_ACCESS_KEY_ID or not settings.S3_SECRET_ACCESS_KEY:
+        emit_error(
+            "S3 credentials are not configured; cannot clear the remote index.",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+        )
+    store = S3ObjectStore(
+        endpoint_url=settings.S3_ENDPOINT_URL,
+        access_key_id=settings.S3_ACCESS_KEY_ID,
+        secret_access_key=settings.S3_SECRET_ACCESS_KEY,
+        region=settings.S3_REGION,
+    )
+    try:
+        removed = clear_index_prefix(store, uri)
+    except RunBundleError as exc:
+        emit_error(str(exc), code=EXIT_VALIDATION_ERROR, json_output=json_output)
+    except Exception:
+        emit_error(
+            f"Could not clear the index prefix at {uri}.",
+            code=EXIT_RUNTIME_ERROR,
+            json_output=json_output,
+        )
+    print_info(f"Removed {removed} objects under {uri}.")

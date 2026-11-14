@@ -2,115 +2,53 @@
 # Credentials are read from .env (see example.env):
 #   MEMGRAPH_USERNAME, MEMGRAPH_PASSWORD
 #   FALKORDB_PASSWORD
-#   HERMES_DASHBOARD, HERMES_DASHBOARD_BASIC_AUTH_*, API_SERVER_*
+#   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+#   API_SERVER_KEY, OPENROUTER_API_KEY, HERMES_CHAT_API_SERVER_KEY
+#   OPTIMIZATION_AGENT, HERMES_BASE_URL
+#   HERMES_S3_ACCESS_KEY_ID, HERMES_S3_SECRET_ACCESS_KEY
 #   MLFLOW_BACKEND_STORE_URI,
-#   MLFLOW_ALLOWED_HOSTS, MLFLOW_CORS_ALLOWED_ORIGINS
-#   DEEPFIX_LLM_API_KEY, DEEPFIX_LLM_BASE_URL, DEEPFIX_LLM_MODEL_NAME, etc.
+#   MLFLOW_SERVER_ALLOWED_HOSTS, MLFLOW_SERVER_CORS_ALLOWED_ORIGINS
+#   MLFLOW_EXPERIMENT_ID, MLFLOW_DEV_RAG_EXPERIMENT
 #   DEEPFIX_SERVER_DATABASE_URL
+#   BETTER_AUTH_SECRET, WEB_ORIGIN, API_INTERNAL_URL, AUTH_JWKS_URL, ALLOWED_EMAIL_DOMAINS
+#   LLM_API_KEY, EMBEDDING_API_KEY, COHERE_API_KEY
+#   LLM_MODEL, LLM_JUDGE_MODEL, EMBEDDING_MODEL, COHERE_MODEL
+#   HERMES_MODEL, HERMES_MODEL_PROVIDER
+#   DEEPFIX_LLM_MODEL_NAME
 #
 #   docker compose up -d
 
+include:
+  - compose.hermes.yml
+  - compose.graphdb.yml
+
 services:
-  memgraph:
-    image: memgraph/memgraph-mage:3.13.1
-    container_name: memgraph-mage
-    environment:
-      MEMGRAPH_USER: ${MEMGRAPH_USERNAME:-neo4j}
-      MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-neo4j}
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rustfs
     ports:
-      - "7687:7687"
+      - "9000:9000" # S3 API
+      - "9001:9001" # Console
+    environment:
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-rustfsadmin}
     mem_limit: 1G
     volumes:
-      - memgraph_lib:/var/lib/memgraph
-      - memgraph_log:/var/log/memgraph
-    command: [ "--log-level=TRACE" ]
-    restart: unless-stopped
-
-  falkordb:
-    image: falkordb/falkordb:v4.20.3-alpine
-    container_name: falkordb
-    mem_limit: 1G
-    ports:
-      - "6379:6379"
-    environment:
-      # Empty FALKORDB_PASSWORD leaves the server open, matching the app default.
-      # A non-empty value enables Redis AUTH with that same password.
-      REDIS_ARGS: ${FALKORDB_PASSWORD:+--requirepass ${FALKORDB_PASSWORD}}
-      FALKORDB_ARGS: THREAD_COUNT 4
-    volumes:
-      - falkordb_data:/var/lib/falkordb/data
-    restart: unless-stopped
-
-  hermes:
-    image: nousresearch/hermes-agent:v2026.6.19
-    container_name: hermes
-    ports:
-      - "9119:9119" # dashboard
-      - "8642:8642" # OpenAI-compatible API
-    environment:
-      HERMES_DASHBOARD: "1"
-      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
-      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-change-me-please}
-      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-change-me++7iYYwx7Vdbz1MF+EPXeechLYLxPDFhKb0tuw4eSzspA}
-      API_SERVER_ENABLED: "true"
-      API_SERVER_HOST: "0.0.0.0"
-      API_SERVER_KEY: ${API_SERVER_KEY:-change-me-please}
-      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
-      MLFLOW_OTLP_ENDPOINT: ${MLFLOW_OTLP_ENDPOINT:-http://mlflow:5000/v1/traces}
-      MLFLOW_EXPERIMENT_ID: ${MLFLOW_EXPERIMENT_ID:-0}
-      DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-http://diagnostic-agent:8844}
-      PYTHONPATH: /opt/data/.python-packages
-    depends_on:
-      mlflow:
-        condition: service_healthy
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        echo "==> Setting up Hermes OpenTelemetry plugin..."
-        if [ ! -d "/opt/data/.python-packages/opentelemetry" ]; then
-          mkdir -p /opt/data/.python-packages
-          uv pip install --target /opt/data/.python-packages 'opentelemetry-api<2' 'opentelemetry-sdk<2' 'opentelemetry-exporter-otlp-proto-http<2' || true
-        fi
-        export PYTHONPATH="/opt/data/.python-packages:$${PYTHONPATH}"
-
-        if [ ! -d "/opt/data/plugins/hermes-otel" ]; then
-          hermes plugins install briancaffey/hermes-otel || true
-        fi
-        hermes plugins enable hermes_otel 2>/dev/null || true
-
-        CONFIG_DIR="$${HOME:-/opt/data}/.hermes/plugins/hermes_otel"
-        mkdir -p "$$CONFIG_DIR" "/opt/data/plugins/hermes_otel"
-        cat <<EOF | sed 's/^ *|//' > "$$CONFIG_DIR/config.yaml"
-        |enabled: true
-        |force_flush_on_session_end: true
-        |capture_sender_id: true
-        |capture_conversation_history: true
-        |
-        |backends:
-        |  - type: otlp
-        |    name: mlflow
-        |    endpoint: $${MLFLOW_OTLP_ENDPOINT}
-        |    metrics: false
-        |    logs: false
-        |    headers:
-        |      x-mlflow-experiment-id: "$${MLFLOW_EXPERIMENT_ID}"
-        EOF
-
-        cp "$$CONFIG_DIR/config.yaml" "/opt/data/plugins/hermes_otel/config.yaml" 2>/dev/null || true
-        if [ -d "/opt/data/plugins/hermes-otel" ]; then
-          cp "$$CONFIG_DIR/config.yaml" "/opt/data/plugins/hermes-otel/config.yaml" 2>/dev/null || true
-        fi
-
-        echo "==> Starting Hermes gateway..."
-        exec hermes gateway run --accept-hooks
-    volumes:
-      - hermes_data:/opt/data
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: "2.0"
+      - rustfs_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - "http://127.0.0.1:9000/health"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   mlflow:
@@ -122,10 +60,12 @@ services:
       - mlflow_artifacts:/opt/mlflow/data
     environment:
       MLFLOW_BACKEND_STORE_URI: sqlite:////opt/mlflow/data/mlflow.db
-      MLFLOW_SERVER_ALLOWED_HOSTS: "*"
-      MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: "*"
-    mem_limit: 1G
-    command: mlflow server --host 0.0.0.0 --port 5000 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/
+      # MLflow 3.x matches the Host header exactly (hostname and hostname:port
+      # are different entries). Setting this replaces the localhost defaults.
+      MLFLOW_SERVER_ALLOWED_HOSTS: "${MLFLOW_SERVER_ALLOWED_HOSTS:-hermes,localhost,diagnostic-agent,mlflow,mlflow:5000,localhost:5000,127.0.0.1,127.0.0.1:5000,backend-api,deepfix-mlflow.mittelstand-zukunftslab.de}"
+      MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: "${MLFLOW_SERVER_CORS_ALLOWED_ORIGINS:-http://hermes,http://localhost,http://diagnostic-agent,http://mlflow:5000,http://backend-api:8000,https://deepfix-mlflow.mittelstand-zukunftslab.de}"
+    mem_limit: 2G
+    command: mlflow server --host 0.0.0.0 --port 5000 --workers 1 --artifacts-destination /opt/mlflow/data/artifacts --default-artifact-root mlflow-artifacts:/
     healthcheck:
       test:
         - CMD
@@ -146,11 +86,15 @@ services:
     environment:
       DEEPFIX_LLM_API_KEY: ${DEEPFIX_LLM_API_KEY:-}
       DEEPFIX_LLM_BASE_URL: ${DEEPFIX_LLM_BASE_URL:-https://openrouter.ai/api/v1}
-      DEEPFIX_LLM_MODEL_NAME: ${DEEPFIX_LLM_MODEL_NAME:-qwen/qwen3.8-flash}
+      # The diagnostic server's own model. No default here: example.env sets it.
+      DEEPFIX_LLM_MODEL_NAME: ${DEEPFIX_LLM_MODEL_NAME:-}
       DEEPFIX_LLM_TEMPERATURE: ${DEEPFIX_LLM_TEMPERATURE:-0.7}
       DEEPFIX_LLM_MAX_TOKENS: ${DEEPFIX_LLM_MAX_TOKENS:-8000}
       DEEPFIX_LLM_CACHE: ${DEEPFIX_LLM_CACHE:-1}
       DEEPFIX_LLM_TRACK_USAGE: ${DEEPFIX_LLM_TRACK_USAGE:-1}
+      # The diagnostic server does not import this package. LiteLLM reads its own flag.
+      DEEPFIX_LLM_DROP_PARAMS: ${DEEPFIX_LLM_DROP_PARAMS:-1}
+      LITELLM_DROP_PARAMS: ${DEEPFIX_LLM_DROP_PARAMS:-1}
       DEEPFIX_SEARCH_PROVIDER: ${DEEPFIX_SEARCH_PROVIDER:-duckduckgo}
       NUM_REASONING_CHAINS: ${NUM_REASONING_CHAINS:-1}
       DEEPFIX_SERVER_DATABASE_URL: ${DEEPFIX_SERVER_DATABASE_URL:-sqlite:////root/.deepfix/deepfix_server.db}
@@ -171,7 +115,7 @@ services:
         export PATH="/root/.local/bin:$${PATH}"
         if ! command -v deepfix-server >/dev/null 2>&1; then
           echo "==> Installing deepfix-server tool via uv..."
-          uv tool install "git+https://github.com/delcaux-labs/deepfix.git#subdirectory=packages/deepfix-server"
+          uv tool install --torch-backend cpu "git+https://github.com/delcaux-labs/deepfix.git#subdirectory=packages/deepfix-server"
         fi
         mkdir -p /root/.deepfix
         echo "==> Starting deepfix-server on 0.0.0.0:8844..."
@@ -188,11 +132,95 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  backend-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: deepfix-api
+    container_name: deepfix-api
+    ports:
+      - "8000:8000"
+    environment:
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://web:8080}
+      AUTH_JWKS_URL: ${AUTH_JWKS_URL:-http://web:8080/api/auth/jwks}
+      PRODUCT_DATA_DIR: /data/product
+      WORKSPACE_DIR: /data/workspace
+      MEMGRAPH_URL: bolt://memgraph:7687
+      MEMGRAPH_USERNAME: ${MEMGRAPH_USERNAME:-neo4j}
+      MEMGRAPH_PASSWORD: ${MEMGRAPH_PASSWORD:-neo4j}
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: ${FALKORDB_PORT:-6379}
+      FALKORDB_PASSWORD: ${FALKORDB_PASSWORD:-}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://rustfs:9000}
+      S3_URI: ${S3_URI:-s3://deepfix-index/dev}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-rustfsadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-rustfsadmin}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MLFLOW_EXPERIMENT_ID: ${MLFLOW_EXPERIMENT_ID:-}
+      MLFLOW_DEV_RAG_EXPERIMENT: ${MLFLOW_DEV_RAG_EXPERIMENT:-dev_rag_experiment}
+      DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-http://diagnostic-agent:8844}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      # Model ids come from .env. There is no code default: `deepfix eval` and
+      # the judge fail naming the variable when it is empty.
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_JUDGE_MODEL: ${LLM_JUDGE_MODEL:-}
+      DEEPFIX_LLM_DROP_PARAMS: ${DEEPFIX_LLM_DROP_PARAMS:-1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://openrouter.ai/api/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      COHERE_BASE_URL: ${COHERE_BASE_URL:-https://openrouter.ai/api/v1}
+      COHERE_MODEL: ${COHERE_MODEL:-}
+      DEEPFIX_LLM_API_KEY: ${DEEPFIX_LLM_API_KEY:-}
+      DEEPFIX_LLM_BASE_URL: ${DEEPFIX_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      DEEPFIX_LLM_MODEL_NAME: ${DEEPFIX_LLM_MODEL_NAME:-}
+      OPTIMIZATION_MIN_DEV_QUESTIONS: ${OPTIMIZATION_MIN_DEV_QUESTIONS:-50}
+      OPTIMIZATION_MIN_NEW_DEV_QUESTIONS: ${OPTIMIZATION_MIN_NEW_DEV_QUESTIONS:-10}
+      OPTIMIZATION_MIN_HOLDOUT_QUESTIONS: ${OPTIMIZATION_MIN_HOLDOUT_QUESTIONS:-15}
+      OPTIMIZATION_MIN_PRIMARY_DELTA: ${OPTIMIZATION_MIN_PRIMARY_DELTA:-0.025}
+      OPTIMIZATION_SECONDARY_TOLERANCE: ${OPTIMIZATION_SECONDARY_TOLERANCE:--0.01}
+      OPTIMIZATION_RUN_TIMEOUT_HOURS: ${OPTIMIZATION_RUN_TIMEOUT_HOURS:-3}
+      OPTIMIZATION_HEARTBEAT_STALL_MINUTES: ${OPTIMIZATION_HEARTBEAT_STALL_MINUTES:-5}
+      OPTIMIZATION_AGENT: ${OPTIMIZATION_AGENT:-hermes}
+      HERMES_BASE_URL: ${HERMES_BASE_URL:-http://hermes:8642}
+      # The API posts this id on POST /v1/runs. It must match the sandbox's model.
+      HERMES_MODEL: ${HERMES_MODEL:-}
+      HERMES_MODEL_PROVIDER: ${HERMES_MODEL_PROVIDER:-openrouter}
+      API_SERVER_KEY: ${API_SERVER_KEY:-}
+    volumes:
+      - api_data:/data
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+    image: deepfix-web
+    container_name: deepfix-web
+    ports:
+      - "8080:8080"
+    environment:
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_URL: ${WEB_ORIGIN:-http://localhost:8080}
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://backend-api:8000}
+      AUTH_DATABASE_PATH: /data/auth.db
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
+    volumes:
+      - web_auth:/data
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   memgraph_lib:
   memgraph_log:
   falkordb_data:
+  rustfs_data:
   hermes_data:
   mlflow_artifacts:
   deepfix_tool_data:
   deepfix_server_data:
+  web_auth:
+  api_data:

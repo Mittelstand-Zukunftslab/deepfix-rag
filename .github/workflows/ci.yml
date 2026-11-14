@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, dev, feature/ui]
+    branches: [main, dev, feature/ui, feat/hermes-optimizer]
   pull_request:
 
 jobs:
@@ -11,7 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv sync --frozen
+      # uv hardlinks from its cache by default. A hardlinked file inside the
+      # checkout trips NLTK's pathsec guard (CWE-59) during the dataset tests.
+      - run: uv sync --frozen --link-mode=copy
       - run: uv run ruff check src/deepfix_rag/api tests/test_api_skeleton.py
       - run: uv run ruff format --check src/deepfix_rag/api tests/test_api_skeleton.py
       - run: uv run pytest -m api -v
@@ -21,10 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv sync --frozen
+      - run: uv sync --frozen --link-mode=copy
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run pytest -m "(unit or cli) and not network" -v
+      # The adopter path: `uv tool install` from this checkout, then both
+      # entry points. Marked integration, so the marker filter above skips it.
+      - run: uv run pytest tests/test_skills.py -k tool_install -v
 
   web:
     runs-on: ubuntu-latest
@@ -33,9 +38,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # The skills installer needs Node 22.20+; the web build uses the same LTS.
+          node-version: "22.20"
       - uses: oven-sh/setup-bun@v2
-      - run: uv sync --frozen
+      - run: uv sync --frozen --link-mode=copy
       - run: bun install --frozen-lockfile
         working-directory: web
       - name: Regenerate the API client from FastAPI's schema

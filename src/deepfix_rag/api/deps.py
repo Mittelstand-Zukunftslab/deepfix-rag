@@ -2,9 +2,16 @@
 
 from fastapi import HTTPException, Request
 
-from deepfix_rag.accounts import COOKIE_NAME, User, user_for_session
-from deepfix_rag.api.errors import FORBIDDEN, UNAUTHORIZED
+from deepfix_rag.api.errors import FORBIDDEN, SERVICE_UNAVAILABLE, UNAUTHORIZED
+from deepfix_rag.api.identity import (
+    IdentityUnavailableError,
+    InvalidTokenError,
+    TokenVerifier,
+    User,
+)
 from deepfix_rag.config.settings import Settings
+
+_BEARER = "bearer "
 
 
 def get_settings(request: Request) -> Settings:
@@ -13,19 +20,22 @@ def get_settings(request: Request) -> Settings:
 
 
 def current_user(request: Request) -> User:
-    """Resolve the session cookie, or 401 when there is no valid session."""
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
+    """Resolve the web app's bearer token, or 401 when there is no valid token."""
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith(_BEARER):
         raise HTTPException(status_code=UNAUTHORIZED, detail="Sign in to continue.")
-    user = user_for_session(get_settings(request).product_db_path, token)
-    if user is None:
-        raise HTTPException(status_code=UNAUTHORIZED, detail="Sign in to continue.")
-    return user
+    verifier: TokenVerifier = request.app.state.token_verifier
+    try:
+        return verifier.verify(header[len(_BEARER) :].strip())
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=UNAUTHORIZED, detail="Sign in to continue.") from exc
+    except IdentityUnavailableError as exc:
+        raise HTTPException(status_code=SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
-def require_admin(request: Request) -> User:
-    """Allow the request only for an admin session."""
+def require_admin(request: Request, detail: str = "Only admins can do this.") -> User:
+    """Allow the request only for an admin. The web app checks first; this is the backstop."""
     user = current_user(request)
     if user.role != "admin":
-        raise HTTPException(status_code=FORBIDDEN, detail="Only admins can change roles.")
+        raise HTTPException(status_code=FORBIDDEN, detail=detail)
     return user

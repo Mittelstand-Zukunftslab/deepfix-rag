@@ -1,13 +1,84 @@
 """Global pytest fixtures and configuration for deepfix_rag tests."""
 
 import asyncio
+import json
+import os
 from pathlib import Path
+import uuid
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from jwt.algorithms import OKPAlgorithm
 import pytest
 from typer.testing import CliRunner
 
 from deepfix_rag.config.schema import DataLoaderConfig, RAGConfig
+from deepfix_rag.config.settings import settings
 from deepfix_rag.pipeline import RAGWorkflow
+from tests.identity import IdentityIssuer
+
+# Fixture model ids. Tests never read the deployment model names, so the suite
+# behaves the same with and without a repository .env.
+FIXTURE_EMBEDDING_MODEL = "fixture/embedding-test"
+FIXTURE_RERANKER_MODEL = "fixture/reranker-test"
+FIXTURE_LLM_MODEL = "fixture/generation-test"
+FIXTURE_JUDGE_MODEL = "fixture/judge-test"
+FIXTURE_HERMES_MODEL = "fixture/hermes-test"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _fixture_model_env() -> None:
+    """Fill in a model id only where the environment left one empty.
+
+    Model ids come from the environment in production, and no default is in the
+    package. CI has no ``.env``, so the ids are pinned here to keep the suite
+    reproducible. A developer's ``.env`` still wins, which matters for the
+    integration tests that call a live embedding endpoint.
+    """
+    defaults = {
+        "LLM_MODEL": FIXTURE_LLM_MODEL,
+        "LLM_JUDGE_MODEL": FIXTURE_JUDGE_MODEL,
+        "EMBEDDING_MODEL": FIXTURE_EMBEDDING_MODEL,
+        "COHERE_MODEL": FIXTURE_RERANKER_MODEL,
+        "HERMES_MODEL": FIXTURE_HERMES_MODEL,
+    }
+    previous = {name: getattr(settings, name) for name in defaults}
+    for name, value in defaults.items():
+        if not getattr(settings, name):
+            setattr(settings, name, value)
+    yield
+    for name, value in previous.items():
+        setattr(settings, name, value)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _plain_help_output() -> None:
+    """Render `--help` without ANSI colour so the CLI contract tests can read it.
+
+    Typer draws help with Rich, which colorizes option names when it thinks the
+    terminal can show colour. Its highlighter splits a flag into separate spans:
+    ``--config`` comes out as ``ESC[1m-ESC[0mESC[1m-configESC[0m``, so the literal
+    string is never in ``stdout``. A developer's shell often has ``TERM=dumb``
+    and sees plain text, while a GitHub runner leaves ``TERM`` unset and gets the
+    split form, which is why six contract tests passed locally and failed in CI.
+    ``TERM=dumb`` is the one value Rich treats as no colour regardless.
+    """
+    previous = os.environ.get("TERM")
+    os.environ["TERM"] = "dumb"
+    yield
+    if previous is None:
+        os.environ.pop("TERM", None)
+    else:
+        os.environ["TERM"] = previous
+
+
+@pytest.fixture(scope="session")
+def identity() -> IdentityIssuer:
+    """Fixture providing a signing key and the matching verifier for API tests."""
+    private_key = Ed25519PrivateKey.generate()
+    kid = uuid.uuid4().hex
+    public_jwk = json.loads(OKPAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk.update({"kid": kid, "alg": "EdDSA", "use": "sig"})
+    return IdentityIssuer(private_key=private_key, kid=kid, jwks={"keys": [public_jwk]})
 
 
 @pytest.fixture

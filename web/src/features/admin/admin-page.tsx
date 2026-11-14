@@ -18,8 +18,12 @@ import {
 import { formatDateTime } from "@/lib/format";
 import type { OptimizationStatus } from "@/services/optimization-service";
 
-const AGENT_UNAVAILABLE =
-  "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.";
+const HERMES_UNAVAILABLE =
+  "Hermes is not set up on this server, so a run cannot start. The schedule and history are still shown.";
+
+function unavailableMessage(status: OptimizationStatus): string {
+  return status.agent_unavailable_message || HERMES_UNAVAILABLE;
+}
 
 const STATUS_LABEL: Record<OptimizationStatus["runs"][number]["status"], string> = {
   running: "Running",
@@ -45,19 +49,24 @@ export function OptimizationPage({
   status,
   onRun,
   onSave,
+  onCancel,
 }: {
   status: OptimizationStatus;
   onRun: () => Promise<void>;
   onSave: (cron: string, enabled: boolean) => Promise<void>;
+  onCancel: (runId: string) => Promise<void>;
 }) {
-  const running = status.runs.some((run) => run.status === "running");
+  const runningRun = status.runs.find((run) => run.status === "running") ?? null;
+  const running = runningRun !== null;
   const [cron, setCron] = useState(status.cron);
   const [enabled, setEnabled] = useState(status.enabled);
   const [dirty, setDirty] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     if (dirty) return;
@@ -95,6 +104,21 @@ export function OptimizationPage({
     }
   };
 
+  const cancel = async () => {
+    if (!runningRun) return;
+    setCancelError(null);
+    setCancelling(true);
+    try {
+      await onCancel(runningRun.run_id);
+    } catch (error) {
+      setCancelError(
+        error instanceof Error ? error.message : "Unable to reach the server. Try again.",
+      );
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const changes = Object.entries(status.champion_diff);
 
   return (
@@ -112,16 +136,26 @@ export function OptimizationPage({
               Run now
             </Button>
             {running ? <p role="status">A run is already in progress.</p> : null}
+            {runningRun ? (
+              <Button type="button" variant="destructive" onClick={cancel} disabled={cancelling}>
+                Cancel run
+              </Button>
+            ) : null}
             {runError ? (
               <p role="alert" className="text-sm font-medium text-destructive">
                 {runError}
+              </p>
+            ) : null}
+            {cancelError ? (
+              <p role="alert" className="text-sm font-medium text-destructive">
+                {cancelError}
               </p>
             ) : null}
           </div>
         }
       />
 
-      {status.agent_available ? null : <p>{AGENT_UNAVAILABLE}</p>}
+      {status.agent_available ? null : <p>{unavailableMessage(status)}</p>}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="rounded-2xl shadow-soft">

@@ -17,7 +17,9 @@ import type { OptimizationStatus } from "@/services/optimization-service";
 
 function status(overrides: Partial<OptimizationStatus> = {}): OptimizationStatus {
   return {
+    agent: "hermes",
     agent_available: true,
+    agent_unavailable_message: null,
     champion_config_path: "/workspace/configs/champion.yaml",
     champion_diff: {},
     cron: "0 2 * * *",
@@ -28,6 +30,13 @@ function status(overrides: Partial<OptimizationStatus> = {}): OptimizationStatus
     ...overrides,
   };
 }
+
+const HERMES_UNAVAILABLE =
+  "Hermes is not set up on this server, so a run cannot start. The schedule and history are still shown.";
+
+// OpenHands was removed; its copy must never come back as the fallback.
+const OPENHANDS_COPY =
+  "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.";
 
 const skippedRun: OptimizationStatus["runs"][number] = {
   run_id: "run-skipped",
@@ -59,29 +68,49 @@ describe("Optimization screen", () => {
     render(<OptimizationDenied />);
     expect(screen.getByRole("heading", { name: "Optimization" })).toBeTruthy();
     expect(screen.getByText("This page is only available to admins.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
-  it("disables Run now when OpenHands is not set up and still shows the schedule", () => {
+  it("falls back to the Hermes message when the server names no agent", () => {
     render(
       <OptimizationPage
-        status={status({ agent_available: false })}
+        status={status({ agent_available: false, agent_unavailable_message: null })}
         onRun={async () => {}}
         onSave={async () => {}}
+        onCancel={async () => {}}
       />,
     );
-    expect(
-      screen.getByText(
-        "OpenHands is not set up on this server, so a run cannot start. The schedule and history are still shown.",
-      ),
-    ).toBeTruthy();
+    expect(screen.getByText(HERMES_UNAVAILABLE)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
     expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
     expect(screen.getByLabelText("Schedule")).toHaveValue("0 2 * * *");
     expect(screen.getByRole("switch", { name: "Enabled" })).toBeTruthy();
     expect(screen.getByText("No optimization runs yet.")).toBeTruthy();
     expect(screen.getByText("No differences from the previous champion.")).toBeTruthy();
+  });
+
+  it("names Hermes when that agent is not set up and still shows the schedule", () => {
+    const hermes =
+      "Hermes is not set up on this server, so a run cannot start. The schedule and history are still shown.";
+    render(
+      <OptimizationPage
+        status={status({
+          agent: "hermes",
+          agent_available: false,
+          agent_unavailable_message: hermes,
+        })}
+        onRun={async () => {}}
+        onSave={async () => {}}
+        onCancel={async () => {}}
+      />,
+    );
+    expect(screen.getByText(hermes)).toBeTruthy();
+    expect(screen.queryByText(OPENHANDS_COPY)).toBeNull();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    expect(screen.getByLabelText("Schedule")).toHaveValue("0 2 * * *");
   });
 
   it("disables Run now and notes that a run is already in progress", () => {
@@ -94,10 +123,12 @@ describe("Optimization screen", () => {
         })}
         onRun={async () => {}}
         onSave={async () => {}}
+        onCancel={async () => {}}
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent("A run is already in progress.");
     expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
   });
 
   it("shows a skipped reason with the actual counts", () => {
@@ -106,8 +137,10 @@ describe("Optimization screen", () => {
         status={status({ runs: [skippedRun] })}
         onRun={async () => {}}
         onSave={async () => {}}
+        onCancel={async () => {}}
       />,
     );
+    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
     expect(screen.getByText("Skipped: 14 labeled questions in dev, 50 needed.")).toBeTruthy();
     expect(screen.getByText("Skipped")).toBeTruthy();
     expect(screen.getByText("Manual")).toBeTruthy();
@@ -122,6 +155,7 @@ describe("Optimization screen", () => {
         })}
         onRun={async () => {}}
         onSave={async () => {}}
+        onCancel={async () => {}}
       />,
     );
     expect(screen.getByText("/workspace/configs/champion.yaml")).toBeTruthy();
@@ -132,7 +166,14 @@ describe("Optimization screen", () => {
     const onSave = vi.fn(async () => {
       throw new Error("Enter five cron fields, such as 0 2 * * *.");
     });
-    render(<OptimizationPage status={status()} onRun={async () => {}} onSave={onSave} />);
+    render(
+      <OptimizationPage
+        status={status()}
+        onRun={async () => {}}
+        onSave={onSave}
+        onCancel={async () => {}}
+      />,
+    );
     fireEvent.change(screen.getByLabelText("Schedule"), { target: { value: "not a cron" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     const alert = await screen.findByRole("alert");
@@ -147,12 +188,24 @@ describe("Optimization screen", () => {
     const saved = status({ cron: "15 3 * * *", next_run_at: "2026-10-13T01:15:00.000Z" });
     const onSave = vi.fn(async () => {});
     const view = render(
-      <OptimizationPage status={status()} onRun={async () => {}} onSave={onSave} />,
+      <OptimizationPage
+        status={status()}
+        onRun={async () => {}}
+        onSave={onSave}
+        onCancel={async () => {}}
+      />,
     );
     fireEvent.change(screen.getByLabelText("Schedule"), { target: { value: "15 3 * * *" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith("15 3 * * *", true));
-    view.rerender(<OptimizationPage status={saved} onRun={async () => {}} onSave={onSave} />);
+    view.rerender(
+      <OptimizationPage
+        status={saved}
+        onRun={async () => {}}
+        onSave={onSave}
+        onCancel={async () => {}}
+      />,
+    );
     await waitFor(() => expect(screen.getByLabelText("Schedule")).toHaveValue("15 3 * * *"));
     expect(screen.getByText(/Next run .+ \(Europe\/Berlin\)\./)).toBeTruthy();
   });
@@ -165,6 +218,7 @@ describe("Optimization screen", () => {
         status={status({ enabled: false, next_run_at: null })}
         onRun={onRun}
         onSave={onSave}
+        onCancel={async () => {}}
       />,
     );
     expect(screen.getByText("Paused. Run now still starts a job.")).toBeTruthy();
@@ -175,5 +229,68 @@ describe("Optimization screen", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Enabled" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith("0 2 * * *", true));
+    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
+  });
+
+  it("cancels the running row and shows Failed with reason Cancelled on the next status", async () => {
+    const onCancel = vi.fn(async () => {});
+    const running = status({
+      runs: [
+        { ...skippedRun, run_id: "run-live", status: "running", ended_at: null, reason: null },
+      ],
+    });
+    const view = render(
+      <OptimizationPage
+        status={running}
+        onRun={async () => {}}
+        onSave={async () => {}}
+        onCancel={onCancel}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
+    await waitFor(() => expect(onCancel).toHaveBeenCalledWith("run-live"));
+    view.rerender(
+      <OptimizationPage
+        status={status({
+          runs: [
+            {
+              ...skippedRun,
+              run_id: "run-live",
+              status: "failed",
+              ended_at: "2026-10-12T12:05:00.000Z",
+              reason: "Cancelled",
+            },
+          ],
+        })}
+        onRun={async () => {}}
+        onSave={async () => {}}
+        onCancel={onCancel}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
+    expect(screen.getByText("Failed")).toBeTruthy();
+    expect(screen.getByText("Cancelled")).toBeTruthy();
+  });
+
+  it("shows the cancel error and keeps the button while the run is still running", async () => {
+    const onCancel = vi.fn(async () => {
+      throw new Error("That run is not in progress.");
+    });
+    render(
+      <OptimizationPage
+        status={status({
+          runs: [
+            { ...skippedRun, run_id: "run-live", status: "running", ended_at: null, reason: null },
+          ],
+        })}
+        onRun={async () => {}}
+        onSave={async () => {}}
+        onCancel={onCancel}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("That run is not in progress.");
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
   });
 });

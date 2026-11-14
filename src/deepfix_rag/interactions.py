@@ -6,8 +6,8 @@ import hashlib
 from pathlib import Path
 import uuid
 
-from deepfix_rag.accounts import connect
 from deepfix_rag.pipeline import RetrievalResult
+from deepfix_rag.storage import connect
 
 InteractionKind = str
 
@@ -30,6 +30,7 @@ class Interaction:
     interaction_id: str
     kind: str
     user_id: str
+    user_email: str
     query: str
     build_id: str
     config_path: str
@@ -48,17 +49,21 @@ def init_interactions(db_path: Path) -> None:
             CREATE TABLE IF NOT EXISTS interactions (
                 interaction_id TEXT PRIMARY KEY,
                 kind TEXT NOT NULL CHECK(kind IN ('retrieval', 'ask')),
-                user_id TEXT NOT NULL REFERENCES users(id),
+                user_id TEXT NOT NULL,
                 query TEXT NOT NULL,
                 build_id TEXT NOT NULL,
                 config_path TEXT NOT NULL,
                 answer TEXT,
                 error TEXT,
                 trace_id TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                user_email TEXT NOT NULL DEFAULT ''
             )
             """
         )
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(interactions)")}
+        if "user_email" not in columns:
+            conn.execute("ALTER TABLE interactions ADD COLUMN user_email TEXT NOT NULL DEFAULT ''")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS interaction_hits (
@@ -88,6 +93,7 @@ def record_interaction(
     build_id: str,
     config_path: str,
     results: list[RetrievalResult],
+    user_email: str = "",
     answer: str | None = None,
     error: str | None = None,
     trace_id: str | None = None,
@@ -111,15 +117,16 @@ def record_interaction(
         conn.execute(
             """
             INSERT INTO interactions (
-                interaction_id, kind, user_id, query, build_id, config_path,
+                interaction_id, kind, user_id, user_email, query, build_id, config_path,
                 answer, error, trace_id, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 stored_id,
                 kind,
                 user_id,
+                user_email,
                 query,
                 build_id,
                 config_path,
@@ -143,6 +150,7 @@ def record_interaction(
         interaction_id=stored_id,
         kind=kind,
         user_id=user_id,
+        user_email=user_email,
         query=query,
         build_id=build_id,
         config_path=config_path,
@@ -177,6 +185,7 @@ def get_interaction(db_path: Path, interaction_id: str) -> Interaction | None:
         interaction_id=row["interaction_id"],
         kind=row["kind"],
         user_id=row["user_id"],
+        user_email=row["user_email"],
         query=row["query"],
         build_id=row["build_id"],
         config_path=row["config_path"],

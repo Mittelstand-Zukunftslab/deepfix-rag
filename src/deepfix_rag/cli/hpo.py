@@ -1,6 +1,8 @@
 """deepfix hpo subcommand for multi-paradigm hyperparameter optimization."""
 
+import contextlib
 from pathlib import Path
+import sys
 from typing import Any
 
 import typer
@@ -17,7 +19,29 @@ from deepfix_rag.cli.ui import (
 from deepfix_rag.config.hpo import load_hpo_config
 from deepfix_rag.config.mutator import apply_mutation
 from deepfix_rag.config.schema import RetrievalBackend
-from deepfix_rag.hpo import HyperparameterOpt
+from deepfix_rag.hpo import TRIALS_ARTIFACT_NAME, HyperparameterOpt
+
+
+def _resolve_storage_uri(storage_uri: str, run_dir: Path | None) -> str:
+    """Keep the study next to the run's other artifacts when it is relative.
+
+    ``sqlite:///hpo.db`` means "in the current directory" to SQLAlchemy. An
+    agent round must not drop a database into the workspace root, and a
+    ``:memory:`` study cannot be resumed. Both land under ``<run_dir>`` when a
+    run directory is known; otherwise the value is left alone.
+    """
+    if run_dir is None:
+        return storage_uri
+    if storage_uri in ("sqlite://", "sqlite:///:memory:") or not storage_uri.startswith(
+        "sqlite:///"
+    ):
+        return storage_uri
+    relative = storage_uri[len("sqlite:///") :]
+    if not relative or Path(relative).is_absolute():
+        return storage_uri
+    resolved = Path(run_dir) / relative
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{resolved}"
 
 
 def hpo_cmd(
@@ -75,11 +99,54 @@ def hpo_cmd(
             "(size, overlap, semantic buffer/percentile) across trials."
         ),
     ),
+    base_config_path: Path | None = typer.Option(
+        None,
+        "--base-config",
+        help=(
+            "Base RAG config for every trial, overriding the HPO file's base_config. "
+            "The agent passes the champion snapshot from the run bundle here, so the "
+            "search space file does not have to name a workspace path."
+        ),
+    ),
     output: Path | None = typer.Option(
         None,
         "--output",
         "-o",
         help="Optional destination path to export the best configuration YAML.",
+    ),
+    index_dir: Path | None = typer.Option(
+        None,
+        "--index-dir",
+        "-i",
+        help=(
+            "Local index directory every trial reads. A copy of a remote "
+            "retrieval.lancedb_index_dir is made under it. Defaults to "
+            "<run-dir>/idx-cache when the base index is an s3:// URI."
+        ),
+    ),
+    run_dir: Path | None = typer.Option(
+        None,
+        "--run-dir",
+        help=(
+            "Run directory for HPO artifacts (hpo_trials.json, best-so-far YAML, "
+            "and the default idx-cache). Defaults to the output file's directory."
+        ),
+    ),
+    seed: int | None = typer.Option(
+        None,
+        "--seed",
+        help=(
+            "With --limit, draw a deterministic sample of that many rows with this "
+            "seed instead of taking the first rows. Applied to every trial."
+        ),
+    ),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        help=(
+            "Wall-clock budget in seconds for the whole study. A stop after at "
+            "least one complete trial still leaves the artifacts and best-so-far YAML."
+        ),
     ),
     json_output: bool = typer.Option(
         False,
@@ -98,6 +165,10 @@ def hpo_cmd(
 
     try:
         hpo_config = load_hpo_config(config)
+        if base_config_path is not None:
+            if not base_config_path.is_file():
+                raise FileNotFoundError(f"Base config file not found: {base_config_path}")
+            hpo_config.base_config = str(base_config_path)
         base_config = hpo_config.resolve_base_config(base_dir=config.parent)
     except Exception as e:
         emit_error(
@@ -117,6 +188,12 @@ def hpo_cmd(
     effective_split = split or hpo_config.split or base_config.data.split
     effective_limit = limit if limit is not None else (hpo_config.limit or base_config.data.limit)
     effective_output = output or hpo_config.output
+    effective_run_dir = run_dir or hpo_config.run_dir
+    if effective_run_dir is None and effective_output is not None:
+        effective_run_dir = Path(effective_output).resolve().parent
+    effective_seed = seed if seed is not None else hpo_config.seed
+    effective_timeout = timeout if timeout is not None else hpo_config.timeout
+    effective_storage_uri = _resolve_storage_uri(effective_storage_uri, effective_run_dir)
 
     overrides: dict[str, Any] = {}
     if paradigm is not None:
@@ -129,6 +206,11 @@ def hpo_cmd(
                 code=EXIT_VALIDATION_ERROR,
                 json_output=json_output,
             )
+
+    # Keep the resolved config before the trial-only overrides. A candidate
+    # export is built from this one, so it carries the base dataset, split and
+    # index rather than the sweep's subsample and local cache.
+    export_base_config = base_config
 
     if effective_dataset != base_config.data.path_or_repo:
         overrides["data.path_or_repo"] = effective_dataset
@@ -163,13 +245,25 @@ def hpo_cmd(
             study_name=hpo_config.study_name,
             storage_uri=effective_storage_uri,
             tune_chunking=effective_tune_chunking,
+            seed=effective_seed,
+            run_dir=effective_run_dir,
+            index_dir=index_dir,
+            output_path=effective_output,
+            export_base_config=export_base_config,
         )
-        result = opt.optimize(
-            n_trials=effective_n_trials,
-            dataset_path=effective_dataset,
-            split=effective_split,
-            limit=effective_limit,
+        # With --json, MLflow prints "View run ..." on stdout. The agent parses
+        # stdout as one JSON document, so keep that chatter on stderr.
+        redirect = (
+            contextlib.redirect_stdout(sys.stderr) if json_output else contextlib.nullcontext()
         )
+        with redirect:
+            result = opt.optimize(
+                n_trials=effective_n_trials,
+                timeout=effective_timeout,
+                dataset_path=effective_dataset,
+                split=effective_split,
+                limit=effective_limit,
+            )
     except Exception as e:
         emit_error(
             f"Optimization runtime error: {e}",
@@ -191,6 +285,12 @@ def hpo_cmd(
     payload = result.to_dict()
     if exported_path_str:
         payload["exported_config_path"] = exported_path_str
+    if opt.local_index_dir is not None:
+        payload["index_dir"] = str(opt.local_index_dir)
+        payload["index_cache_source"] = opt.index_copy_source
+    if effective_run_dir is not None:
+        payload["run_dir"] = str(effective_run_dir)
+        payload["trials_path"] = str(Path(effective_run_dir) / TRIALS_ARTIFACT_NAME)
 
     if json_output:
         print_json(payload)

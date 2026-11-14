@@ -10,8 +10,8 @@ import uuid
 
 from pydantic import BaseModel, Field, ValidationError
 
-from deepfix_rag.accounts import connect
 from deepfix_rag.config.schema import DataSourceType, RAGConfig
+from deepfix_rag.storage import connect
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 _ALLOWED_SUFFIXES = {".txt", ".md", ".pdf"}
@@ -117,10 +117,11 @@ def init_documents(db_path: Path) -> None:
                 ),
                 index_error TEXT,
                 text_issues TEXT NOT NULL DEFAULT '[]',
-                uploaded_by TEXT NOT NULL REFERENCES users(id),
+                uploaded_by TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 indexed_at TEXT,
-                deleted_at TEXT
+                deleted_at TEXT,
+                uploader_email TEXT NOT NULL DEFAULT ''
             )
             """
         )
@@ -139,6 +140,7 @@ def add_document(
     workspace: Path,
     *,
     user_id: str,
+    user_email: str,
     filename: str | None,
     content: bytes,
     reading: str | None,
@@ -164,9 +166,9 @@ def add_document(
             """
             INSERT INTO documents (
                 doc_id, filename, media_type, text, status, index_error, text_issues,
-                uploaded_by, created_at
+                uploaded_by, uploader_email, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 doc_id,
@@ -177,12 +179,10 @@ def add_document(
                 index_error,
                 _dump_issues(issues),
                 user_id,
+                user_email,
                 created_at,
             ),
         )
-        email = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
-    if email is None:
-        raise UploadRejected("Sign in to continue.")
     if status != "failed":
         _write_corpus(workspace, doc_id, text, stored_name)
     return DocumentRecord(
@@ -194,7 +194,7 @@ def add_document(
         index_error=index_error,
         issues=issues,
         uploaded_by=user_id,
-        uploader_email=email["email"],
+        uploader_email=user_email,
         created_at=created_at,
         indexed_at=None,
         deleted_at=None,
@@ -213,9 +213,8 @@ def list_documents(
             """
             SELECT d.doc_id, d.filename, d.media_type, d.text, d.status, d.index_error,
                    d.text_issues, d.uploaded_by, d.created_at, d.indexed_at, d.deleted_at,
-                   u.email AS uploader_email
+                   d.uploader_email
             FROM documents d
-            JOIN users u ON u.id = d.uploaded_by
             WHERE d.deleted_at IS NULL
             ORDER BY d.created_at DESC, d.rowid DESC
             """

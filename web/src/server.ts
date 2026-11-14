@@ -2,7 +2,14 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
-import { apiUpstreamUrl, internalApiBase, isApiPath } from "./api-proxy";
+import {
+  apiUpstreamUrl,
+  internalApiBase,
+  isApiPath,
+  isAuthPath,
+  upstreamHeaders,
+} from "./api-proxy";
+import { getAuth, identityToken } from "./lib/auth.server";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -48,11 +55,11 @@ function isH3SwallowedErrorBody(body: string): boolean {
 async function proxyApi(request: Request): Promise<Response> {
   const incoming = new URL(request.url);
   const target = apiUpstreamUrl(request.url, internalApiBase());
-  const headers = new Headers(request.headers);
-  headers.delete("host");
-  if (!headers.has("x-forwarded-proto")) {
-    headers.set("x-forwarded-proto", incoming.protocol.replace(":", ""));
-  }
+  const headers = upstreamHeaders(
+    request.headers,
+    incoming.protocol.replace(":", ""),
+    await identityToken(request.headers),
+  );
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const upstream = await fetch(target, {
@@ -83,6 +90,18 @@ async function proxyApi(request: Request): Promise<Response> {
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     const url = new URL(request.url);
+    if (isAuthPath(url.pathname)) {
+      try {
+        const auth = await getAuth();
+        return await auth.handler(request);
+      } catch (error) {
+        console.error(error);
+        return new Response(JSON.stringify({ message: "Sign-in is unavailable." }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
     if (isApiPath(url.pathname)) {
       try {
         return await proxyApi(request);

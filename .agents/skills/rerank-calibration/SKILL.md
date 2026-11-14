@@ -10,13 +10,15 @@ trigger_conditions:
   - "recall >= 0.8 and ndcg < recall - 0.15 on eval --json (optimization-loop routing row 3)"
   - "Summary recall is high while summary ndcg is low; no per-row data is needed"
 cli_actions:
-  - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
-  - "deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json"
+  - "deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json"
+  - "deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache --dataset <dev_path> --retrieval-only --json"
 ---
 
-Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 15-step budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Re-ranking is query-time: do not re-index for `rerank.*` or `retrieval.top_k`, and do not pass `--index-dir` (the candidate reuses the champion's index).
+Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Re-ranking is query-time: do not re-index for `rerank.*` or `retrieval.top_k`, and pass `--index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache` so both sides read the local copy of the champion index.
 
-The agent environment passes the Cohere settings (`COHERE_BASE_URL`, `COHERE_API_KEY`, `COHERE_MODEL`) through, so rerank works. If an eval exits 2 with `COHERE_API_KEY` in the message, every case errored: rerank is unavailable. STOP, write `result.json` with a null candidate, report the cause in `summary`, and finish.
+**In an API-driven round, rerank is searched through `hpo-search`, not hand-set here.** `hpo-search` runs one bounded `deepfix hpo` sweep over the shipped small space, which samples `rerank.enabled`, `rerank.top_n`, `retrieval.top_k` and the fusion settings together, then confirms the best trial on the full dev set. This skill keeps the single-setting recipe and the validated findings for manual use; a round does not hand-write one rerank candidate instead of the sweep.
+
+The rerank settings come from the environment (`COHERE_BASE_URL`, `COHERE_MODEL`) and rerank authorizes with `OPENROUTER_API_KEY`. If an eval exits 2 with `OPENROUTER_API_KEY` in the message, every case errored: rerank is unavailable. STOP, write `result.json` with a null candidate, report the cause in `summary`, and finish.
 
 ## When not to use
 
@@ -27,13 +29,13 @@ The agent environment passes the Cohere settings (`COHERE_BASE_URL`, `COHERE_API
 1. Widen the pool and keep a short list. Confirm `diffs` is non-empty. If the champion already has `rerank.enabled: true`, change only the pool size (for example `--set retrieval.top_k=100`) instead of re-enabling rerank.
 
 ```
-deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
+deepfix mutate-config --base <run_dir>/input/champion.yaml --output <run_dir>/candidate.yaml --set rerank.enabled=true --set rerank.top_n=5 --set retrieval.top_k=50 --json
 ```
 
 2. Compare on the full dev set (no `--limit`). Primary metric is `ndcg`. Save the output and print the gate summary as in the loop's step 5. Then apply the loop's gate and write `result.json`. This only recommends the candidate; the API decides.
 
 ```
-deepfix eval --config <run_dir>/candidate.yaml --compare configs/champion.yaml --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
+deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache --dataset <dev_path> --retrieval-only --json > <run_dir>/compare.json
 ```
 
 There is no `rerank.threshold` key; a `--set` of that name exits 1 with `error_type` `unknown_key`. A candidate with `errors > 0` (for example rerank timeouts) is not recommended: `candidate_config_path` stays null.
@@ -66,6 +68,6 @@ legal-rag-bench, 30-query retrieval-only eval:
 
 ## Pitfalls
 
-- Cohere rerank appends `/v2/rerank` to `COHERE_BASE_URL`. A base URL ending in `/v1` returns 404s that show up as per-query errors or as empty retrieval. This is an environment fault: stop and report it, do not edit the environment.
+- Rerank posts to OpenRouter: `POST <COHERE_BASE_URL>/rerank`, which with the default `https://openrouter.ai/api/v1` base is `https://openrouter.ai/api/v1/rerank`. The Authorization header is `Bearer <OPENROUTER_API_KEY>`. A base URL ending in `/v1` used to be a 404 because the Cohere SDK appended `/v2/rerank`; the DeepFix client never does, and no Cohere key is involved. Native Cohere (`https://api.cohere.com`) is not a supported base. A 404 or 401 here is an environment fault: stop and report it, do not edit the environment.
 - Confirm hybrid is actually active. If eval stderr contains `falling back to dense`, the loaded index docstore was empty and BM25 was skipped.
 - `top_k` above 100 fails validation (`mutate-config` exits 1).

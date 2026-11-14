@@ -57,6 +57,8 @@ DEEPFIX_LLM_TEMPERATURE=0.7
 DEEPFIX_LLM_MAX_TOKENS=8000
 DEEPFIX_LLM_CACHE=1
 DEEPFIX_LLM_TRACK_USAGE=1
+# LiteLLM reads this flag. Claude Haiku 5.5 allows only temperature=1.
+LITELLM_DROP_PARAMS=1
 DEEPFIX_SEARCH_PROVIDER=duckduckgo
 NUM_REASONING_CHAINS=1
 DEEPFIX_SERVER_DATABASE_URL=sqlite:///./deepfix_server.db
@@ -64,7 +66,7 @@ MLFLOW_TRACKING_URI=
 MLFLOW_EXP_NAME=Deepfix-server
 ```
 
-`DEEPFIX_LLM_MODEL_NAME` is any model id your `DEEPFIX_LLM_BASE_URL` serves. `openai/gpt-6-luna-pro` is the value in `example.env` and the `Settings` default; use the same one unless you have a reason to differ.
+`DEEPFIX_LLM_MODEL_NAME` is any model id your `DEEPFIX_LLM_BASE_URL` serves. There is no `Settings` default: `example.env` sets `openai/gpt-6-luna-pro` for the diagnostic agent; use whatever your deployment sets unless you have a reason to differ.
 
 Do not commit API keys. Do not assume the RAG `.env` in the repo root satisfies these names.
 

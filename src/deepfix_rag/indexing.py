@@ -21,7 +21,6 @@ from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.schema import Document
 from pydantic import ValidationError
 
-from deepfix_rag.accounts import connect
 from deepfix_rag.config.schema import DataSourceType, RAGConfig, RetrievalBackend
 from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.data import DataLoader, _corpus_json_documents
@@ -34,6 +33,7 @@ from deepfix_rag.documents import (
 from deepfix_rag.index_manifest import index_time_signature
 from deepfix_rag.pipeline import RAGWorkflow
 from deepfix_rag.service import QueryService
+from deepfix_rag.storage import connect
 
 _ALLOWED_BACKENDS = frozenset(
     {RetrievalBackend.DENSE, RetrievalBackend.HYBRID, RetrievalBackend.BM25}
@@ -407,6 +407,7 @@ class IndexCoordinator:
             )
             return
         set_document_status(self.db_path, doc_id, "indexed", indexed=True)
+        self._refresh_manifest()
 
     def _delete_document(self, doc_id: str) -> None:
         try:
@@ -424,6 +425,32 @@ class IndexCoordinator:
             )
             return
         set_document_status(self.db_path, doc_id, "deleting", deleted=True)
+        self._refresh_manifest()
+
+    def _refresh_manifest(self) -> None:
+        """Keep the serving build's manifest in step with per-document writes.
+
+        A build's manifest records the corpus hash it was built from, and startup
+        rebuilds when the manifest no longer matches the corpus. Writing one
+        document would otherwise leave every restart rebuilding the whole index.
+        """
+        with self._lock:
+            build_id = self._build_id if self._service is not None else None
+        if build_id is None:
+            return
+        path = self._build_path(build_id) / _MANIFEST
+        try:
+            manifest = self._read_manifest(build_id)
+            if manifest is None or not path.is_file():
+                return
+            config = bind_locations(
+                self._read_champion(), self.workspace, self._build_path(build_id)
+            )
+            manifest["index_time"] = index_time_signature(config)
+            manifest["chunk_count"] = self._chunk_count(build_id)
+            path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            LOGGER.exception("Could not refresh the manifest for build %s", build_id)
 
     def _run_rebuild(self) -> None:
         with self._lock:
@@ -494,26 +521,56 @@ class IndexCoordinator:
             self._set_error(str(exc))
 
     def _switch_pointer(self, build_id: str) -> None:
+        import sys
+
         indexes = self.workspace / "indexes"
         pointer = indexes / "current"
         temporary = indexes / f".next-{build_id}"
-        if temporary.is_symlink() or temporary.exists():
-            temporary.unlink()
-        temporary.symlink_to(Path("builds") / build_id, target_is_directory=True)
-        if pointer.is_symlink():
+
+        def _is_link(p: Path) -> bool:
+            return p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction())
+
+        def _remove_link(p: Path) -> None:
+            if hasattr(p, "is_junction") and p.is_junction():
+                p.rmdir()
+            elif p.is_symlink():
+                p.unlink()
+            elif p.is_dir() and not any(p.iterdir()):
+                p.rmdir()
+            elif p.exists():
+                p.unlink()
+
+        if _is_link(temporary) or temporary.exists():
+            _remove_link(temporary)
+
+        try:
+            temporary.symlink_to(Path("builds") / build_id, target_is_directory=True)
+            if pointer.is_symlink():
+                os.replace(temporary, pointer)
+                return
+            if pointer.exists():
+                if pointer.is_dir() and not _is_link(pointer) and any(pointer.iterdir()):
+                    _remove_link(temporary)
+                    raise RuntimeError(
+                        "The serving path is a directory, so the build was not switched."
+                    )
+                _remove_link(pointer)
             os.replace(temporary, pointer)
-            return
-        if pointer.exists():
-            if pointer.is_dir() and any(pointer.iterdir()):
-                temporary.unlink()
-                raise RuntimeError(
-                    "The serving path is a directory, so the build was not switched."
-                )
-            if pointer.is_dir():
-                pointer.rmdir()
+        except OSError:
+            if sys.platform == "win32":
+                import _winapi
+
+                _remove_link(temporary)
+                target = str((indexes / "builds" / build_id).resolve())
+                if pointer.exists() or _is_link(pointer):
+                    if pointer.is_dir() and not _is_link(pointer) and any(pointer.iterdir()):
+                        raise RuntimeError(
+                            "The serving path is a directory, so the build was not switched."
+                        )
+                    _remove_link(pointer)
+                _winapi.CreateJunction(target, str(pointer))
             else:
-                pointer.unlink()
-        os.replace(temporary, pointer)
+                raise
 
     def _read_champion(self) -> RAGConfig:
         path = self._champion_path()
@@ -530,7 +587,10 @@ class IndexCoordinator:
 
     def _pointer_build_id(self) -> str | None:
         pointer = self.workspace / "indexes" / "current"
-        if not pointer.is_symlink():
+        is_link = pointer.is_symlink() or (
+            hasattr(pointer, "is_junction") and pointer.is_junction()
+        )
+        if not is_link:
             return None
         return Path(os.readlink(pointer)).name
 

@@ -3,9 +3,12 @@
 import asyncio
 import concurrent.futures
 from dataclasses import dataclass, field
+import gc
+import json
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any
 
 import mlflow
@@ -23,6 +26,183 @@ from deepfix_rag.config.mutator import apply_mutation
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.evaluation.runner import EvaluationRunner
+from deepfix_rag.index_cache import (
+    index_dir_populated as _index_dir_populated,
+)
+from deepfix_rag.index_cache import (
+    is_remote_index_uri,
+    localize_index,
+)
+from deepfix_rag.pipeline import RAGWorkflow
+
+INDEX_CACHE_DIRNAME = "idx-cache"
+TRIALS_ARTIFACT_NAME = "hpo_trials.json"
+# The effective-config key a completed trial was scored under. Kept as a user
+# attribute so a later redraw with a different sampled key set still compares
+# equal: the derived complementary weight is the reason this is needed.
+_EFFECTIVE_KEY_ATTR = "effective_config_key"
+# Overrides that exist only so a trial can score a subsample. They must never
+# reach an exported candidate, which is re-scored on the full dev set.
+_TRIAL_ONLY_OVERRIDE_KEYS = frozenset(
+    {
+        "data.path_or_repo",
+        "data.limit",
+        "data.split",
+        "retrieval.lancedb_index_dir",
+    }
+)
+
+
+# Config fields that change what a query returns. Index-time keys are absent on
+# purpose: every trial reads the same index, so they cannot differ between two
+# trials of one study.
+_QUERY_TIME_FIELDS = (
+    "retrieval.top_k",
+    "retrieval.fusion_mode",
+    "retrieval.dense_weight",
+    "retrieval.bm25_weight",
+    "retrieval.bm25_k1",
+    "retrieval.bm25_b",
+    "retrieval.query_expansion_num",
+    "retrieval.language",
+    "rerank.enabled",
+    "rerank.top_n",
+    "eval.cutoff_k",
+)
+_WEIGHT_READING_FUSION_MODES = frozenset({"relative_score", "dist_based_score"})
+
+
+def canonical_config_key(config: RAGConfig) -> tuple[str, ...]:
+    """A hashable key for the query-time behaviour of ``config``.
+
+    Parameters the config does not read are dropped, so two configs that rank
+    identically produce the same key:
+
+    * the fusion weights only when the fusion mode reads them;
+      ``reciprocal_rerank`` and ``simple`` ignore them;
+    * ``rerank.top_n`` only when rerank is enabled;
+    * every BM25 saturation parameter only when a lexical retriever is in play.
+
+    The two weights are also normalised to the single ratio the fusion retriever
+    uses, so ``0.7/0.3`` and ``0.35/0.15`` collide and a config that set only
+    ``dense_weight`` does not look different from one that set both. Floats are
+    rounded so a sampled ``0.30000000000000004`` matches a stored ``0.3``.
+    """
+    values: list[str] = []
+    retrieval = config.retrieval
+    fusion_mode = str(getattr(retrieval.fusion_mode, "value", retrieval.fusion_mode))
+    reads_weights = fusion_mode in _WEIGHT_READING_FUSION_MODES
+    uses_lexical = str(getattr(retrieval.backend, "value", retrieval.backend)) in {
+        "bm25",
+        "hybrid",
+        "mixed",
+    }
+    owners = {"retrieval": retrieval, "rerank": config.rerank, "eval": config.eval}
+    for dotted in _QUERY_TIME_FIELDS:
+        section, name = dotted.split(".", 1)
+        if name in {"dense_weight", "bm25_weight"}:
+            # Emitted once, below, as the normalised ratio.
+            continue
+        if name == "top_n" and not config.rerank.enabled:
+            continue
+        if name in {"bm25_k1", "bm25_b"} and not uses_lexical:
+            continue
+        value = getattr(owners[section], name, None)
+        if isinstance(value, float):
+            value = round(value, 6)
+        values.append(f"{dotted}={value}")
+    if reads_weights:
+        values.append(
+            f"fusion_weight_ratio={_weight_ratio(retrieval.dense_weight, retrieval.bm25_weight)}"
+        )
+    return tuple(values)
+
+
+def _weight_ratio(dense_weight: float, bm25_weight: float) -> float:
+    """The dense share of the fusion weights, which is all the retriever uses.
+
+    Both weights are normalised to sum to 1 before fusion, so only their ratio
+    matters. A zero total falls back to the equal split the retriever would use
+    rather than raising here.
+    """
+    total = float(dense_weight) + float(bm25_weight)
+    if total <= 0:
+        return 0.5
+    return round(float(dense_weight) / total, 6)
+
+
+def _load_index(config: RAGConfig, *, embed_model: Any = None) -> Any:
+    """Open the configured index once, outside any trial.
+
+    ``RAGWorkflow.run(ingest=True)`` with ``load_if_exists`` does exactly this,
+    but doing it here lets the study keep one index object instead of one per
+    trial. Returns None when the config would have to build an index, because a
+    study over query-time knobs must never rebuild.
+    """
+    workflow = RAGWorkflow(config=config, embed_model=embed_model)
+    if not workflow._index_exists():
+        return None
+    return workflow._load_existing_index()
+
+
+def write_best_so_far(path: Path | str, config: RAGConfig) -> Path:
+    """Write the best trial's config so a stopped study still leaves a candidate."""
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False),
+        encoding="utf-8",
+    )
+    return out
+
+
+def _trial_row(trial: FrozenTrial, metric_names: list[str]) -> dict[str, Any]:
+    values = list(trial.values) if trial.values is not None else []
+    if not values and trial.value is not None:
+        values = [trial.value]
+    return {
+        "trial_number": trial.number,
+        "state": trial.state.name,
+        "params": dict(trial.params),
+        "values": values,
+        "metrics": {
+            name: values[index] for index, name in enumerate(metric_names) if index < len(values)
+        },
+        "user_attrs": dict(trial.user_attrs),
+        "duration_seconds": trial.duration.total_seconds() if trial.duration else None,
+    }
+
+
+def _write_trial_rows(
+    run_dir: Path | str,
+    metric_names: list[str],
+    trials: list[FrozenTrial],
+) -> Path:
+    """Rewrite ``<run_dir>/hpo_trials.json`` with every trial seen so far."""
+    target = Path(run_dir) / TRIALS_ARTIFACT_NAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = [_trial_row(trial, metric_names) for trial in trials]
+    target.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+    return target
+
+
+def _best_trial(study: optuna.Study) -> FrozenTrial | None:
+    complete = [trial for trial in study.trials if trial.state == TrialState.COMPLETE]
+    if not complete:
+        return None
+
+    def score(trial: FrozenTrial) -> float:
+        values = list(trial.values or [])
+        if values:
+            return sum(float(value) for value in values)
+        return float(trial.value or 0.0)
+
+    return max(complete, key=score)
+
+
+def index_cache_path(run_dir: Path | str) -> Path:
+    """Default local cache for a remote index under the run directory."""
+    return Path(run_dir) / INDEX_CACHE_DIRNAME
 
 
 @dataclass
@@ -36,6 +216,13 @@ class HPOResult:
     pareto_configs: list[RAGConfig] = field(default_factory=list)
     best_trial: FrozenTrial | None = None
     best_config: RAGConfig | None = None
+    run_dir: Path | None = None
+    trials_path: Path | None = None
+    index_dir: Path | None = None
+    index_cache_source: str | None = None
+    stopped_early: bool = False
+    failed_trials: int = 0
+    pruned_trials: int = 0
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert study trials to a structured DataFrame."""
@@ -91,6 +278,13 @@ class HPOResult:
             "best_trial": best_trial_dict,
             "pareto_trials": pareto_list,
             "best_config": self.best_config.model_dump() if self.best_config else None,
+            "stopped_early": self.stopped_early,
+            "failed_trials": self.failed_trials,
+            "pruned_trials": self.pruned_trials,
+            "run_dir": str(self.run_dir) if self.run_dir is not None else None,
+            "trials_path": str(self.trials_path) if self.trials_path is not None else None,
+            "index_dir": str(self.index_dir) if self.index_dir is not None else None,
+            "index_cache_source": self.index_cache_source,
         }
 
     def export_best_config(self, output_path: Path | str) -> Path:
@@ -130,6 +324,22 @@ class HPOResult:
                 mlflow.log_table(data=df, artifact_file="hpo_study_trials.json")
 
 
+class TrialEvaluationError(RuntimeError):
+    """Every case in one HPO trial errored, so the trial measured nothing.
+
+    A retrieval-only trial whose rerank endpoint 404s or whose embedding call
+    fails would otherwise report 0.0 and read as a worse configuration. That
+    silently turns "the lever is broken" into "the lever does not help", which
+    is the failure this feature exists to prevent. The trial is marked FAILED
+    and never becomes the best trial.
+    """
+
+    def __init__(self, trial_number: int, message: str) -> None:
+        self.trial_number = trial_number
+        self.message = message
+        super().__init__(f"trial {trial_number}: {message}")
+
+
 class HyperparameterOpt:
     """Multi-paradigm Hyperparameter Optimization engine using Optuna."""
 
@@ -141,8 +351,22 @@ class HyperparameterOpt:
         study_name: str | None = None,
         storage_uri: str = "sqlite:///:memory:",
         tune_chunking: bool = False,
+        seed: int | None = None,
+        run_dir: Path | str | None = None,
+        index_dir: Path | str | None = None,
+        output_path: Path | str | None = None,
+        export_base_config: RAGConfig | None = None,
+        embed_model: Any = None,
+        llm: Any = None,
+        persist: bool = True,
     ) -> None:
         self.base_config = base_config
+        # The config an exported candidate is built from. Trials and exports
+        # differ: a trial carries the CLI's dataset, split, limit and local
+        # index path so it can score a subsample, but none of those belong in a
+        # candidate that will be re-scored on the full dev set. Exports use this
+        # config plus the sampled params, nothing else.
+        self.export_base_config = export_base_config or base_config
         self.hpo_config = hpo_config or HPOConfig(search_space=search_space or HPOSearchSpace())
         if search_space is not None:
             self.hpo_config.search_space = search_space
@@ -160,6 +384,22 @@ class HyperparameterOpt:
             engine_kwargs={"pool_size": 20, "connect_args": {"timeout": 10}},
         )
         self.tune_chunking = tune_chunking or self.hpo_config.tune_chunking
+        self.seed = seed
+        self.run_dir = Path(run_dir) if run_dir is not None else None
+        self.output_path = Path(output_path) if output_path is not None else None
+        # An explicit --index-dir wins; otherwise a remote base index is copied
+        # once to <run_dir>/idx-cache and every trial reads that local copy.
+        self.index_dir = Path(index_dir) if index_dir is not None else None
+        self.local_index_dir: Path | None = None
+        self.index_copy_source: str | None = None
+        # One index, loaded once, shared by every trial. Re-opening LanceDB and
+        # rebuilding the BM25 docstore per trial was the largest avoidable
+        # allocation in the HPO-007 sweep.
+        self.shared_index: Any = None
+        # A test pins the embedding model so it never calls a live endpoint.
+        self.embed_model = embed_model
+        self.llm = llm
+        self.persist = persist
 
         if base_config.retrieval_only:
             self.metric_names = list(self.hpo_config.metrics.retrieval_only_targets)
@@ -197,16 +437,195 @@ class HyperparameterOpt:
         split: str,
         limit: int | None,
         run_name: str,
+        seed: int | None = None,
     ) -> dict[str, float]:
-        """Execute EvaluationRunner asynchronously for a single trial."""
-        runner = EvaluationRunner(config=trial_config)
+        """Execute EvaluationRunner asynchronously for a single trial.
+
+        A trial where every case errored measured nothing, so it raises rather
+        than returning zeros: Optuna then records FAIL, the trial cannot win,
+        and the error text reaches the caller and ``hpo_trials.json``.
+        """
+        runner = EvaluationRunner(
+            config=trial_config,
+            embed_model=self.embed_model,
+            llm=self.llm,
+            persist=self.persist,
+            index=self.shared_index,
+        )
         summary = await runner.run(
             dataset_path=dataset_path,
             run_name=run_name,
             split=split,
             limit=limit,
+            seed=seed,
         )
+        if summary.scored and summary.errors >= summary.scored:
+            first_error = summary.error_details[0].get("error") if summary.error_details else None
+            raise TrialEvaluationError(
+                -1,
+                f"all {summary.errors} cases errored, nothing was measured. "
+                f"First error: {first_error}",
+            )
         return summary.metrics
+
+    def local_index_for(self) -> Path | None:
+        """The local index every trial should read, or None to keep the base URI.
+
+        A remote ``retrieval.lancedb_index_dir`` is copied once into
+        ``<run_dir>/idx-cache`` (or the explicit ``--index-dir``) before the
+        first trial. Later trials in this process reuse that copy, so the
+        object store is not fetched again per trial. An explicit
+        ``--index-dir`` that does not yet hold the index is filled from the
+        remote base, so the agent never has to copy it by hand.
+        """
+        if self.local_index_dir is not None:
+            return self.local_index_dir
+        base_uri = str(self.base_config.retrieval.lancedb_index_dir)
+        remote_base = is_remote_index_uri(base_uri)
+        configured = self.index_dir
+        if configured is not None:
+            self.local_index_dir = configured
+            if remote_base and not _index_dir_populated(configured):
+                LOGGER.info(f"Copying the index from {base_uri} into {configured}")
+                localize_index(base_uri, configured, self.base_config)
+                self.index_copy_source = base_uri
+            return configured
+        if not remote_base:
+            return None
+        self.local_index_dir = self._copy_remote_index(base_uri)
+        self.index_copy_source = base_uri
+        return self.local_index_dir
+
+    def _copy_remote_index(self, uri: str) -> Path:
+        """Copy a remote index into the run directory exactly once.
+
+        The copy carries a manifest built for this run's base config, so a later
+        ``deepfix eval --index-dir`` on the cache passes the staleness check
+        instead of falling back to the object store.
+        """
+        base = self.run_dir or Path.cwd()
+        target = Path(base) / INDEX_CACHE_DIRNAME
+        if _index_dir_populated(target):
+            LOGGER.info(f"Reusing the cached index at {target}")
+            return target
+        LOGGER.info(f"Copying the index from {uri} into {target}")
+        localize_index(uri, target, self.base_config)
+        return target
+
+    def _base_overrides(self) -> dict[str, Any]:
+        """Index location plus the sample seed shared by every trial."""
+        overrides: dict[str, Any] = {}
+        local = self.local_index_for()
+        if local is not None:
+            overrides["retrieval.lancedb_index_dir"] = str(local)
+            overrides["retrieval.load_if_exists"] = True
+        return overrides
+
+    def _load_shared_index(self) -> None:
+        """Load the trial index once for the whole study.
+
+        Every trial of a study reads the same index: only query-time knobs
+        differ, and a chunking study re-indexes per trial anyway. Loading it
+        once removes a per-trial LanceDB open plus BM25 docstore rebuild, which
+        is the largest allocation in the sweep. A failure here is not fatal for
+        the study: the trial path falls back to loading its own index.
+        """
+        if self.shared_index is not None:
+            return
+        try:
+            self.shared_index = _load_index(self.base_config, embed_model=self.embed_model)
+        except Exception as exc:  # a broken shared load must not kill the study
+            LOGGER.warning(f"Could not preload the index; each trial will load its own: {exc}")
+            self.shared_index = None
+
+    def _release_trial_objects(self) -> None:
+        """Drop per-trial allocations and collect before the next trial.
+
+        A trial builds a retriever, a reranker client, and (for hybrid) a BM25
+        structure over the whole docstore. None of that is reusable across
+        trials with different query-time knobs, and holding it while the next
+        trial allocates its own is what pushed the sandbox to its memory limit.
+        """
+        gc.collect()
+
+    def _failed_trial_error(self, trial: optuna.Trial, message: str) -> TrialEvaluationError:
+        """Build the error that marks a trial FAILED instead of scoring it 0.0."""
+        return TrialEvaluationError(trial.number, message)
+
+    def _run_trial_evaluation(
+        self,
+        *,
+        trial_config: RAGConfig,
+        dataset_path: Path | str,
+        split: str,
+        limit: int | None,
+        run_name: str,
+    ) -> dict[str, float]:
+        """Run one trial's evaluation in a clean event loop."""
+        kwargs = {
+            "trial_config": trial_config,
+            "dataset_path": dataset_path,
+            "split": split,
+            "limit": limit,
+            "run_name": run_name,
+            "seed": self.seed,
+        }
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                return executor.submit(asyncio.run, self._evaluate_trial(**kwargs)).result()
+        return asyncio.run(self._evaluate_trial(**kwargs))
+
+    def _effective_config_key(self, overrides: dict[str, Any]) -> tuple[str, ...]:
+        """A stable key for the config a trial will actually score.
+
+        The sampled overrides are not comparable on their own:
+
+        * some parameters only exist conditionally, so an absent
+          ``retrieval.dense_weight`` and one that the fusion mode ignores are
+          the same configuration;
+        * the space derives keys Optuna never records (``retrieval.bm25_weight``
+          from ``dense_weight``), so a trial's stored ``params`` and the dict the
+          objective applies have different key sets;
+        * float rounding differs between the sampled and stored values.
+
+        The key is therefore the *effective* config: apply the overrides, drop
+        the knobs the resulting config does not read, and dump the canonical
+        query-time fields. Equivalent configs collide whatever route produced
+        them.
+        """
+        config = apply_mutation(self.base_config, {**self._base_overrides(), **overrides})
+        return canonical_config_key(config)
+
+    def _duplicate_of(self, trial: optuna.Trial, overrides: dict[str, Any]) -> int | None:
+        """The earlier trial that scores the same effective config, or None.
+
+        Optuna's TPE sampler can redraw a configuration it has already scored
+        when the space is small and discrete, which spends a full eval for no
+        information. The comparison is on the effective config, so a redraw that
+        differs only in a parameter the config ignores still collides.
+        """
+        wanted = self._effective_config_key(overrides)
+        study = trial.study
+        for earlier in study.trials:
+            if earlier.number >= trial.number:
+                break
+            if earlier.state != TrialState.COMPLETE:
+                continue
+            # A completed trial recorded the key it scored under, so a redraw
+            # with a different key set still compares equal.
+            recorded = earlier.user_attrs.get(_EFFECTIVE_KEY_ATTR)
+            earlier_key = (
+                tuple(recorded)
+                if isinstance(recorded, (list, tuple))
+                else self._effective_config_key(dict(earlier.params))
+            )
+            if earlier_key == wanted:
+                return earlier.number
+        return None
 
     def _objective(
         self,
@@ -223,7 +642,18 @@ class HyperparameterOpt:
         )
 
         # 2. Mutate config
-        trial_config = apply_mutation(self.base_config, overrides)
+        trial_config = apply_mutation(self.base_config, {**self._base_overrides(), **overrides})
+
+        # 2b. A small discrete space can sample a param set the study already
+        # scored. Pruning it costs no eval and keeps the trial budget for
+        # unexplored configurations.
+        duplicate = self._duplicate_of(trial, overrides)
+        if duplicate is not None:
+            trial.set_user_attr("duplicate_of", duplicate)
+            LOGGER.info(
+                f"Pruning trial {trial.number}: it repeats trial {duplicate}'s parameters."
+            )
+            raise optuna.TrialPruned(f"duplicate of trial {duplicate}")
 
         temp_dir: str | None = None
         # 3. Check if chunking was modified and isolate index dir if so
@@ -239,34 +669,18 @@ class HyperparameterOpt:
 
         run_name = f"hpo_{self.study_name}_trial_{trial.number}"
         try:
-            # Run async evaluation in clean loop
             try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None and loop.is_running():
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    metrics = executor.submit(
-                        asyncio.run,
-                        self._evaluate_trial(
-                            trial_config=trial_config,
-                            dataset_path=dataset_path,
-                            split=split,
-                            limit=limit,
-                            run_name=run_name,
-                        ),
-                    ).result()
-            else:
-                metrics = asyncio.run(
-                    self._evaluate_trial(
-                        trial_config=trial_config,
-                        dataset_path=dataset_path,
-                        split=split,
-                        limit=limit,
-                        run_name=run_name,
-                    )
+                metrics = self._run_trial_evaluation(
+                    trial_config=trial_config,
+                    dataset_path=dataset_path,
+                    split=split,
+                    limit=limit,
+                    run_name=run_name,
                 )
+            except TrialEvaluationError as exc:
+                error = TrialEvaluationError(trial.number, exc.message)
+                trial.set_user_attr("error", error.message)
+                raise error from exc
 
             cutoff_k = trial_config.eval.cutoff_k or trial_config.retrieval.top_k
             # 4. Extract scores for target metrics
@@ -280,7 +694,10 @@ class HyperparameterOpt:
                 for m in self.metric_names
             ]
 
-            # Save diagnostic info to trial attributes
+            # Save diagnostic info to trial attributes. The effective-config
+            # key is recorded so a later redraw compares on the config that was
+            # actually scored, not on the sampled key set.
+            trial.set_user_attr(_EFFECTIVE_KEY_ATTR, list(self._effective_config_key(overrides)))
             for k in ("retrieval_induced_error_rate", "deflection_rate"):
                 if k in metrics:
                     trial.set_user_attr(k, float(metrics[k]))
@@ -293,6 +710,49 @@ class HyperparameterOpt:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 except Exception as e:
                     LOGGER.debug(f"Failed to cleanup temp dir {temp_dir}: {e}")
+            # Free this trial's retriever, reranker client and BM25 structure
+            # before the next one allocates its own.
+            self._release_trial_objects()
+
+    def _export_overrides(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Overrides for an exported candidate: the tuned params and nothing else.
+
+        ``retrieval.lancedb_index_dir`` and ``data.path_or_repo`` never travel
+        into a candidate. A trial points them at the local index cache and the
+        CLI's dataset so it can score a subsample; the candidate is re-scored by
+        ``deepfix eval`` on the index and dataset its own config names, and a
+        ``<run_dir>/idx-cache`` path does not exist on the API host.
+        """
+        return {
+            key: value for key, value in params.items() if key not in _TRIAL_ONLY_OVERRIDE_KEYS
+        }
+
+    def _export_config_for(self, params: dict[str, Any]) -> RAGConfig:
+        """The base config plus the tuned params, with no trial-only overrides."""
+        return apply_mutation(self.export_base_config, self._export_overrides(params))
+
+    def _best_config_from_trial(self, trial: FrozenTrial) -> RAGConfig:
+        """The exported candidate for one trial."""
+        return self._export_config_for(dict(trial.params))
+
+    def _record_trial(self, study: optuna.Study, trial: FrozenTrial) -> None:
+        """Write best-so-far artifacts after each finished trial.
+
+        A ``--timeout`` or a crash after at least one complete trial leaves
+        ``hpo_trials.json`` and the best-so-far YAML behind, so a wrapped-up
+        round still has something to confirm on the full dev set.
+        """
+        if self.run_dir is None:
+            return
+        try:
+            _write_trial_rows(self.run_dir, self.metric_names, study.trials)
+            best = _best_trial(study)
+            if best is not None:
+                config = self._best_config_from_trial(best)
+                target = self.output_path or (self.run_dir / "candidate.yaml")
+                write_best_so_far(target, config)
+        except Exception as exc:  # a failed artifact must not kill the study
+            LOGGER.warning(f"Could not refresh the HPO artifacts: {exc}")
 
     def optimize(
         self,
@@ -313,6 +773,9 @@ class HyperparameterOpt:
         target_limit = (
             limit if limit is not None else (self.hpo_config.limit or self.base_config.data.limit)
         )
+        # Copy a remote index before the first trial so no trial fetches it again.
+        self.local_index_for()
+        self._load_shared_index()
 
         directions = ["maximize"] * len(self.metric_names)
 
@@ -323,16 +786,53 @@ class HyperparameterOpt:
             load_if_exists=load_if_exists,
         )
 
-        study.optimize(
-            lambda trial: self._objective(
-                trial=trial,
-                dataset_path=target_dataset,
-                split=target_split,
-                limit=target_limit,
-            ),
-            n_trials=target_n_trials,
-            timeout=timeout,
-        )
+        # n_trials is the number of *evaluated* trials the study should hold.
+        # A pruned duplicate costs no evaluation, so the loop keeps going until
+        # enough trials completed or the wall clock runs out.
+        deadline = None if timeout is None else time.monotonic() + timeout
+        max_attempts = target_n_trials + max(target_n_trials * 4, 20)
+        while True:
+            completed_count = len([t for t in study.trials if t.state == TrialState.COMPLETE])
+            if completed_count >= target_n_trials:
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            if len(study.trials) >= max_attempts:
+                LOGGER.info(
+                    f"Stopping after {len(study.trials)} attempts: the search space has "
+                    f"no configuration left to try ({completed_count} completed)."
+                )
+                break
+            before = len(study.trials)
+            study.optimize(
+                lambda trial: self._objective(
+                    trial=trial,
+                    dataset_path=target_dataset,
+                    split=target_split,
+                    limit=target_limit,
+                ),
+                n_trials=1,
+                timeout=(None if deadline is None else max(1e-6, deadline - time.monotonic())),
+                callbacks=[self._record_trial],
+                # A trial whose cases all errored measures nothing. Record it
+                # FAILED and keep sweeping instead of aborting the whole study,
+                # then fail loudly below if nothing ever completed.
+                catch=(TrialEvaluationError,),
+            )
+            if len(study.trials) == before:
+                # The timeout expired before Optuna could start a trial.
+                break
+
+        completed_trials = [t for t in study.trials if t.state == TrialState.COMPLETE]
+        if not completed_trials:
+            failures = [t for t in study.trials if t.state == TrialState.FAIL]
+            if failures:
+                reason = failures[0].user_attrs.get("error")
+                raise TrialEvaluationError(
+                    0,
+                    "no trial completed, so nothing was measured"
+                    + (f". {reason}" if reason else "."),
+                )
 
         # Build Pareto trials and configurations
         pareto_trials: list[FrozenTrial] = []
@@ -350,10 +850,7 @@ class HyperparameterOpt:
                 pareto_trials = []
 
         for pt in pareto_trials:
-            param_overrides: dict[str, Any] = {}
-            for param_key, param_val in pt.params.items():
-                param_overrides[param_key] = param_val
-            p_config = apply_mutation(self.base_config, param_overrides)
+            p_config = self._export_config_for(dict(pt.params))
             pareto_configs.append(p_config)
 
         # Select representative best trial
@@ -369,6 +866,13 @@ class HyperparameterOpt:
             idx = pareto_trials.index(best_trial)
             best_config = pareto_configs[idx]
 
+        final_completed = len([t for t in study.trials if t.state == TrialState.COMPLETE])
+        failed_count = len([t for t in study.trials if t.state == TrialState.FAIL])
+        pruned_count = len([t for t in study.trials if t.state == TrialState.PRUNED])
+        trials_path: Path | None = None
+        if self.run_dir is not None:
+            trials_path = _write_trial_rows(self.run_dir, self.metric_names, study.trials)
+
         return HPOResult(
             study=study,
             base_config=self.base_config,
@@ -377,4 +881,12 @@ class HyperparameterOpt:
             pareto_configs=pareto_configs,
             best_trial=best_trial,
             best_config=best_config,
+            run_dir=self.run_dir,
+            trials_path=trials_path,
+            index_dir=self.local_index_dir,
+            index_cache_source=self.index_copy_source,
+            failed_trials=failed_count,
+            # A timeout, or a trial that failed, can leave the budget unspent.
+            pruned_trials=pruned_count,
+            stopped_early=final_completed < target_n_trials,
         )

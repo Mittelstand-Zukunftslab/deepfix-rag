@@ -6,7 +6,7 @@
 [![Evaluation: DeepEval](https://img.shields.io/badge/Evaluation-DeepEval-purple.svg)](https://github.com/confident-ai/deepeval)
 [![Tracking: MLflow](https://img.shields.io/badge/Tracking-MLflow-blue.svg)](https://mlflow.org/)
 **DeepFix** is an agentic framework engineered for autonomous diagnosis and hyperparameter optimization of Retrieval-Augmented Generation (RAG) pipelines. It decouples deterministic RAG system operations from agentic reasoning:
-1. **Deterministic Python CLI (`deepfix`)**: Scriptable, atomic subcommands (`dataset`, `index`, `eval`, `gate`, `mutate-config`, `diff-config`, `schema`, `run-diagnostic`, `export`) that execute pipeline tasks with structured JSON outputs and predictable exit codes.
+1. **Deterministic Python CLI (`deepfix`)**: Scriptable, atomic subcommands (`dataset`, `index`, `eval`, `gate`, `hpo`, `mutate-config`, `diff-config`, `schema`, `run-diagnostic`, `export`) that execute pipeline tasks with structured JSON outputs and predictable exit codes.
 2. **Agent-Agnostic Skill Plugin**: Modular failure-remediation skills (`SKILL.md`) that guide long-running AI agents (such as Hermes, Claude, or Antigravity) to identify root causes and run remediation cycles autonomously.
 3. **MLflow Experiment Lineage**: Automatic tracking of config mutations, benchmark metrics, prompt artifacts, and evaluation deltas across optimization runs.
 Developed by **Mittelstand Zukunftslab & AI Service Center (AISC) — HPI**.
@@ -28,6 +28,7 @@ DeepFix separates the optimization loop into two clear layers:
 │   deepfix dataset load  ──▶  data/datasets/<benchmark>/<split>          │
 │   deepfix index         ──▶  LanceDB Tables (Hybrid/Dense/Lexical)      │
 │   deepfix eval          ──▶  DeepEval (Faithfulness, Precision, Refusal)│
+│   deepfix gate          ──▶  Keep-or-revert decision on paired deltas    │
 │   deepfix mutate-config ──▶  Validated YAML configs (Pydantic Schema)   │
 │   deepfix diff-config   ──▶  Parametric Delta Output                    │
 └────────────────────────────────────┬────────────────────────────────────┘
@@ -44,16 +45,16 @@ DeepFix separates the optimization loop into two clear layers:
 | Feature / Subcommand | Status | Description |
 | :--- | :---: | :--- |
 | `deepfix dataset load` | `[Ready]` | Ingests benchmark datasets (Bundestag, Legal RAG Bench, local files) into standardized JSON Lines format. |
-| `deepfix index` | `[Ready]` | Builds vector & lexical tables in LanceDB with Octen-8B / Qwen embeddings. |
+| `deepfix index` | `[Ready]` | Builds vector & lexical tables in LanceDB with the `EMBEDDING_MODEL` you set in `.env`. |
 | `deepfix eval` | `[Ready]` | Runs DeepEval scoring; supports `--compare` for automatic delta metrics and `--no-mlflow` for offline runs. |
 | `deepfix gate` | `[Ready]` | Decides keep or revert from paired per-query compare results and a seeded bootstrap interval. |
 | `deepfix schema` | `[Ready]` | Prints the RAGConfig schema, including the index-time keys. |
 | `deepfix mutate-config` | `[Ready]` | Validates dot-notation parameter overrides against Pydantic schema and outputs updated YAML. Unknown keys exit 1. |
 | `deepfix diff-config` | `[Ready]` | Computes structural and hyperparameter diffs between two YAML configurations. |
 | `deepfix hpo` | `[Ready]` | Executes multi-paradigm hyperparameter optimization (dense, hybrid, graph) using Optuna. |
-| `deepfix run-diagnostic` | `[In Progress]` | Categorizes failure modes (retrieval vs. ranking vs. grounding vs. entity). |
-| `deepfix export` | `[In Progress]` | Packages best configuration with evaluation lineage into standalone deployment bundles. |
-| **Autonomous Agent Loop** | `[In Progress]` | Multi-cycle closed-loop optimization executed by Hermes via `SKILL.md` plugins. |
+| `deepfix run-diagnostic` | `[Ready]` | Categorizes failure modes (retrieval vs. ranking vs. grounding vs. entity). Needs a reachable `deepfix-server`. |
+| `deepfix export` | `[In Progress]` | Packages best configuration with evaluation lineage into standalone deployment bundles. Exits 2 until implemented. |
+| **Autonomous Agent Loop** | `[Ready]` | Multi-cycle closed-loop optimization executed by Hermes via the `SKILL.md` plugins, promoted by the paired holdout gate. |
 ---
 ## Supported Benchmark Matrix
 DeepFix targets complex, domain-specific legal and parliamentary RAG benchmarks implemented in `src/deepfix_rag/data.py`:
@@ -64,23 +65,64 @@ DeepFix targets complex, domain-specific legal and parliamentary RAG benchmarks 
 | **Custom / Local Benchmarks** | `<path.jsonl>`<br>`<dir_path>` | Arbitrary domain corpora and evaluation QA pairs | Custom evaluation & domain-specific failure mode diagnostics | Flexible | Local JSON / JSONL files or directory (`LocalFileLoader`) |
 ---
 ## Installation & Prerequisites
+
+DeepFix installs in two pieces. The **skills** are Markdown procedures your agent reads; the **CLI** is the deterministic tool those procedures call.
+
 ### Prerequisites
-- **Python**: `~=3.12.0`
-- **Package Manager**: [uv](https://github.com/astral-sh/uv) (recommended) or standard `pip`
-### Setup
+
+- **Python 3.12** — the package declares `requires-python = "~=3.12.0"`.
+- **Node 22.20 or newer** — only for `npx`, which runs Vercel's [`skills`](https://github.com/vercel-labs/skills) installer. Nothing else in the project needs Node; the web UI uses Bun.
+- **Java 11 or newer** — optional. `pyterrier` (the package that computes nDCG, recall, and precision) starts a JVM for Terrier-backed measures. The `pt.Evaluate` path DeepFix uses runs without Java, so the plain install works; install a JDK if you plan to extend the evaluation code with Terrier index components.
+
+### 1. Install the agent skills
+
 ```bash
-# 1. Clone repository
+npx skills add Mittelstand-Zukunftslab/deepfix-rag -y
+```
+
+That installs every skill from `.agents/skills/` into your agent's directory for the current project. To install globally for the Hermes agent instead:
+
+```bash
+npx skills add Mittelstand-Zukunftslab/deepfix-rag -g -a hermes-agent -y
+```
+
+List what a checkout publishes without installing anything:
+
+```bash
+npx skills add Mittelstand-Zukunftslab/deepfix-rag --list
+```
+
+### 2. Install the `deepfix` CLI
+
+The package is not on PyPI. Install it from git with [`uv`](https://docs.astral.sh/uv/guides/tools/):
+
+```bash
+uv tool install "git+https://github.com/Mittelstand-Zukunftslab/deepfix-rag.git"
+deepfix --help
+```
+
+If `deepfix` is not on your `PATH` in a new terminal, run `uv tool update-shell` and open a new terminal.
+
+### 3. Work on the source
+
+For development, clone the repository and install into a virtual environment:
+
+```bash
 git clone https://github.com/Mittelstand-Zukunftslab/deepfix-rag.git
 cd deepfix-rag
-# 2. Create environment & install dependencies with uv
+
+# Create the environment and install every dependency from uv.lock
 uv sync
-# 3. Activate the virtual environment
+
+# Activate it
 # On Windows (PowerShell):
 .venv\Scripts\Activate.ps1
 # On Linux / macOS:
 source .venv/bin/activate
 ```
+
 Alternatively, use the provided `Makefile`:
+
 ```bash
 make create_environment
 make requirements
@@ -111,6 +153,8 @@ DEEPFIX_LLM_TEMPERATURE=0.7
 DEEPFIX_LLM_MAX_TOKENS=8000
 DEEPFIX_LLM_CACHE=1
 DEEPFIX_LLM_TRACK_USAGE=1
+# LiteLLM reads this flag. Claude Haiku 5.5 allows only temperature=1.
+LITELLM_DROP_PARAMS=1
 
 DEEPFIX_SEARCH_PROVIDER="duckduckgo"
 
@@ -123,8 +167,10 @@ MLFLOW_EXP_NAME=Deepfix-server
 ```
 
 ```bash
-deepfix-server launch -host 0.0.0.0 -port 8844
+deepfix-server launch -host 127.0.0.1 -port 8844
 ```
+
+The analysis server has no authentication of its own, so bind it to loopback as shown. Put a reverse proxy in front of it if remote agents must reach it.
 
 For reproducible deployments, pin the installation to a release tag or commit:
 
@@ -186,8 +232,13 @@ DEEPFIX_API_KEY=
 # ------------------------------------------------------------------------------
 LLM_BASE_URL=https://api.aisc.hpi.de/v1
 LLM_API_KEY=
-LLM_MODEL=qwen3-8-27b
-LLM_JUDGE_MODEL=gpt-oss-120b
+# Answer generation model, served by LLM_BASE_URL.
+LLM_MODEL=qwen/qwen3.8-flash
+# DeepEval judge. It may differ from LLM_MODEL. This deployment points
+# LLM_JUDGE_MODEL at the same endpoint as the answers.
+LLM_JUDGE_MODEL=z-ai/glm-5.3-flash
+# Drop sampling params the provider rejects (Claude Haiku 5.5 allows only temperature=1).
+DEEPFIX_LLM_DROP_PARAMS=1
 
 # S3-compatible storage
 S3_ENDPOINT_URL=https://hpi-s3.mittelstand-zukunftslab.de
@@ -203,14 +254,14 @@ HF_TOKEN=
 # ------------------------------------------------------------------------------
 EMBEDDING_BASE_URL=https://api.aisc.hpi.de/v1
 EMBEDDING_API_KEY=
-EMBEDDING_MODEL=octen-embedding-8b
+EMBEDDING_MODEL=perplexity/pplx-embed-v1-4b
 
 # ------------------------------------------------------------------------------
-# Reranker Configuration (Cohere-compatible API)
+# Reranker Configuration (OpenRouter rerank API)
+# Rerank posts to POST <COHERE_BASE_URL>/rerank with OPENROUTER_API_KEY.
 # ------------------------------------------------------------------------------
-COHERE_BASE_URL=https://api.aisc.hpi.de
-COHERE_API_KEY=
-COHERE_MODEL=qwen3-reranker-4b
+COHERE_BASE_URL=https://openrouter.ai/api/v1
+COHERE_MODEL=cohere/rerank-4-fast
 
 # ------------------------------------------------------------------------------
 # Memgraph Graph Database
@@ -229,15 +280,18 @@ FALKORDB_PASSWORD=
 FALKORDB_DATABASE=my_knowledge_graph
 
 # ------------------------------------------------------------------------------
-# Hermes Agent
+# Hermes Agent (internal sandbox; no published port, dashboard off)
 # ------------------------------------------------------------------------------
-HERMES_DASHBOARD=
-HERMES_DASHBOARD_BASIC_AUTH_USERNAME=
-HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=
-HERMES_DASHBOARD_BASIC_AUTH_SECRET=
-API_SERVER_ENABLED=
-API_SERVER_HOST=
+# Required. At least 16 characters. Generate with: openssl rand -hex 32
 API_SERVER_KEY=
+# Distinct from LLM_API_KEY. Not sent to the Hermes container as LLM_API_KEY.
+OPENROUTER_API_KEY=
+# Model the Hermes sandbox optimization agent runs. Required: the sandbox
+# writes it into /opt/data/config.yaml and the API posts it on POST /v1/runs.
+# Both services read the same value, so they cannot drift.
+HERMES_MODEL=deepseek/deepseek-v4.1-flash-1017
+# Optional chat-profile key. The chat profile is not started.
+HERMES_CHAT_API_SERVER_KEY=
 
 # ------------------------------------------------------------------------------
 # MLflow Server (docker compose)
@@ -245,9 +299,20 @@ API_SERVER_KEY=
 # Point that URI at http://localhost:5000 to use this local server.
 MLFLOW_ALLOWED_HOSTS=localhost,127.0.0.1
 MLFLOW_CORS_ALLOWED_ORIGINS=http://localhost:5000
+# Optional overrides. MLflow 3.x matches Host exactly (include hostname:port).
+MLFLOW_SERVER_ALLOWED_HOSTS=hermes,localhost,diagnostic-agent,mlflow,mlflow:5000,localhost:5000,127.0.0.1,127.0.0.1:5000,backend-api,deepfix-mlflow.mittelstand-zukunftslab.de
+MLFLOW_SERVER_CORS_ALLOWED_ORIGINS=http://hermes,http://localhost,http://diagnostic-agent,http://mlflow:5000,http://backend-api:8000,https://deepfix-mlflow.mittelstand-zukunftslab.de
 ```
 ---
 ## Quickstart: Step-by-Step Optimization Walkthrough
+
+Create `.env` before the first command. Every model id comes from the environment, and no model has a default in code, so `deepfix` fails naming the variable if `.env` is missing:
+
+```bash
+cp example.env .env
+# then edit .env and fill in the API keys and endpoints you have
+```
+
 Here is an end-to-end scenario demonstrating how DeepFix loads data, indexes passages, computes baselines, mutates parameters, and compares improvements.
 ### 1. Ingest Benchmark Dataset
 Fetch the benchmark dataset (e.g. `bundestag-qa`):
@@ -322,8 +387,12 @@ deepfix index --dataset <path_to_corpus> --config <config.yaml> --index-dir <dir
 ### `deepfix eval`
 Run DeepEval benchmark evaluation on a QA dataset.
 ```bash
-deepfix eval --dataset <path_to_qa> --config <config.yaml> [--index-dir <dir>] [--compare <base.yaml>] [--limit <N>] [--seed <N>] [--no-mlflow] [--json]
+deepfix eval --dataset <path_to_qa> --config <config.yaml> [--index-dir <dir>] [--baseline-index-dir <dir>] [--compare <base.yaml>] [--limit <N>] [--seed <N>] [--no-mlflow] [--json]
 ```
+
+`--index-dir` moves only the candidate. `--baseline-index-dir` moves the `--compare` baseline, so a round can score both sides from one local copy of a remote index (`<run_dir>/idx-cache`) instead of re-reading the object store.
+
+`eval` never builds an index. When `--index-dir` or `--baseline-index-dir` names a missing or empty directory it copies the config's own `s3://` index into it, manifest included, then scores that. If the config's index is local too, the run fails with `error_type` `stale_index` naming the directory. A missing cache no longer falls through to ingestion, which used to build and score a brand-new index without saying so.
 ### `deepfix mutate-config`
 Validate and mutate RAG pipeline hyperparameters using dot-notation keys.
 ```bash
@@ -344,8 +413,8 @@ Print fields, bounds, enums, and the index-time key list.
 ```bash
 deepfix schema --json
 ```
-### `deepfix run-diagnostic` `[In Progress]`
-Classify low-scoring queries into specific failure modes. There is no `--type` or `--threshold` flag.
+### `deepfix run-diagnostic`
+Classify low-scoring queries into specific failure modes. Requires a reachable DeepFix analysis server (`DEEPFIX_SERVER_URL`, or `--server-url`). There is no `--type` or `--threshold` flag.
 ```bash
 deepfix run-diagnostic --dataset <path> --config <config.yaml> [--server-url <url>] [--limit <N>] [--json]
 ```
@@ -358,7 +427,20 @@ deepfix export --config <best_config.yaml> --output <dist_path> [--include-meta]
 Execute multi-paradigm hyperparameter optimization study using Optuna.
 ```bash
 deepfix hpo --config <hpo_config.yaml> [--n-trials <N>] [--storage-uri <uri>] [--paradigm <dense|hybrid|graph>] [--output <best.yaml>] [--json]
+deepfix hpo --config configs/hpo_retrieval_small.yaml --retrieval-only --limit 20 --seed 0 \
+  --n-trials 12 --timeout 2400 --storage-uri sqlite:///<run_dir>/hpo.db \
+  --output <run_dir>/candidate.yaml --run-dir <run_dir> --json
 ```
+
+`--seed` draws a deterministic sample of `--limit` rows for every trial (the same semantics as `deepfix eval --seed`). `--timeout` caps the study wall clock. `--run-dir` keeps `hpo_trials.json` and the best-so-far YAML fresh after every trial, so a timeout or a crash still leaves a usable candidate. When the base config names an `s3://` index, HPO copies the whole prefix — bucket and key — once into `<run_dir>/idx-cache` (or the `--index-dir` you pass) and every trial reads that local copy. The copy also receives a `deepfix_index.json` built from that config, so a later `eval --index-dir` on the cache passes the staleness check instead of falling back to S3. Point the confirmation evals at the same cache with `--index-dir` and `--baseline-index-dir`.
+
+The exported candidate contains the base config plus the tuned parameters only. `data.limit`, `data.path_or_repo` and `retrieval.lancedb_index_dir` are trial-only overrides and never appear in it, so the candidate is re-scored on the full dev set against the champion's own dataset and index.
+
+A trial whose parameter set duplicates an earlier one is pruned without running an eval: it costs nothing and cannot become the best trial. `n_trials` counts evaluated trials, so pruning never shortens the budget; `pruned_trials` reports the overhead.
+
+A trial where every case errored is recorded `FAIL` rather than scored `0.0`, so a broken lever cannot look like a worse one. If no trial completes, the command exits 2 with the first trial's error.
+
+`configs/hpo_retrieval_small.yaml` is the shipped query-time space: rerank on/off with `top_n` 5 or 10, `top_k` 10/20/50, and the three fusion modes that read their weights. It excludes `bm25_k1`, `bm25_b`, query expansion above 1, and every chunking key. `.agents/skills/hpo-search/SKILL.md` is the procedure a Hermes round follows with it.
 ---
 ## Configuration Schema
 Configurations are validated against Pydantic models in `src/deepfix_rag/config/schema.py`:
@@ -388,45 +470,57 @@ eval:
   cutoff_k: 5               # nDCG@k, R@k, and P@k. Independent of retrieval.top_k
 ```
 
-`embedding.model`, `rerank.model`, and `generation.model` are not config keys. `deepfix mutate-config` rejects them. The embedding model, reranker, and generation model come from `EMBEDDING_MODEL`, `COHERE_MODEL`, and `LLM_MODEL`. Run `deepfix schema --json` for the live field list and `index_time_keys`.
+`embedding.model`, `rerank.model`, and `generation.model` are not config keys. `deepfix mutate-config` rejects them. The embedding model, reranker, and generation model come from `EMBEDDING_MODEL`, `COHERE_MODEL`, and `LLM_MODEL`. The judge comes from `LLM_JUDGE_MODEL` and the Hermes sandbox model from `HERMES_MODEL`; the sandbox also accepts `HERMES_MODEL_PROVIDER` and `HERMES_MODEL_BASE_URL`. No model id has a default in code: an empty value fails naming the variable, so set every model in `.env` (the template values in `example.env` are the deployment defaults). Run `deepfix schema --json` for the live field list and `index_time_keys`.
 ---
 ## Autonomous Optimization Workflow (Hermes Agent)
 In autonomous mode, an LLM agent executes multi-cycle optimization loops guided by the DeepFix skill plugin:
-1. **Observe**: Agent runs `deepfix run-diagnostic` and `deepfix eval` on the `dev` split.
-2. **Match Skill**: Agent matches identified failures to modular skill instructions under `.agents/skills/`:
-   - `.agents/skills/chunking-tuning/SKILL.md` (addressing context fragmentation)
-   - `.agents/skills/rerank-calibration/SKILL.md` (raising `retrieval.top_k` and turning rerank on)
-   - `.agents/skills/hybrid-fusion-tuning/SKILL.md` (fusion mode and weights; alias `query-rewriting`)
-   - `.agents/skills/deflection-and-refusal/SKILL.md` (manual only; not used by the optimization loop)
-   - `.agents/skills/retrieval-backend-selection/SKILL.md` (dense vs. bm25 vs. hybrid; alias `embedding-selection`)
-3. **Act**: Agent mutates configuration (`deepfix mutate-config`), rebuilds index (`deepfix index` if needed), and re-evaluates (`deepfix eval --compare`).
-4. **Decide**: If metrics improve, the mutation is adopted as the new baseline; otherwise, it is reverted.
+1. **Observe**: Agent runs `deepfix eval` on the `dev` split to score the champion. (`deepfix run-diagnostic` needs a reachable analysis server, so a round does not call it.)
+2. **Match Skill**: Agent reads `.agents/skills/optimization-loop/SKILL.md` first, then picks exactly one pathology skill from its routing table:
+   - `.agents/skills/hpo-search/SKILL.md` (the bounded query-time Optuna sweep: rerank, `top_k`, fusion)
+   - `.agents/skills/chunking-tuning/SKILL.md` (addressing context fragmentation; a re-index)
+   - `.agents/skills/retrieval-backend-selection/SKILL.md` (dense vs. bm25 vs. hybrid; a re-index)
+   - `.agents/skills/rerank-calibration/SKILL.md` and `.agents/skills/hybrid-fusion-tuning/SKILL.md` (readable references; a round reaches their levers through `hpo-search`)
+   - `.agents/skills/deflection-and-refusal/SKILL.md`, `legal-retrieval-grounding/`, `multi-hop-aggregation/`, and `diagnostic-server/` are manual/benchmark only and never used by an API-driven round
+3. **Act**: Agent mutates configuration (`deepfix mutate-config`), rebuilds the index when the change is index-time, and re-scores the full dev set (`deepfix eval --compare`).
+4. **Decide**: The agent writes `result.json` with a recommendation; the API promotes through the paired holdout gate or reverts. The agent never promotes itself.
 5. **Log**: All runs, parameters, and evaluation deltas are logged to MLflow.
 ---
 ## Project Organization
 ```
 deepfix-rag/
-├── configs/                       <- RAG configuration YAML templates
-│   ├── default.yaml               <- Default hybrid baseline
-│   ├── octen.yaml                 <- Octen-8B embedding configuration
-│   └── rerank.yaml                <- Re-ranking configuration
+├── .agents/skills/                <- The 12 agent skills the skills CLI installs
+│   ├── optimization-loop/         <- Entry point: one round, start here
+│   ├── hpo-search/                <- The bounded query-time Optuna sweep
+│   ├── chunking-tuning/           <- Index-time chunking hypothesis
+│   ├── retrieval-backend-selection/ <- dense vs. bm25 vs. hybrid
+│   ├── rerank-calibration/        <- Rerank on/off and top_k (reference)
+│   ├── hybrid-fusion-tuning/      <- Fusion mode and weights (reference)
+│   └── deflection-and-refusal/, legal-retrieval-grounding/,
+│       multi-hop-aggregation/, diagnostic-server/  <- Manual/benchmark only
+├── configs/                       <- RAG configuration YAML templates (see configs/README.md)
+│   ├── default.yaml               <- Start here: the default hybrid baseline
+│   ├── champion.yaml              <- The current best config a round starts from
+│   ├── hpo_retrieval_small.yaml   <- Query-time space for one hpo-search sweep
+│   └── dense.yaml, rerank.yaml, graph.yaml, hpo.yaml, ...  <- Manual references
 ├── data/                          <- Benchmark data and local indexes (ignored by git)
 │   ├── datasets/                  <- Ingested benchmark splits (corpus.jsonl, qa.jsonl)
 │   └── indexes/                   <- LanceDB table indexes
-├── docs/                          <- PRD, architecture notes, and UX flows
-│   ├── prd-deepfix-cli.md         <- Comprehensive Product Requirements Document
-│   └── plan-deepfix-ux-flow.md    <- UX flow plan and architectural boundary specs
-├── models/                        <- Local serialized models / cache
+├── docker/hermes/                 <- Hermes sandbox image, boot scripts, and secret scrub
 ├── notebooks/                     <- Exploratory Jupyter notebooks
+├── plugins/deepfix-rag/plugin.yaml <- Plugin manifest: the 12 skills plus their aliases
+├── scripts/                       <- Operational scripts (prompt registration, etc.)
 ├── src/deepfix_rag/               <- Main Python package source code
+│   ├── api/                       <- FastAPI product API (routes, schemas, auth)
 │   ├── cli/                       <- CLI subcommands (Typer)
 │   │   ├── config.py              <- mutate-config and diff-config
 │   │   ├── dataset.py             <- dataset load, list, and unanswerable generation
 │   │   ├── diagnostic.py          <- run-diagnostic (failure analysis)
 │   │   ├── eval.py                <- eval with DeepEval and delta comparisons
 │   │   ├── export.py              <- export configuration bundles
+│   │   ├── gate.py                <- gate: keep or revert from a paired compare
 │   │   ├── hpo.py                 <- multi-paradigm Optuna HPO study CLI
 │   │   ├── index.py               <- index building with LanceDB
+│   │   ├── schema_cmd.py          <- schema: fields, bounds, index-time keys
 │   │   └── ui.py                  <- Rich console formatting and JSON output
 │   ├── config/                    <- Configuration schema and mutator logic
 │   │   ├── hpo.py                 <- Optuna HPO search space and study config
@@ -438,8 +532,12 @@ deepfix-rag/
 │   ├── evaluation/                <- Evaluation runner and MLflow integrations
 │   │   └── runner.py              <- DeepEval pipeline execution runner
 │   ├── hpo.py                     <- HyperparameterOpt execution engine
+│   ├── index_manifest.py          <- Index-time signature and staleness check
+│   ├── indexing.py                <- Blue-green workspace builds and incremental upserts
+│   ├── optimization.py            <- Optimization runs, Hermes orchestration
 │   ├── pipeline.py                <- LlamaIndex Workflow RAG pipeline (hybrid/dense/BM25)
 │   └── main.py                    <- Entrypoint CLI application (`deepfix`)
+├── tasks/                         <- PRDs, plans, and implementation notes
 ├── tests/                         <- Test suite (pytest + conftest.py)
 │   ├── conftest.py                <- Shared fixtures (cli_runner, configs, benchmark paths)
 │   ├── data/                      <- Test benchmark datasets
@@ -450,11 +548,13 @@ deepfix-rag/
 │   ├── test_dataset_cli.py        <- Dataset CLI commands and split isolation
 │   ├── test_dataset_loaders.py    <- Hugging Face / local dataset loader routing
 │   ├── test_end_to_end.py         <- Full ingestion, LanceDB indexing & hybrid retrieval
-│   └── test_index_creation.py     <- LanceDB index building & overwrite safety
-├── candidate_manifest.json        <- Example MLflow candidate artifact
+│   ├── test_index_creation.py     <- LanceDB index building & overwrite safety
+│   └── test_skills.py             <- Skills match the CLI, schema, and promotion gate
+├── web/                           <- TanStack Start product UI (Bun, TypeScript)
+├── docker-compose.yml             <- API, MLflow, RustFS, and Hermes services
+├── example.env                    <- Environment template; copy to .env first
 ├── Makefile                       <- Development and environment convenience tasks
 ├── pyproject.toml                 <- Package dependencies, Ruff & pytest configuration
-├── scripts/register_prompt.py     <- Script to register RAG prompts with MLflow
 └── README.md                      <- Project documentation (this file)
 ```
 ---

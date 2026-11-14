@@ -37,9 +37,10 @@ from deepfix_rag.config.schema import (
     DataLoaderConfig,
     GenerationMetricType,
     RAGConfig,
+    RetrievalBackend,
     RetrievalMetricType,
 )
-from deepfix_rag.config.settings import LOGGER, settings
+from deepfix_rag.config.settings import LOGGER, require_model, settings
 from deepfix_rag.data import DataLoader, QARecord, QAValidationError
 from deepfix_rag.evaluation.labels import (
     generation_metrics_for_record,
@@ -427,7 +428,7 @@ class GenerationEvaluator:
     ) -> None:
         self.threshold = threshold
         self.judge = judge or ProxyJudgeLLM(
-            model=settings.LLM_JUDGE_MODEL,
+            model=require_model("LLM_JUDGE_MODEL"),
             api_base=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY,
         )
@@ -614,27 +615,61 @@ class EvaluationRunner:
         embed_model: Any = None,
         llm: Any = None,
         persist: bool = True,
+        index: Any = None,
     ) -> None:
         self.config = config
         self.cutoff_k = config.eval.cutoff_k
         self.embed_model = embed_model
         self.llm = llm
         self.persist = persist
+        # A caller that scores several configs against one index (HPO) passes it
+        # in, so each run does not re-open LanceDB and rebuild the docstore. The
+        # runner never closes it: ownership stays with the caller.
+        self._preloaded_index = index
 
         self.retrieval_evaluator = retrieval_evaluator or RetrievalEvaluator(
             measures=config.eval.retrieval_metrics,
             cutoff_k=self.cutoff_k,
         )
-
-        if not config.retrieval_only:
-            self.generation_evaluator = generation_evaluator or GenerationEvaluator(
-                generation_metrics=config.eval.generation_metrics,
-                threshold=config.eval.threshold,
-            )
-        else:
-            self.generation_evaluator = None
+        # The judge is built on the first run that scores generation metrics, not
+        # here: `--retrieval-only` can override the config, and that path needs no
+        # judge, so LLM_JUDGE_MODEL must not be required for it.
+        self.generation_evaluator = generation_evaluator
 
         self.tracker = tracker or EvaluationTracker()
+
+    def _ensure_generation_evaluator(self) -> GenerationEvaluator | None:
+        """Build the judge when this run scores generation metrics.
+
+        ``--retrieval-only`` overrides the config after construction, and a
+        retrieval-only run needs no judge. Building it here keeps
+        ``LLM_JUDGE_MODEL`` required only when a generation metric will be scored.
+        """
+        if self.config.retrieval_only:
+            self.generation_evaluator = None
+            return None
+        if self.generation_evaluator is None:
+            self.generation_evaluator = GenerationEvaluator(
+                generation_metrics=self.config.eval.generation_metrics,
+                threshold=self.config.eval.threshold,
+            )
+        return self.generation_evaluator
+
+    def _require_query_expansion_llm(self) -> None:
+        """Fail before scoring when the config would call an LLM to expand a query.
+
+        Query expansion is the only retrieval-time LLM call. Checking it here
+        keeps every case from erroring one at a time, and keeps the error type
+        ``missing_model`` on the CLI boundary. A retrieval-only run with
+        ``retrieval.query_expansion_num <= 1`` needs no generation model.
+        """
+        expansion_backend = self.config.retrieval.backend in (
+            RetrievalBackend.HYBRID,
+            RetrievalBackend.MIXED,
+        )
+        if not expansion_backend or self.config.retrieval.query_expansion_num <= 1:
+            return
+        require_model("LLM_MODEL")
 
     async def _execute_case(
         self,
@@ -739,6 +774,9 @@ class EvaluationRunner:
         if overrides:
             self.config = apply_mutation(self.config, overrides)
 
+        self._ensure_generation_evaluator()
+        self._require_query_expansion_llm()
+
         qa_pairs = resolve_eval_records(
             dataset_path,
             records,
@@ -763,7 +801,12 @@ class EvaluationRunner:
             embed_model=self.embed_model,
             llm=self.llm,
         )
-        await workflow.run(ingest=True)
+        if self._preloaded_index is not None:
+            # Reuse the caller's index instead of re-opening LanceDB and
+            # rebuilding the BM25 docstore for every config that is scored.
+            workflow._index = self._preloaded_index
+        else:
+            await workflow.run(ingest=True)
 
         async def _run(qa: QARecord, i: int) -> CaseResult:
             async with semaphore:
@@ -893,6 +936,14 @@ class EvaluationRunner:
                 nested=nested,
                 config_yaml=self.config.to_yaml(),
             )
+
+        # Drop this run's retriever, reranker and per-query structures before the
+        # caller starts the next config. A preloaded index belongs to the caller,
+        # so only this workflow's reference is cleared; the objects themselves
+        # are collected on the caller's next gc, which HPO runs between trials.
+        workflow._index = None
+        cases = []
+        res_df = None
 
         return summary
 

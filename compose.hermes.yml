@@ -1,0 +1,84 @@
+# Hermes optimization sandbox. Internal Compose network only.
+#
+# No host ports: the optimization API listens on 8642 inside the network,
+# and the chat profile's 8643 is not published and is not started.
+# No Docker socket. No HERMES_DASHBOARD. The process user is the image's
+# hermes user (s6 starts as root and drops privileges for the gateway).
+#
+# OPTIMIZATION_AGENT defaults to openhands. The API reads the flag; this
+# file does not select the agent. Hermes runs only when the flag is hermes.
+#
+# Secrets (API_SERVER_KEY, OPENROUTER_API_KEY, HERMES_CHAT_API_SERVER_KEY)
+# are interpolated from the environment. They are not baked into the image.
+# LLM_API_KEY is not passed. S3_ACCESS_KEY_ID here is HERMES_S3_ACCESS_KEY_ID,
+# the hermes-optimizer key limited to optimization/runs/*. The root key
+# (S3_ACCESS_KEY_ID / RUSTFS_ACCESS_KEY on the API) is not passed.
+
+services:
+  hermes:
+    build:
+      context: .
+      dockerfile: docker/hermes/Dockerfile
+    image: deepfix-hermes
+    container_name: hermes
+    command: ["sleep", "infinity"]
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_KEY: ${API_SERVER_KEY:?API_SERVER_KEY is required}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      HERMES_CHAT_API_SERVER_KEY: ${HERMES_CHAT_API_SERVER_KEY:-}
+      HERMES_DASHBOARD: "0"
+      HERMES_GATEWAY_BOOTSTRAP_STATE: running
+      S6_BEHAVIOUR_IF_STAGE2_FAILS: "2"
+      TERMINAL_MAX_FOREGROUND_TIMEOUT: "7200"
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      # The sandbox writes this id into config.yaml and the API posts the same
+      # id on POST /v1/runs. Boot exits when it is empty.
+      HERMES_MODEL: ${HERMES_MODEL:?HERMES_MODEL is required}
+      HERMES_MODEL_PROVIDER: ${HERMES_MODEL_PROVIDER:-openrouter}
+      HERMES_MODEL_BASE_URL: ${HERMES_MODEL_BASE_URL:-}
+      # `deepfix eval` runs inside this container, so it reads the same model
+      # env names as the API. LLM_API_KEY stays out; model calls use the
+      # OpenRouter key above.
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_JUDGE_MODEL: ${LLM_JUDGE_MODEL:-}
+      MLFLOW_DEV_RAG_EXPERIMENT: ${MLFLOW_DEV_RAG_EXPERIMENT:-dev_rag_experiment}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://rustfs:9000}
+      S3_URI: ${S3_URI:-s3://deepfix-index/dev}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      # `deepfix eval` reranks inside this container when a candidate enables it.
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      COHERE_BASE_URL: ${COHERE_BASE_URL:-}
+      COHERE_MODEL: ${COHERE_MODEL:-}
+      S3_ACCESS_KEY_ID: ${HERMES_S3_ACCESS_KEY_ID:?HERMES_S3_ACCESS_KEY_ID is required}
+      S3_SECRET_ACCESS_KEY: ${HERMES_S3_SECRET_ACCESS_KEY:?HERMES_S3_SECRET_ACCESS_KEY is required}
+    volumes:
+      - hermes_data:/opt/data
+    mem_limit: 4g
+    cpus: "2"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://127.0.0.1:8642/health
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  hermes_data:
