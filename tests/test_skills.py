@@ -582,3 +582,30 @@ def test_the_hpo_skill_localizes_the_cache_before_scoring_anything() -> None:
     for command in confirmation:
         assert "--index-dir <run_dir>/idx-cache" in command, command
         assert "--baseline-index-dir <run_dir>/idx-cache" in command, command
+
+
+PLUGIN_MANIFEST = SKILLS_ROOT.parents[1] / "plugins" / "deepfix-rag" / "plugin.yaml"
+
+
+def test_the_plugin_manifest_lists_every_skill_on_disk() -> None:
+    """The manifest is what a plugin host reads, so it cannot lag the skills directory.
+
+    `hpo-search` was missing for a whole release because nothing compared the
+    two lists. Every directory under `.agents/skills/` must appear here, and
+    every entry must resolve to a real `SKILL.md`.
+    """
+    manifest = yaml.safe_load(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
+    listed = manifest["skills"]
+    on_disk = sorted(
+        f"../../.agents/skills/{path.parent.name}/SKILL.md"
+        for path in SKILLS_ROOT.glob("*/SKILL.md")
+    )
+    assert sorted(listed) == on_disk, (
+        f"manifest is missing {sorted(set(on_disk) - set(listed))} "
+        f"and lists stale {sorted(set(listed) - set(on_disk))}"
+    )
+    for entry in listed:
+        assert (PLUGIN_MANIFEST.parent / entry).is_file(), entry
+    for alias, target in manifest["aliases"].items():
+        assert alias in {Path(entry).parent.name for entry in listed}, alias
+        assert target in {Path(entry).parent.name for entry in listed}, target
