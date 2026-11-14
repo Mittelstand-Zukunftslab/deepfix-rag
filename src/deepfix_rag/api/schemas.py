@@ -405,3 +405,19 @@ class ChatThreadDetailResponse(ApiModel):
     messages: list[ChatMessageResponse]
     turns: list[ChatTurnResponse]
     actions: list[ChatActionResponse]
+
+
+class ChatAuditResponse(ApiModel):
+    """One audit row. It holds no message text, only ids, counts, and a detail."""
+
+    event_id: int
+    at: str
+    admin_id: str
+    admin_email: str
+    thread_id: str | None = None
+    turn_id: str | None = None
+    kind: str
+    detail: str
+    thread_deleted: bool = Field(
+        description="True when the thread this event names has since been deleted."
+    )

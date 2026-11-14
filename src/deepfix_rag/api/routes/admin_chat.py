@@ -42,12 +42,14 @@ from deepfix_rag.api.errors import (
     INTERNAL_SERVER_ERROR,
     NOT_FOUND,
     SERVICE_UNAVAILABLE,
+    TOO_MANY_REQUESTS,
     UNAUTHORIZED,
     error_responses,
 )
 from deepfix_rag.api.identity import User
 from deepfix_rag.api.schemas import (
     ChatActionResponse,
+    ChatAuditResponse,
     ChatCompletionRequest,
     ChatMessageResponse,
     ChatThreadDetailResponse,
@@ -145,6 +147,29 @@ async def admin_chat_completion(
     # the upstream conversation while the thread still shows both turns.
     history = _retried_history(stored, payload.retry_of)
 
+    refusal = admin_chat.check_rate_limit(
+        settings.product_db_path,
+        user.id,
+        max_turns=settings.ADMIN_CHAT_MAX_TURNS_PER_WINDOW,
+        window_seconds=settings.ADMIN_CHAT_TURN_WINDOW_SECONDS,
+        max_concurrent=settings.ADMIN_CHAT_MAX_CONCURRENT_TURNS,
+    )
+    if refusal is not None:
+        if refusal.audit and admin_chat.should_audit_rate_limit(settings.product_db_path, user.id):
+            _audit(
+                settings,
+                user,
+                None,
+                thread.thread_id,
+                "rate_limited",
+                f"refused: {refusal.message}",
+            )
+            _log(thread.thread_id, "-", "rate_limited")
+        raise HTTPException(
+            status_code=TOO_MANY_REQUESTS,
+            detail=refusal.message,
+            headers={"Retry-After": str(refusal.retry_after)},
+        )
     try:
         turn = admin_chat.start_turn(
             settings.product_db_path,
@@ -276,7 +301,7 @@ def _check_limits(settings: Settings, payload: ChatCompletionRequest) -> None:
 def _audit(
     settings: Settings,
     user: User,
-    turn_id: str,
+    turn_id: str | None,
     thread_id: str,
     kind: str,
     detail: str,
@@ -727,3 +752,34 @@ def resume_admin_chat_turn(turn_id: str, request: Request) -> StreamingResponse:
             chat_stream.STREAM_HEADER: chat_stream.STREAM_HEADER_VALUE,
         },
     )
+
+
+@router.get(
+    "/admin/chat/audit",
+    operation_id="list_admin_chat_audit",
+    response_model=list[ChatAuditResponse],
+    responses=error_responses(UNAUTHORIZED, FORBIDDEN),
+    summary="List the chat audit trail",
+)
+def list_admin_chat_audit(request: Request, limit: int = 50) -> list[ChatAuditResponse]:
+    """The newest audit rows, admin only, with `thread_deleted` computed at read time.
+
+    One of the two SQLite-only routes: it answers with chat off and with the
+    chat key unset, because turning chat off must not hide what chat did (D-4).
+    """
+    require_admin(request, "Only admins can view the chat audit.")
+    settings = get_settings(request)
+    return [
+        ChatAuditResponse(
+            event_id=entry.event_id,
+            at=entry.at,
+            admin_id=entry.admin_id,
+            admin_email=entry.admin_email,
+            thread_id=entry.thread_id,
+            turn_id=entry.turn_id,
+            kind=entry.kind,
+            detail=entry.detail,
+            thread_deleted=entry.thread_deleted,
+        )
+        for entry in admin_chat.list_audit(settings.product_db_path, limit=limit)
+    ]

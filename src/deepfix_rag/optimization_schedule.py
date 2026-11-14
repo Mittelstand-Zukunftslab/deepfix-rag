@@ -253,6 +253,7 @@ class OptimizationScheduler:
         coordinator_for: Callable[[], IndexCoordinator | None],
         timezone_name: str = DEFAULT_TIMEZONE,
         prune_audit: Callable[[], int] | None = None,
+        prune_retention_days: Callable[[], int] | None = None,
         scheduler_for: Callable[[], BackgroundScheduler] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -262,6 +263,9 @@ class OptimizationScheduler:
         self._coordinator_for = coordinator_for
         self._timezone = timezone_name
         self._prune_audit = prune_audit
+        # Read per fire, not captured, so an operator's change takes effect on
+        # the next tick without a restart (D-6). Only used for the log line.
+        self._prune_retention_days = prune_retention_days
         self._now = clock or _utc_now
         # The scheduler itself is the only seam: the tests pass one that can be
         # ticked on a fake clock, production gets the threaded background one.
@@ -398,14 +402,36 @@ class OptimizationScheduler:
             LOGGER.exception("Scheduled optimization failed")
 
     def _prune(self) -> None:
-        """The audit prune's body, when a callable was injected."""
+        """The audit prune's body, when a callable was injected.
+
+        One structured line, and only when rows went: an idle day adds no log
+        noise (NFR-8). A failure is caught here rather than left to APScheduler,
+        so a bad prune never takes the scheduler down.
+        """
         prune = self._prune_audit
         if prune is None:
             return
         try:
-            prune()
+            deleted = prune()
         except Exception:
             LOGGER.exception("Chat audit prune failed")
+            return
+        if isinstance(deleted, int) and deleted > 0:
+            LOGGER.info(
+                "chat audit prune deleted=%s retention_days=%s",
+                deleted,
+                self._retention_days_for_log(),
+            )
+
+    def _retention_days_for_log(self) -> str:
+        """The retention the prune used, read fresh so a changed setting shows."""
+        retention = self._prune_retention_days
+        if retention is None:
+            return "unknown"
+        try:
+            return str(retention())
+        except Exception:
+            return "unknown"
 
     def _arm(self, stored: StoredSchedule) -> None:
         """Add the optimization job, paused when the stored schedule is paused."""

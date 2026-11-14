@@ -10,11 +10,14 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.formparsers import MultiPartParser
 
+from deepfix_rag import admin_chat
 from deepfix_rag.admin_chat import fail_interrupted_chat_turns, init_admin_chat
 from deepfix_rag.api.identity import TokenVerifier
 from deepfix_rag.api.logging_config import configure_logging
 from deepfix_rag.api.routes import (
-    admin_chat,
+    admin_chat as admin_chat_routes,
+)
+from deepfix_rag.api.routes import (
     documents,
     feedback,
     health,
@@ -126,6 +129,14 @@ def create_app(
             app.state.settings.workspace_dir,
             options_for=lambda: settings_from(app.state.settings),
             coordinator_for=lambda: app.state.index,
+            # The audit prune hangs off this scheduler and knows nothing about
+            # the chat flag, so it keeps running on a deployment that turned
+            # chat off (D-6, FR-030). The settings are read per fire.
+            prune_audit=lambda: admin_chat.prune_audit(
+                app.state.settings.product_db_path,
+                app.state.settings.ADMIN_CHAT_AUDIT_RETENTION_DAYS,
+            ),
+            prune_retention_days=lambda: app.state.settings.ADMIN_CHAT_AUDIT_RETENTION_DAYS,
         )
         app.state.optimization = scheduler
         scheduler.start()
@@ -168,7 +179,7 @@ def create_app(
     app.include_router(feedback.router)
     app.include_router(history.router)
     app.include_router(optimization.router)
-    app.include_router(admin_chat.router)
+    app.include_router(admin_chat_routes.router)
     for route in app.routes:
         if isinstance(route, APIRoute):
             route.responses.pop(422, None)

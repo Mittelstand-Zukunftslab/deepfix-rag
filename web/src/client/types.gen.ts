@@ -93,6 +93,52 @@ export type ChatActionResponse = {
 };
 
 /**
+ * ChatAuditResponse
+ *
+ * One audit row. It holds no message text, only ids, counts, and a detail.
+ */
+export type ChatAuditResponse = {
+    /**
+     * Admin Email
+     */
+    admin_email: string;
+    /**
+     * Admin Id
+     */
+    admin_id: string;
+    /**
+     * At
+     */
+    at: string;
+    /**
+     * Detail
+     */
+    detail: string;
+    /**
+     * Event Id
+     */
+    event_id: number;
+    /**
+     * Kind
+     */
+    kind: string;
+    /**
+     * Thread Deleted
+     *
+     * True when the thread this event names has since been deleted.
+     */
+    thread_deleted: boolean;
+    /**
+     * Thread Id
+     */
+    thread_id: string | null;
+    /**
+     * Turn Id
+     */
+    turn_id: string | null;
+};
+
+/**
  * ChatCompletionRequest
  *
  * An OpenAI-shaped turn request.
@@ -1113,6 +1159,42 @@ export type VoteCountsResponse = {
      */
     up: number;
 };
+
+export type ListAdminChatAuditData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/admin/chat/audit';
+};
+
+export type ListAdminChatAuditErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * The signed-in user's role does not allow this action.
+     */
+    403: ErrorResponse;
+};
+
+export type ListAdminChatAuditError = ListAdminChatAuditErrors[keyof ListAdminChatAuditErrors];
+
+export type ListAdminChatAuditResponses = {
+    /**
+     * Response List Admin Chat Audit
+     *
+     * Successful Response
+     */
+    200: Array<ChatAuditResponse>;
+};
+
+export type ListAdminChatAuditResponse = ListAdminChatAuditResponses[keyof ListAdminChatAuditResponses];
 
 export type AdminChatCompletionData = {
     body: ChatCompletionRequest;

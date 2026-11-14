@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type ServerSentEventsResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AdminChatCompletionData, AdminChatCompletionErrors, AdminChatCompletionResponse, AdminChatCompletionResponses, AskQuestionData, AskQuestionErrors, AskQuestionResponses, CancelOptimizationRunData, CancelOptimizationRunErrors, CancelOptimizationRunResponses, CreateAdminChatThreadData, CreateAdminChatThreadErrors, CreateAdminChatThreadResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteAdminChatThreadData, DeleteAdminChatThreadErrors, DeleteAdminChatThreadResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetAdminChatThreadData, GetAdminChatThreadErrors, GetAdminChatThreadResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListAdminChatThreadsData, ListAdminChatThreadsErrors, ListAdminChatThreadsResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, ResumeAdminChatTurnData, ResumeAdminChatTurnErrors, ResumeAdminChatTurnResponse, ResumeAdminChatTurnResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
+import type { AdminChatCompletionData, AdminChatCompletionErrors, AdminChatCompletionResponse, AdminChatCompletionResponses, AskQuestionData, AskQuestionErrors, AskQuestionResponses, CancelOptimizationRunData, CancelOptimizationRunErrors, CancelOptimizationRunResponses, CreateAdminChatThreadData, CreateAdminChatThreadErrors, CreateAdminChatThreadResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteAdminChatThreadData, DeleteAdminChatThreadErrors, DeleteAdminChatThreadResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetAdminChatThreadData, GetAdminChatThreadErrors, GetAdminChatThreadResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ListAdminChatAuditData, ListAdminChatAuditErrors, ListAdminChatAuditResponses, ListAdminChatThreadsData, ListAdminChatThreadsErrors, ListAdminChatThreadsResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, ResumeAdminChatTurnData, ResumeAdminChatTurnErrors, ResumeAdminChatTurnResponse, ResumeAdminChatTurnResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -17,6 +17,16 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
      */
     meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
 };
+
+/**
+ * List the chat audit trail
+ *
+ * The newest audit rows, admin only, with `thread_deleted` computed at read time.
+ *
+ * One of the two SQLite-only routes: it answers with chat off and with the
+ * chat key unset, because turning chat off must not hide what chat did (D-4).
+ */
+export const listAdminChatAudit = <ThrowOnError extends boolean = false>(options?: Options<ListAdminChatAuditData, ThrowOnError>): RequestResult<ListAdminChatAuditResponses, ListAdminChatAuditErrors, ThrowOnError> => (options?.client ?? client).get<ListAdminChatAuditResponses, ListAdminChatAuditErrors, ThrowOnError>({ url: '/admin/chat/audit', ...options });
 
 /**
  * Send one chat turn and stream the reply

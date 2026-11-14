@@ -164,6 +164,75 @@
         "title": "ChatActionResponse",
         "type": "object"
       },
+      "ChatAuditResponse": {
+        "description": "One audit row. It holds no message text, only ids, counts, and a detail.",
+        "properties": {
+          "admin_email": {
+            "title": "Admin Email",
+            "type": "string"
+          },
+          "admin_id": {
+            "title": "Admin Id",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "thread_deleted": {
+            "description": "True when the thread this event names has since been deleted.",
+            "title": "Thread Deleted",
+            "type": "boolean"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          }
+        },
+        "required": [
+          "event_id",
+          "at",
+          "admin_id",
+          "admin_email",
+          "thread_id",
+          "turn_id",
+          "kind",
+          "detail",
+          "thread_deleted"
+        ],
+        "title": "ChatAuditResponse",
+        "type": "object"
+      },
       "ChatCompletionRequest": {
         "description": "An OpenAI-shaped turn request.\n\nThe server rebuilds the upstream conversation from the stored thread, so this\narray is a consistency check rather than the prompt: the client cannot rewrite\nthe system message or claim a history that never happened.",
         "properties": {
@@ -1905,6 +1974,64 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/chat/audit": {
+      "get": {
+        "description": "The newest audit rows, admin only, with `thread_deleted` computed at read time.\n\nOne of the two SQLite-only routes: it answers with chat off and with the\nchat key unset, because turning chat off must not hide what chat did (D-4).",
+        "operationId": "list_admin_chat_audit",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatAuditResponse"
+                  },
+                  "title": "Response List Admin Chat Audit",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "List the chat audit trail",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
     "/admin/chat/completions": {
       "post": {
         "description": "Validate the turn, then relay the reply as an AI SDK UI message stream.",

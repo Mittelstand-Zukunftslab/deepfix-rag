@@ -960,3 +960,158 @@ def turn_owner(db_path: Path, turn_id: str) -> str:
     if row is None:
         raise KeyError(turn_id)
     return str(row["admin_id"])
+
+
+@dataclass(frozen=True)
+class RateRefusal:
+    """A limiter refusal: what to tell the admin, and how long to wait."""
+
+    message: str
+    retry_after: int
+    audit: bool
+
+
+BUSY_MESSAGE = "The assistant is busy. Try again in a moment."
+
+
+def check_rate_limit(
+    db_path: Path,
+    admin_id: str,
+    *,
+    now: datetime | None = None,
+    max_turns: int,
+    window_seconds: float,
+    max_concurrent: int,
+) -> RateRefusal | None:
+    """One admin's turn budget, then one running turn each, then the global cap.
+
+    The count reads ``admin_chat_turns`` only, so a refusal cannot ratchet
+    itself: writing a ``rate_limited`` audit row does not change what the next
+    check sees. ``now`` is injectable so a test never sleeps out a window.
+    """
+    moment = _as_utc(now)
+    since = (moment - timedelta(seconds=window_seconds)).isoformat()
+    with connect(db_path) as conn:
+        recent = conn.execute(
+            """
+            SELECT started_at FROM admin_chat_turns
+            WHERE admin_id = ? AND started_at >= ? ORDER BY started_at
+            """,
+            (admin_id, since),
+        ).fetchall()
+        if len(recent) >= max_turns:
+            oldest = _parse_time(str(recent[0]["started_at"]))
+            wait = _seconds_until(oldest + timedelta(seconds=window_seconds), moment)
+            return RateRefusal(
+                message=(
+                    f"You have used {len(recent)} of {max_turns} turns in this window. "
+                    f"Try again in {wait} seconds."
+                ),
+                retry_after=wait,
+                audit=True,
+            )
+        running = conn.execute(
+            """
+            SELECT COUNT(*) FROM admin_chat_turns
+            WHERE admin_id = ? AND status = 'running'
+            """,
+            (admin_id,),
+        ).fetchone()[0]
+        if running:
+            return RateRefusal(
+                message="Your previous reply is still running. Stop it or wait for it to finish.",
+                retry_after=5,
+                audit=True,
+            )
+        concurrent = conn.execute(
+            "SELECT COUNT(*) FROM admin_chat_turns WHERE status = 'running'"
+        ).fetchone()[0]
+    if concurrent >= max_concurrent:
+        # The global cap is a property of the container, not of this admin, so
+        # it is not the admin's audit record.
+        return RateRefusal(message=BUSY_MESSAGE, retry_after=5, audit=False)
+    return None
+
+
+def should_audit_rate_limit(db_path: Path, admin_id: str, *, now: datetime | None = None) -> bool:
+    """At most one ``rate_limited`` row per admin per minute."""
+    moment = _as_utc(now)
+    since = (moment - timedelta(minutes=1)).isoformat()
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM admin_chat_audit
+            WHERE admin_id = ? AND kind = 'rate_limited' AND at >= ?
+            """,
+            (admin_id, since),
+        ).fetchone()
+    return int(row[0]) == 0
+
+
+def _as_utc(now: datetime | None) -> datetime:
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def _parse_time(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return datetime.now(timezone.utc)
+    return _as_utc(parsed)
+
+
+def _seconds_until(moment: datetime, now: datetime) -> int:
+    return max(1, int((moment - now).total_seconds()) + 1)
+
+
+@dataclass(frozen=True)
+class AuditEntry:
+    """One audit row as the route returns it, with ``thread_deleted`` computed."""
+
+    event_id: int
+    at: str
+    admin_id: str
+    admin_email: str
+    thread_id: str | None
+    turn_id: str | None
+    kind: str
+    detail: str
+    thread_deleted: bool
+
+
+AUDIT_READ_SQL = """
+    SELECT a.event_id, a.at, a.admin_id, a.admin_email, a.thread_id, a.turn_id,
+           a.kind, a.detail, (t.thread_id IS NULL) AS thread_deleted
+    FROM admin_chat_audit a
+    LEFT JOIN admin_chat_threads t ON t.thread_id = a.thread_id
+    ORDER BY a.event_id DESC
+    LIMIT ?
+"""
+
+
+def list_audit(db_path: Path, limit: int = 50) -> list[AuditEntry]:
+    """The newest audit rows, newest first, with ``thread_deleted`` at read time.
+
+    The flag is computed by one ``LEFT JOIN`` rather than stored, so it cannot
+    go stale when a thread is deleted after the row was written (D-4).
+    """
+    init_admin_chat(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(AUDIT_READ_SQL, (limit,)).fetchall()
+    return [
+        AuditEntry(
+            event_id=int(row["event_id"]),
+            at=str(row["at"]),
+            admin_id=str(row["admin_id"]),
+            admin_email=str(row["admin_email"]),
+            thread_id=None if row["thread_id"] is None else str(row["thread_id"]),
+            turn_id=None if row["turn_id"] is None else str(row["turn_id"]),
+            kind=str(row["kind"]),
+            detail=str(row["detail"]),
+            thread_deleted=bool(row["thread_deleted"]),
+        )
+        for row in rows
+    ]

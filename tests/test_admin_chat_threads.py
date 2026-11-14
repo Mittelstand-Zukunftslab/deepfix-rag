@@ -260,6 +260,7 @@ def test_every_chat_route_is_gated_or_an_exempt_constant() -> None:
         "/admin/chat/turns/{turn_id}/stream",
         "/admin/chat/threads",
         "/admin/chat/threads/{thread_id}",
+        "/admin/chat/audit",
     }
     # The two exempt paths are constants, and the delete route is one of them.
     assert set(routes.GATE_EXEMPT_PATHS) == {
