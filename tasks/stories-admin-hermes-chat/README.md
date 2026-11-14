@@ -121,6 +121,26 @@ uv run --env-file .env pytest -v tests/test_admin_chat_routes.py
 uv run --env-file .env pytest -v tests/test_api_optimization.py
 ```
 
+## Test files each story adds
+
+| Story | New Python test modules | New web test modules |
+| :--- | :--- | :--- |
+| CHAT-001 | `tests/test_hermes_chat_profile.py` (plus the rewritten case in `tests/test_hermes_sandbox.py`) | — |
+| CHAT-002 | `tests/test_admin_chat.py` | — |
+| CHAT-003 | `tests/test_admin_chat_routes.py` | — (edits `web/src/test/api-boundary.test.ts` only if the client changes shape) |
+| CHAT-004 | `tests/test_admin_chat_prompt.py` | — |
+| CHAT-005 | `tests/test_admin_chat_threads.py` | — |
+| CHAT-006 | `tests/test_admin_chat_limits.py` | — |
+| CHAT-007 | `tests/test_admin_chat_actions.py` | — |
+| CHAT-008 | `tests/test_admin_chat_runs.py` | — |
+| CHAT-009 | — | `src/test/admin-chat-stream.test.ts`, `src/test/admin-chat-boundary.test.ts` |
+| CHAT-010 | — (one case added to `tests/test_api_optimization.py`) | `src/test/admin-chat-page.test.tsx` |
+| CHAT-011 | `tests/test_hermes_chat_trace.py` | — |
+| CHAT-012 | — (operator commands, no new test module) | — |
+
+Every Python module carries an explicit `pytestmark` (`unit`, `integration`, `api`) because the suite runs with
+`--strict-markers`.
+
 ## FR coverage
 
 Every FR is claimed by at least one story; CHAT-012 verifies the whole set end to end.
