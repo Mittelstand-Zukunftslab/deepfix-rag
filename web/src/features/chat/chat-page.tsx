@@ -1,1015 +1,445 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import type { UIMessage } from "ai";
+import { useChat } from "@ai-sdk/react";
 import {
   AssistantRuntimeProvider,
+  AuiIf,
   ComposerPrimitive,
-  fromThreadMessageLike,
+  MessagePrimitive,
   ThreadPrimitive,
-  useExternalStoreRuntime,
+  useAuiState,
 } from "@assistant-ui/react";
-import {
-  ArrowUp,
-  BookOpen,
-  Bot,
-  Check,
-  ChevronRight,
-  Copy,
-  Edit3,
-  ExternalLink,
-  FileText,
-  History,
-  Loader2,
-  MessageSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
-  PanelRightClose,
-  PanelRightOpen,
-  Plus,
-  Sparkles,
-  Trash2,
-  User as UserIcon,
-  X,
-} from "lucide-react";
+import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
+import { ArrowUp, Square } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatComposerBar, ChatComposerHint } from "@/components/chat/composer";
 import { ChatMarkdown } from "@/components/chat/markdown";
-import { TopBar } from "@/components/layout/app-shell";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { GroundingBadge } from "@/features/chat/answer-grounding";
-import { groundingNote } from "@/features/chat/grounding-copy";
-import { commentKey, useFeedbackComments } from "@/features/feedback/use-feedback-comments";
-import { VoteButtons, type Vote } from "@/features/feedback/vote-buttons";
-import { VoteComment } from "@/features/feedback/vote-comment";
+import {
+  createAskChat,
+  seedMessages,
+  type AskChatHooks,
+  type AskThreadChat,
+} from "@/features/chat/ask-chat-transport";
+import { AskThreadSidebar } from "@/features/chat/ask-thread-sidebar";
 import { IndexPreparing } from "@/features/index/index-preparing";
-import { askService, type AskHit } from "@/services/ask-service";
-import { feedbackService } from "@/services/feedback-service";
-import type { Grounding } from "@/client";
+import { cn } from "@/lib/utils";
+import {
+  askTurnStatus,
+  type AskGrounding,
+  type AskGroundingFrame,
+  type AskTurn,
+} from "@/schemas/ask-chat";
+import { askChatService } from "@/services/ask-chat-service";
 
-const SESSIONS_STORAGE_KEY = "deepfix.chat_sessions.v2";
-const ACTIVE_SESSION_STORAGE_KEY = "deepfix.active_session_id.v2";
+/**
+ * The Ask conversation page.
+ *
+ * Assistant UI drives the message column on the Vercel AI SDK runtime, with one
+ * `Chat` per thread (`ask-chat-transport.ts`). One runtime per thread is what
+ * keeps an answer streaming here while the member reads another conversation:
+ * the `Chat` owns its messages and its stream, so a reply cannot appear in a
+ * thread that did not ask for it.
+ *
+ * The page holds no protocol knowledge. Threads come from `askChatService`, the
+ * stream arrives through the transport, and the two frames this page needs — the
+ * grounding verdict and the terminal status — reach it through the transport's
+ * hooks rather than being parsed here.
+ *
+ * Regenerate is the runtime's own reload, which the server resolves to the newest
+ * answered turn. The page never names a turn id, because the AI SDK's reload
+ * drops the message it is replacing.
+ */
 
-/** Chats are private: each signed-in user keeps their history under their own keys. */
-export function chatStorageKeys(ownerId: string): { sessions: string; active: string } {
-  return {
-    sessions: `${SESSIONS_STORAGE_KEY}:${ownerId}`,
-    active: `${ACTIVE_SESSION_STORAGE_KEY}:${ownerId}`,
-  };
-}
+/** What a finished answer claims about its evidence. */
+export type AskVerdict = {
+  grounding: AskGrounding;
+  citations: AskGroundingFrame["citations"];
+  maxScore: number;
+  cutoff: number;
+};
 
-function dropUnscopedHistory(): void {
-  try {
-    window.localStorage.removeItem(SESSIONS_STORAGE_KEY);
-    window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
-  } catch {
-    // Ignore localStorage errors
-  }
-}
-const COMPLETE_STATUS = { type: "complete" as const, reason: "stop" as const };
-
-export interface ChatTurn {
-  id: string;
-  userQuery: string;
-  timestamp: number;
-  answer: string | null;
+type ThreadState = {
+  session: AskThreadChat;
+  verdict: AskVerdict | null;
+  status: AskTurn["status"] | null;
   error: string | null;
-  grounding: Grounding;
-  hits: AskHit[];
-  answerVote: Vote;
-  interactionId: string | null;
-}
+};
 
-export interface ChatSession {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  turns: ChatTurn[];
-}
+const COMPOSER_BUTTON =
+  "flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-function createNewSession(initialTitle = "New Chat"): ChatSession {
-  const now = Date.now();
-  return {
-    id: `session-${now}-${Math.random().toString(36).slice(2, 7)}`,
-    title: initialTitle,
-    createdAt: now,
-    updatedAt: now,
-    turns: [],
-  };
-}
+const COMPOSER_INPUT =
+  "max-h-48 min-h-10 w-full flex-1 resize-none bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted-foreground/70 md:text-sm";
 
-export function AskPage({
-  indexReady = true,
-  answer = undefined,
-  error: initialError = null,
-  hits,
-  askedQuery = null,
-  ownerId = null,
-  grounding = "grounded",
-}: {
-  indexReady?: boolean;
-  answer?: string | null;
-  error?: string | null;
-  hits?: AskHit[];
-  askedQuery?: string | null;
-  ownerId?: string | null;
-  grounding?: Grounding;
-}) {
-  const isControlledMode =
-    askedQuery !== null || answer !== undefined || hits !== undefined || initialError !== null;
-  const storageKeys = ownerId && !isControlledMode ? chatStorageKeys(ownerId) : null;
+export const ASK_DISCLAIMER =
+  "Answers cite the passages they came from. Press Stop to end a reply you do not need.";
 
-  const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    if (isControlledMode) {
-      const controlledTurn: ChatTurn = {
-        id: "controlled-turn",
-        userQuery: askedQuery ?? "Query",
-        timestamp: Date.now(),
-        answer: hits ? (answer ?? null) : null,
-        error: initialError,
-        grounding,
-        hits: hits ?? [],
-        answerVote: null,
-        interactionId: null,
-      };
-      return [
-        {
-          id: "controlled-session",
-          title: askedQuery ? askedQuery.slice(0, 28) : "Current Query",
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          turns: [controlledTurn],
-        },
-      ];
-    }
+export function AskPage({ indexReady = true }: { indexReady?: boolean }) {
+  const [threads, setThreads] = useState<{ thread_id: string; title: string }[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  const states = useRef(new Map<string, ThreadState>());
+  const [, forceRender] = useState(0);
 
-    dropUnscopedHistory();
-    if (!storageKeys) return [createNewSession()];
+  const onError = useCallback((message: string) => setListError(message), []);
+
+  const refresh = useCallback(async () => {
     try {
-      const raw = window.localStorage.getItem(storageKeys.sessions);
-      if (raw) {
-        const parsed = JSON.parse(raw) as ChatSession[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch {
-      // Ignore localStorage errors
+      const listed = await askChatService.listThreads();
+      setThreads(listed.map((item) => ({ thread_id: item.thread_id, title: item.title })));
+      setListError(null);
+      return listed;
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Unable to load your conversations.");
+      return [];
     }
-    return [createNewSession()];
-  });
+  }, [onError]);
 
-  const [activeSessionId, setActiveSessionId] = useState<string>(() => {
-    if (isControlledMode) return "controlled-session";
-    try {
-      const savedActive = storageKeys ? window.localStorage.getItem(storageKeys.active) : null;
-      if (savedActive) return savedActive;
-    } catch {
-      // Ignore
-    }
-    return sessions[0]?.id ?? "default";
-  });
-
-  const [draft, setDraft] = useState(isControlledMode ? (askedQuery ?? "") : "");
-  const [pendingBySession, setPendingBySession] = useState<Record<string, string>>({});
-  const [globalError, setGlobalError] = useState<string | null>(null);
-  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
-
-  const [showHistory, setShowHistory] = useState(false);
-  const [showSources, setShowSources] = useState(true);
-
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [editingTitle, setEditingTitle] = useState("");
-  const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  // The session the member is looking at right now, readable from an async
-  // callback without capturing the render that started the request.
-  const activeSessionIdRef = useRef<string>(activeSessionId);
-  activeSessionIdRef.current = activeSessionId;
-
-  useEffect(() => {
-    if (!storageKeys) return;
-    try {
-      window.localStorage.setItem(storageKeys.sessions, JSON.stringify(sessions));
-      if (activeSessionId) {
-        window.localStorage.setItem(storageKeys.active, activeSessionId);
-      }
-    } catch {
-      // Ignore
-    }
-  }, [sessions, activeSessionId, storageKeys?.sessions, storageKeys?.active]);
-
-  const activeSession =
-    sessions.find((s) => s.id === activeSessionId) ?? sessions[0] ?? createNewSession();
-  const turns = activeSession?.turns ?? [];
-  // Pending belongs to the session that asked, so the thinking card and the
-  // disabled composer follow that session rather than the whole page.
-  const pendingQuery = pendingBySession[activeSession?.id ?? ""] ?? null;
-  const pending = pendingQuery !== null;
-
-  const currentTurn =
-    (selectedTurnId ? turns.find((t) => t.id === selectedTurnId) : null) ??
-    (turns.length > 0 ? turns[turns.length - 1] : null);
-
-  const shownHits = currentTurn?.hits ?? [];
-
-  useEffect(() => {
-    if (typeof messagesEndRef.current?.scrollIntoView === "function") {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [turns.length, pending]);
-
-  const handleNewChat = () => {
-    const fresh = createNewSession();
-    setSessions((prev) => [fresh, ...prev]);
-    setActiveSessionId(fresh.id);
-    setSelectedTurnId(null);
-    setDraft("");
-    setGlobalError(null);
-  };
-
-  const handleDeleteSession = (sessionId: string, e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    // A deleted session must not keep its pending entry: a response that lands
-    // afterwards would otherwise re-create a session the member removed.
-    setPendingBySession((prev) => {
-      if (!(sessionId in prev)) return prev;
-      const next = { ...prev };
-      delete next[sessionId];
-      return next;
-    });
-    setSessions((prev) => {
-      const remaining = prev.filter((s) => s.id !== sessionId);
-      if (remaining.length === 0) {
-        const fresh = createNewSession();
-        setActiveSessionId(fresh.id);
-        return [fresh];
-      }
-      const next = remaining[0];
-      if (activeSessionId === sessionId && next) {
-        setActiveSessionId(next.id);
-      }
-      return remaining;
-    });
-  };
-
-  const handleStartRename = (session: ChatSession, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingSessionId(session.id);
-    setEditingTitle(session.title);
-  };
-
-  const handleSaveRename = (sessionId: string) => {
-    const trimmed = editingTitle.trim();
-    if (trimmed) {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === sessionId ? { ...s, title: trimmed, updatedAt: Date.now() } : s)),
-      );
-    }
-    setEditingSessionId(null);
-    setEditingTitle("");
-  };
-
-  const runAsk = async (queryText: string) => {
-    const trimmed = queryText.trim();
-    if (!trimmed) {
-      setGlobalError("Enter a question.");
-      return;
-    }
-
-    const sessionId = activeSession.id;
-    setDraft("");
-    setGlobalError(null);
-    setPendingBySession((prev) => ({ ...prev, [sessionId]: trimmed }));
-
-    const turnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-
-    try {
-      const response = await askService.ask(trimmed);
-
-      const completedTurn: ChatTurn = {
-        id: turnId,
-        userQuery: trimmed,
-        timestamp: Date.now(),
-        answer: response.answer,
-        error: response.error,
-        grounding: response.grounding,
-        hits: response.hits ?? [],
-        answerVote: response.vote ?? null,
-        interactionId: response.interaction_id,
-      };
-
-      // Land the turn in the session that asked, whatever the member is viewing now.
-      setSessions((prev) =>
-        prev.map((session) => {
-          if (session.id !== sessionId) return session;
-          const isFirstTurn = session.turns.length === 0;
-          const newTitle =
-            isFirstTurn && session.title === "New Chat"
-              ? trimmed.length > 32
-                ? `${trimmed.slice(0, 32)}…`
-                : trimmed
-              : session.title;
-
-          return {
-            ...session,
-            title: newTitle,
-            updatedAt: Date.now(),
-            turns: [...session.turns, completedTurn],
-          };
-        }),
-      );
-
-      // A question in one session must not move the other sessions' view.
-      if (activeSessionIdRef.current === sessionId) {
-        setSelectedTurnId(turnId);
-      }
-    } catch (caught) {
-      const errorMsg = caught instanceof Error ? caught.message : "Unable to ask. Try again.";
-      setGlobalError(errorMsg);
-
-      const failedTurn: ChatTurn = {
-        id: turnId,
-        userQuery: trimmed,
-        timestamp: Date.now(),
-        answer: null,
-        error: errorMsg,
-        grounding: "no_relevant_sources",
-        hits: [],
-        answerVote: null,
-        interactionId: null,
-      };
-
-      setSessions((prev) =>
-        prev.map((session) =>
-          session.id === sessionId
-            ? { ...session, turns: [...session.turns, failedTurn], updatedAt: Date.now() }
-            : session,
-        ),
-      );
-    } finally {
-      setPendingBySession((prev) => {
-        if (!(sessionId in prev)) return prev;
-        const next = { ...prev };
-        delete next[sessionId];
-        return next;
-      });
-    }
-  };
-
-  const onSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    await runAsk(draft);
-  };
-
-  const comments = useFeedbackComments();
-
-  const chooseAnswer = async (turnId: string, action: "up" | "down" | "clear") => {
-    const vote: Vote = action === "clear" ? null : action;
-    const turn = turns.find((t) => t.id === turnId);
-    if (!turn?.interactionId) {
-      setSessions((prev) =>
-        prev.map((s) =>
-          s.id === activeSession.id
-            ? {
-                ...s,
-                turns: s.turns.map((t) => (t.id === turnId ? { ...t, answerVote: vote } : t)),
-              }
-            : s,
-        ),
-      );
-      return;
-    }
-
-    const saved = await feedbackService.submit({
-      interactionId: turn.interactionId,
-      target: "answer",
-      action,
-    });
-
-    setSessions((prev) =>
-      prev.map((s) =>
-        s.id === activeSession.id
-          ? {
-              ...s,
-              turns: s.turns.map((t) =>
-                t.id === turnId ? { ...t, answerVote: saved.vote ?? null } : t,
-              ),
-            }
-          : s,
-      ),
-    );
-    comments.voted(commentKey(turn.interactionId, "answer"), "answer", saved.vote ?? null);
-  };
-
-  const choosePassage = async (turnId: string, hit: AskHit, action: "up" | "down" | "clear") => {
-    const vote: Vote = action === "clear" ? null : action;
-    const turn = turns.find((t) => t.id === turnId);
-    if (!turn?.interactionId) {
-      setSessions((prev) =>
-        prev.map((s) =>
-          s.id === activeSession.id
-            ? {
-                ...s,
-                turns: s.turns.map((t) =>
-                  t.id === turnId
-                    ? {
-                        ...t,
-                        hits: t.hits.map((h) => (h.rank === hit.rank ? { ...h, vote } : h)),
-                      }
-                    : t,
-                ),
-              }
-            : s,
-        ),
-      );
-      return;
-    }
-
-    const saved = await feedbackService.submit({
-      interactionId: turn.interactionId,
-      target: "passage",
-      rank: hit.rank,
-      action,
-    });
-
-    setSessions((prev) =>
-      prev.map((s) =>
-        s.id === activeSession.id
-          ? {
-              ...s,
-              turns: s.turns.map((t) =>
-                t.id === turnId
-                  ? {
-                      ...t,
-                      hits: t.hits.map((h) =>
-                        h.rank === hit.rank ? { ...h, vote: saved.vote ?? null } : h,
-                      ),
-                    }
-                  : t,
-              ),
-            }
-          : s,
-      ),
-    );
-    comments.voted(
-      commentKey(turn.interactionId, "passage", hit.rank),
-      "passage",
-      saved.vote ?? null,
-    );
-  };
-
-  const handleCopy = (turnId: string, text: string) => {
-    void navigator.clipboard.writeText(text);
-    setCopiedTurnId(turnId);
-    setTimeout(() => {
-      setCopiedTurnId(null);
-    }, 2000);
-  };
-
-  const runtime = useExternalStoreRuntime({
-    isRunning: pending,
-    state: null,
-    messages: turns.flatMap((t) => [
-      fromThreadMessageLike(
-        {
-          id: `user-${t.id}`,
-          role: "user" as const,
-          content: [{ type: "text" as const, text: t.userQuery }],
-        },
-        `user-${t.id}`,
-        COMPLETE_STATUS,
-      ),
-      ...(t.answer
-        ? [
-            fromThreadMessageLike(
-              {
-                id: `assistant-${t.id}`,
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: t.answer }],
-                status: COMPLETE_STATUS,
-              },
-              `assistant-${t.id}`,
-              COMPLETE_STATUS,
-            ),
-          ]
-        : []),
-    ]),
-    onNew: async (message) => {
-      const textPart = message.content.find((p) => p.type === "text");
-      if (textPart && "text" in textPart) {
-        await runAsk(textPart.text);
+  const openThread = useCallback(
+    async (threadId: string) => {
+      setActiveThreadId(threadId);
+      if (states.current.has(threadId)) return;
+      setOpening(true);
+      try {
+        const detail = await askChatService.getThread(threadId);
+        states.current.set(threadId, threadState(threadId, detail.turns, states, forceRender));
+        forceRender((value) => value + 1);
+      } catch (error) {
+        onError(error instanceof Error ? error.message : "Unable to open that conversation.");
+      } finally {
+        setOpening(false);
       }
     },
-  });
+    [onError],
+  );
+
+  // The newest thread opens on first load; a member with none sees the empty state.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const listed = await refresh();
+      const newest = listed[0]?.thread_id;
+      if (!cancelled && newest) void openThread(newest);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh, openThread]);
+
+  const createThread = useCallback(async (): Promise<string | null> => {
+    try {
+      const created = await askChatService.createThread();
+      setThreads((current) => [{ thread_id: created.thread_id, title: created.title }, ...current]);
+      setActiveThreadId(created.thread_id);
+      states.current.set(
+        created.thread_id,
+        threadState(created.thread_id, [], states, forceRender),
+      );
+      forceRender((value) => value + 1);
+      return created.thread_id;
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Unable to start a conversation.");
+      return null;
+    }
+  }, [onError]);
+
+  const renameThread = useCallback(
+    async (threadId: string, title: string) => {
+      try {
+        const renamed = await askChatService.renameThread(threadId, title);
+        setThreads((current) =>
+          current.map((item) =>
+            item.thread_id === threadId ? { ...item, title: renamed.title } : item,
+          ),
+        );
+      } catch (error) {
+        onError(error instanceof Error ? error.message : "Unable to rename that conversation.");
+      }
+    },
+    [onError],
+  );
+
+  const deleteThread = useCallback(
+    async (threadId: string) => {
+      try {
+        await askChatService.deleteThread(threadId);
+      } catch (error) {
+        onError(error instanceof Error ? error.message : "Unable to delete that conversation.");
+        return;
+      }
+      // A deleted thread stops streaming: its reply has nowhere to land.
+      void states.current.get(threadId)?.session.chat.stop();
+      states.current.delete(threadId);
+      setThreads((current) => {
+        const remaining = current.filter((item) => item.thread_id !== threadId);
+        setActiveThreadId((active) =>
+          active === threadId ? (remaining[0]?.thread_id ?? null) : active,
+        );
+        return remaining;
+      });
+    },
+    [onError],
+  );
 
   if (!indexReady) {
     return (
-      <>
-        <TopBar title="Ask" />
-        <div className="mx-auto max-w-5xl px-8 py-16">
-          <IndexPreparing />
-        </div>
-      </>
+      <div className="mx-auto max-w-3xl px-8 py-10">
+        <IndexPreparing />
+      </div>
     );
   }
 
-  const hasEmptyConversation = turns.length === 0 && !pending;
+  const active = activeThreadId ? states.current.get(activeThreadId) : null;
 
   return (
-    <>
-      <TopBar title="Ask" />
+    <div className="mx-auto flex h-[calc(100vh-4.25rem)] w-full max-w-[96rem] flex-1 overflow-hidden px-2 py-3 sm:px-4 lg:px-6">
+      <div className="relative flex flex-1 gap-4 overflow-hidden">
+        <AskThreadSidebar
+          threads={threads}
+          activeThreadId={activeThreadId}
+          error={listError}
+          onCreate={() => void createThread()}
+          onOpen={(threadId) => void openThread(threadId)}
+          onRename={renameThread}
+          onDelete={deleteThread}
+        />
+        <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/50 shadow-sm backdrop-blur-sm">
+          {active && activeThreadId ? (
+            <>
+              {opening ? (
+                <p role="status" className="px-4 py-2 text-label-sm text-muted-foreground">
+                  Opening the conversation…
+                </p>
+              ) : null}
+              <ThreadSurface key={activeThreadId} threadId={activeThreadId} state={active} />
+            </>
+          ) : (
+            <EmptyThread onCreate={() => void createThread()} />
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
 
-      <div className="mx-auto flex h-[calc(100vh-4.25rem)] w-full max-w-[96rem] flex-1 overflow-hidden px-2 py-3 sm:px-4 lg:px-6">
-        <div className="relative flex flex-1 gap-4 overflow-hidden">
-          {/* 1. Left Chat History Sidebar (Collapsible, Perplexity/ChatGPT style) */}
-          <aside
-            className={`flex flex-col border-r border-border/70 bg-card/60 backdrop-blur-md transition-all duration-300 ease-in-out ${
-              showHistory
-                ? "w-72 shrink-0 rounded-2xl border p-3 shadow-md lg:static lg:z-0"
-                : "w-0 -translate-x-full overflow-hidden p-0 opacity-0 lg:w-0"
-            }`}
-          >
-            {showHistory && (
-              <div className="flex h-full flex-col gap-3">
-                <div className="flex items-center justify-between border-b border-border/50 pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <History className="h-4 w-4 text-primary" />
-                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Chat History
-                    </span>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground"
-                    onClick={() => setShowHistory(false)}
-                    title="Close history"
-                  >
-                    <PanelLeftClose className="h-4 w-4" />
-                  </Button>
-                </div>
+/** One thread's runtime, message column, and composer. */
+function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadState }) {
+  const helpers = useChat<UIMessage>({ chat: state.session.chat });
+  const runtime = useAISDKRuntime(helpers);
 
-                <Button
-                  onClick={handleNewChat}
-                  variant="outline"
-                  className="group flex w-full items-center justify-start gap-2.5 rounded-xl border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-xs font-medium text-foreground transition-all hover:border-primary hover:bg-primary/10"
-                >
-                  <Plus className="h-4 w-4 text-primary transition-transform group-hover:rotate-90" />
-                  <span>New Chat</span>
-                </Button>
+  useEffect(() => {
+    if (!state.session.resumeTurnId.current) return;
+    // The stored text is already seeded; the reconnect replays it from the
+    // turn's own id, so it replaces that message rather than duplicating it.
+    void helpers.resumeStream().catch(() => undefined);
+    // Resume once per stored turn: `helpers` is a fresh object every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-                <div className="flex flex-1 flex-col gap-1 overflow-y-auto pr-1">
-                  {sessions.map((s) => {
-                    const isActive = s.id === activeSession.id;
-                    const isEditing = editingSessionId === s.id;
-
-                    return (
-                      <div
-                        key={s.id}
-                        onClick={() => {
-                          setActiveSessionId(s.id);
-                          setSelectedTurnId(null);
-                        }}
-                        className={`group relative flex cursor-pointer items-center justify-between rounded-xl px-3 py-2 text-xs transition-all ${
-                          isActive
-                            ? "bg-primary/15 font-semibold text-primary shadow-xs ring-1 ring-primary/25"
-                            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                        }`}
-                      >
-                        <div className="flex min-w-0 flex-1 items-center gap-2">
-                          <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-                          {isEditing ? (
-                            <form
-                              onSubmit={(e) => {
-                                e.preventDefault();
-                                handleSaveRename(s.id);
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                              className="flex flex-1 items-center gap-1"
-                            >
-                              <Input
-                                autoFocus
-                                value={editingTitle}
-                                onChange={(e) => setEditingTitle(e.target.value)}
-                                onBlur={() => handleSaveRename(s.id)}
-                                className="h-6 text-xs px-1.5 py-0.5"
-                              />
-                              <button type="submit" className="text-primary hover:text-primary/80">
-                                <Check className="h-3.5 w-3.5" />
-                              </button>
-                            </form>
-                          ) : (
-                            <span className="truncate">{s.title}</span>
-                          )}
-                        </div>
-
-                        {!isEditing && (
-                          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                            <button
-                              type="button"
-                              onClick={(e) => handleStartRename(s, e)}
-                              className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
-                              title="Rename session"
-                            >
-                              <Edit3 className="h-3 w-3" />
-                            </button>
-                            {sessions.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={(e) => handleDeleteSession(s.id, e)}
-                                className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                                title="Delete session"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <div className="flex h-12 shrink-0 items-center border-b border-border/60 bg-muted/20 px-4">
+        <span className="truncate text-label-sm font-medium text-foreground">Conversation</span>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+        <div
+          aria-live="polite"
+          data-testid="ask-chat-stream"
+          className="mx-auto flex max-w-3xl flex-col gap-6"
+        >
+          <ThreadPrimitive.Root className="flex flex-col gap-6">
+            <ThreadPrimitive.Empty>
+              <div className="rounded-3xl border border-dashed border-border/80 bg-gradient-to-b from-muted/30 via-muted/15 to-transparent px-6 py-14 text-center">
+                <h2 className="text-headline-md text-foreground">Ask about your corpus</h2>
+                <p className="mt-2 text-body-md text-muted-foreground">
+                  Every answer cites the passages it used, and every passage stays votable.
+                </p>
               </div>
-            )}
-          </aside>
-
-          {/* 2. Main Center Chat Panel (Multi-turn Conversation Stream) */}
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/50 shadow-sm backdrop-blur-sm">
-            {/* Header Toolbar: History toggle & Active Session Title */}
-            <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 bg-muted/20 px-4">
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowHistory((prev) => !prev)}
-                  className="h-8 gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground"
-                  title="Toggle Chat History"
-                >
-                  {showHistory ? (
-                    <PanelLeftClose className="h-4 w-4" />
-                  ) : (
-                    <PanelLeftOpen className="h-4 w-4" />
-                  )}
-                  <span className="hidden sm:inline">History</span>
-                </Button>
-                <div className="h-4 w-[1px] bg-border/80" />
-                <span className="max-w-[200px] truncate text-xs font-medium text-foreground sm:max-w-xs md:max-w-md">
-                  {activeSession?.title}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleNewChat}
-                  className="h-7 gap-1 rounded-lg px-2 text-xs font-normal"
-                >
-                  <Plus className="h-3.5 w-3.5 text-primary" />
-                  <span className="hidden sm:inline">New Chat</span>
-                </Button>
-
-                {shownHits.length > 0 && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowSources((prev) => !prev)}
-                    className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    {showSources ? (
-                      <PanelRightClose className="h-3.5 w-3.5" />
-                    ) : (
-                      <PanelRightOpen className="h-3.5 w-3.5" />
-                    )}
-                    <span>{showSources ? "Hide sources" : `Sources (${shownHits.length})`}</span>
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {/* Scrollable Conversation History Viewport */}
-            <AssistantRuntimeProvider runtime={runtime}>
-              <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-                <div className="mx-auto flex max-w-3xl flex-col gap-6">
-                  <ThreadPrimitive.Root className="flex flex-col gap-6">
-                    {/* Empty State / Welcome Screen with quick prompts */}
-                    {hasEmptyConversation && (
-                      <ThreadPrimitive.Empty>
-                        <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-border/80 bg-gradient-to-b from-muted/30 via-muted/15 to-transparent px-6 py-14 text-center sm:px-10">
-                          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-sm ring-1 ring-primary/20">
-                            <Sparkles className="h-7 w-7" />
-                          </div>
-                          <h2 className="mt-5 text-xl font-bold tracking-tight text-foreground sm:text-2xl">
-                            Ask anything about your corpus
-                          </h2>
-                          <p className="mt-2.5 max-w-md text-sm leading-relaxed text-muted-foreground">
-                            DeepFix searches your indexed documents, cites exact passages, and
-                            synthesizes grounded answers powered by multi-stage retrieval.
-                          </p>
-                          <div className="mt-7 flex flex-wrap justify-center gap-2.5">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void runAsk("Summarize the key topics in the uploaded documents.");
-                              }}
-                              className="rounded-full border border-border/80 bg-card px-4 py-2 text-xs font-medium text-foreground shadow-xs transition-all hover:border-primary/50 hover:bg-primary/5 hover:text-primary hover:shadow-sm"
-                            >
-                              ✨ Summarize key topics
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void runAsk(
-                                  "What are the main problem types or definitions presented?",
-                                );
-                              }}
-                              className="rounded-full border border-border/80 bg-card px-4 py-2 text-xs font-medium text-foreground shadow-xs transition-all hover:border-primary/50 hover:bg-primary/5 hover:text-primary hover:shadow-sm"
-                            >
-                              🔍 Explain core definitions
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void runAsk("List any actionable steps or recommendations.");
-                              }}
-                              className="rounded-full border border-border/80 bg-card px-4 py-2 text-xs font-medium text-foreground shadow-xs transition-all hover:border-primary/50 hover:bg-primary/5 hover:text-primary hover:shadow-sm"
-                            >
-                              📋 Actionable recommendations
-                            </button>
-                          </div>
-                        </div>
-                      </ThreadPrimitive.Empty>
-                    )}
-
-                    {/* Multi-Turn Messages: Render all previous turns */}
-                    {turns.map((turn) => (
-                      <div key={turn.id} className="flex flex-col gap-4">
-                        {/* User Query Bubble */}
-                        <div className="flex items-start justify-end gap-3.5">
-                          <div className="max-w-[85%] rounded-2xl rounded-tr-xs bg-primary px-4 py-3 text-sm text-primary-foreground shadow-sm">
-                            <p className="whitespace-pre-wrap leading-relaxed">{turn.userQuery}</p>
-                          </div>
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary ring-1 ring-primary/30">
-                            <UserIcon className="h-4 w-4" />
-                          </div>
-                        </div>
-
-                        {/* Error Message if Generation Failed */}
-                        {turn.error && (
-                          <div className="flex items-start gap-3.5">
-                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-destructive ring-1 ring-destructive/30">
-                              <Bot className="h-4 w-4" />
-                            </div>
-                            <p role="alert" className="text-sm font-medium text-destructive pt-1.5">
-                              {turn.error}
-                            </p>
-                          </div>
-                        )}
-
-                        {/* Assistant Answer Card: the badge says what grounding it actually has */}
-                        {turn.answer && (
-                          <div className="flex items-start gap-3.5">
-                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xs ring-4 ring-primary/10">
-                              <Bot className="h-4 w-4" />
-                            </div>
-
-                            <Card className="flex flex-1 flex-col gap-4 rounded-2xl rounded-tl-xs border-border/80 bg-card p-5 shadow-soft transition-all hover:border-border">
-                              <div className="flex items-center justify-between border-b border-border/50 pb-3">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-label-lg font-semibold text-foreground">
-                                    Answer
-                                  </span>
-                                  <GroundingBadge grounding={turn.grounding} />
-                                </div>
-
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-muted-foreground">
-                                    {groundingNote(turn.grounding, turn.hits.length)}
-                                  </span>
-                                  {turn.hits.length > 0 && (
-                                    <Button
-                                      variant={selectedTurnId === turn.id ? "secondary" : "ghost"}
-                                      size="sm"
-                                      onClick={() => {
-                                        setSelectedTurnId(turn.id);
-                                        setShowSources(true);
-                                      }}
-                                      className="h-6 gap-1 px-2 text-[11px] font-medium text-primary"
-                                      title="Inspect source passages for this answer"
-                                    >
-                                      <BookOpen className="h-3 w-3" />
-                                      <span>{turn.hits.length} sources</span>
-                                    </Button>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="prose prose-sm dark:prose-invert max-w-none text-body-md leading-relaxed text-foreground">
-                                <ChatMarkdown prose={false}>{turn.answer}</ChatMarkdown>
-                              </div>
-
-                              <div className="flex items-center justify-between border-t border-border/40 pt-3">
-                                <div className="flex items-center gap-2">
-                                  <VoteButtons
-                                    vote={turn.answerVote}
-                                    upLabel="Mark answer as good"
-                                    downLabel="Mark answer as bad"
-                                    onAction={(action) => void chooseAnswer(turn.id, action)}
-                                  />
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => handleCopy(turn.id, turn.answer ?? "")}
-                                    className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
-                                    title="Copy answer"
-                                  >
-                                    {copiedTurnId === turn.id ? (
-                                      <Check className="h-3.5 w-3.5 text-emerald-500" />
-                                    ) : (
-                                      <Copy className="h-3.5 w-3.5" />
-                                    )}
-                                  </Button>
-                                </div>
-
-                                <span className="text-[11px] text-muted-foreground">
-                                  DeepFix RAG Engine
-                                </span>
-                              </div>
-                              {turn.interactionId ? (
-                                <VoteComment
-                                  comments={comments}
-                                  interactionId={turn.interactionId}
-                                  target="answer"
-                                  vote={turn.answerVote}
-                                />
-                              ) : null}
-                            </Card>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-
-                    {/* Active Pending Turn (Thinking State) */}
-                    {pending && pendingQuery && (
-                      <div className="flex flex-col gap-4">
-                        {/* User Query Bubble */}
-                        <div className="flex items-start justify-end gap-3.5">
-                          <div className="max-w-[85%] rounded-2xl rounded-tr-xs bg-primary px-4 py-3 text-sm text-primary-foreground shadow-sm">
-                            <p className="whitespace-pre-wrap leading-relaxed">{pendingQuery}</p>
-                          </div>
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary ring-1 ring-primary/30">
-                            <UserIcon className="h-4 w-4" />
-                          </div>
-                        </div>
-
-                        {/* Animated Thinking Card */}
-                        <div className="flex items-start gap-3.5 animate-in fade-in duration-300">
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xs ring-4 ring-primary/10">
-                            <Bot className="h-4 w-4" />
-                          </div>
-                          <Card className="flex flex-1 flex-col gap-3 rounded-2xl rounded-tl-xs border-border/70 bg-card p-5 shadow-soft">
-                            <div className="flex items-center gap-2.5 text-sm font-medium text-primary">
-                              <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                              <span className="animate-pulse">
-                                DeepFix is searching corpus & synthesizing grounded answer…
-                              </span>
-                            </div>
-                            <div className="flex flex-col gap-2 pt-1">
-                              <div className="h-2 w-3/4 animate-pulse rounded-full bg-muted" />
-                              <div className="h-2 w-5/6 animate-pulse rounded-full bg-muted/70" />
-                              <div className="h-2 w-1/2 animate-pulse rounded-full bg-muted/50" />
-                            </div>
-                          </Card>
-                        </div>
-                      </div>
-                    )}
-
-                    {globalError && (
-                      <p role="alert" className="text-sm font-medium text-destructive">
-                        {globalError}
-                      </p>
-                    )}
-
-                    <div ref={messagesEndRef} />
-                  </ThreadPrimitive.Root>
-                </div>
-              </div>
-
-              {/* 3. Bottom Prompt Composer (Gemini / ChatGPT Style Floating Input) */}
-              <div className="border-t border-border/60 bg-background/95 p-3 backdrop-blur-md sm:p-4">
-                <div className="mx-auto max-w-3xl">
-                  <ComposerPrimitive.Root asChild className="relative" aria-label="Ask composer">
-                    <form onSubmit={onSubmit} className="w-full">
-                      <ChatComposerBar>
-                        <label className="sr-only" htmlFor="ask-input">
-                          Ask
-                        </label>
-                        <Input
-                          id="ask-input"
-                          aria-label="Ask"
-                          value={draft}
-                          onChange={(event) => setDraft(event.target.value)}
-                          placeholder="Ask a question about the corpus..."
-                          disabled={pending}
-                          aria-busy={pending}
-                          className="h-10 min-h-[40px] flex-1 border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0 md:text-sm"
-                        />
-                        <Button
-                          type="submit"
-                          size="icon"
-                          className="h-9 w-9 shrink-0 rounded-xl transition-all"
-                          disabled={pending || !draft.trim()}
-                          aria-busy={pending}
-                          aria-label="Ask"
-                        >
-                          {pending ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <ArrowUp className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </ChatComposerBar>
-                    </form>
-                  </ComposerPrimitive.Root>
-                  <ChatComposerHint>
-                    DeepFix searches indexed documents and grounds answers with citations.
-                  </ChatComposerHint>
-                </div>
-              </div>
-            </AssistantRuntimeProvider>
-          </div>
-
-          {/* 4. Right Side-by-Side Vertical Scrollable Grounding Passages Drawer */}
-          {shownHits.length > 0 && showSources ? (
-            <aside className="w-full shrink-0 lg:w-96 xl:w-[26rem]">
-              <section className="flex h-full flex-col gap-3 rounded-2xl border border-border/80 bg-muted/20 p-4 shadow-sm">
-                <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <BookOpen className="h-4 w-4 text-primary" />
-                    <h2 className="text-sm font-semibold uppercase tracking-wider text-foreground">
-                      Passages
-                    </h2>
-                  </div>
-                  <span className="rounded-full bg-background px-2.5 py-0.5 text-xs font-medium text-muted-foreground ring-1 ring-border">
-                    {shownHits.length} {shownHits.length === 1 ? "source" : "sources"}
-                  </span>
-                </div>
-
-                <ol className="flex flex-1 flex-col gap-3 overflow-y-auto pr-1">
-                  {shownHits.map((hit) => (
-                    <li key={`${hit.doc_id}-${hit.rank}`}>
-                      <Card className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4 shadow-soft transition-all hover:border-primary/50 hover:shadow-md">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5 overflow-hidden">
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-primary/10 font-mono text-xs font-semibold text-primary">
-                              #{hit.rank}
-                            </span>
-                            <span
-                              className="truncate text-xs font-medium text-foreground"
-                              title={hit.document_filename}
-                            >
-                              {hit.document_filename}
-                            </span>
-                          </div>
-                          <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-                            {hit.score.toFixed(3)}
-                          </span>
-                        </div>
-                        <p className="line-clamp-6 text-xs leading-relaxed text-foreground/85 hover:line-clamp-none">
-                          {hit.text}
-                        </p>
-                        <div className="border-t border-border/40 pt-2">
-                          <VoteButtons
-                            vote={hit.vote ?? null}
-                            upLabel="Mark passage as relevant"
-                            downLabel="Mark passage as not relevant"
-                            onAction={(action) =>
-                              currentTurn && void choosePassage(currentTurn.id, hit, action)
-                            }
-                          />
-                          {currentTurn?.interactionId ? (
-                            <div className="mt-2">
-                              <VoteComment
-                                comments={comments}
-                                interactionId={currentTurn.interactionId}
-                                target="passage"
-                                rank={hit.rank}
-                                vote={hit.vote ?? null}
-                              />
-                            </div>
-                          ) : null}
-                        </div>
-                      </Card>
-                    </li>
-                  ))}
-                </ol>
-              </section>
-            </aside>
-          ) : null}
+            </ThreadPrimitive.Empty>
+            <ThreadPrimitive.Messages>{() => <MessageRow />}</ThreadPrimitive.Messages>
+            <ThreadError state={state} />
+          </ThreadPrimitive.Root>
         </div>
       </div>
-    </>
+      <div className="border-t border-border/60 bg-background/95 p-3 sm:p-4">
+        <div className="mx-auto max-w-3xl">
+          <AskComposer
+            threadId={threadId}
+            onRegenerate={() => void helpers.regenerate()}
+            canRegenerate={state.status === "completed" || state.status === "failed"}
+            isRefusal={state.verdict?.grounding === "no_relevant_sources"}
+          />
+        </div>
+      </div>
+    </AssistantRuntimeProvider>
   );
+}
+
+function MessageRow() {
+  const role = useAuiState((state) => state.message.role);
+  return (
+    <div data-role={role}>
+      <MessagePrimitive.Root>
+        <MessagePrimitive.Parts
+          components={{
+            Text: ({ text }) =>
+              role === "user" ? (
+                <p className="ms-auto max-w-[85%] whitespace-pre-wrap rounded-2xl bg-primary px-4 py-3 text-body-md text-primary-foreground">
+                  {text}
+                </p>
+              ) : (
+                <div className="text-body-md leading-relaxed text-foreground">
+                  <ChatMarkdown prose={false}>{text}</ChatMarkdown>
+                </div>
+              ),
+          }}
+        />
+      </MessagePrimitive.Root>
+    </div>
+  );
+}
+
+function AskComposer({
+  threadId,
+  canRegenerate,
+  isRefusal,
+  onRegenerate,
+}: {
+  threadId: string;
+  canRegenerate: boolean;
+  isRefusal: boolean;
+  onRegenerate: () => void;
+}) {
+  return (
+    <div className="flex flex-col">
+      <ComposerPrimitive.Root className="flex flex-col">
+        <ChatComposerBar className="items-end">
+          <ComposerPrimitive.Input
+            aria-label="Ask"
+            placeholder="Ask a question about the documents…"
+            rows={1}
+            className={cn(COMPOSER_INPUT)}
+          />
+          <AuiIf condition={(state) => !state.thread.isRunning}>
+            <ComposerPrimitive.Send asChild>
+              <button type="submit" aria-label="Ask" className={COMPOSER_BUTTON}>
+                <ArrowUp className="size-4" aria-hidden />
+              </button>
+            </ComposerPrimitive.Send>
+          </AuiIf>
+          <AuiIf condition={(state) => state.thread.isRunning}>
+            <ComposerPrimitive.Cancel asChild>
+              <button type="button" aria-label="Stop generating" className={COMPOSER_BUTTON}>
+                <Square className="size-3.5 fill-current" aria-hidden />
+              </button>
+            </ComposerPrimitive.Cancel>
+          </AuiIf>
+        </ChatComposerBar>
+      </ComposerPrimitive.Root>
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+        <ChatComposerHint className="mt-0 text-left">{ASK_DISCLAIMER}</ChatComposerHint>
+        {/* A refusal is the answer, so regenerate is not offered for it (D-3). */}
+        {canRegenerate && !isRefusal ? (
+          <button
+            type="button"
+            onClick={onRegenerate}
+            className="text-label-sm text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-thread={threadId}
+          >
+            Regenerate
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function EmptyThread({ onCreate }: { onCreate: () => void }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <h2 className="text-headline-md text-foreground">No conversations yet</h2>
+      <p className="max-w-sm text-body-md text-muted-foreground">
+        Start one to ask about the documents in this corpus. Your conversations stay on the server,
+        so they are here when you come back.
+      </p>
+      <button
+        type="button"
+        onClick={onCreate}
+        className="mt-2 rounded-xl bg-primary px-4 py-2 text-label-md font-medium text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        Start a conversation
+      </button>
+    </div>
+  );
+}
+
+function ThreadError({ state }: { state: ThreadState }) {
+  const isRunning = useAuiState((value) => value.thread.isRunning);
+  if (!state.error || isRunning) return null;
+  return (
+    <p role="alert" className="text-label-sm text-destructive">
+      {state.error}
+    </p>
+  );
+}
+
+/** Build a thread's session and the hooks that report its frames back to the page. */
+function threadState(
+  threadId: string,
+  turns: AskTurn[],
+  states: { current: Map<string, ThreadState> },
+  forceRender: (update: (value: number) => number) => void,
+): ThreadState {
+  const hooks: { current: AskChatHooks } = {
+    current: {
+      onGrounding: (frame) => {
+        const entry = states.current.get(threadId);
+        if (!entry) return;
+        entry.verdict = {
+          grounding: frame.grounding,
+          citations: frame.citations,
+          maxScore: frame.max_score,
+          cutoff: frame.cutoff,
+        };
+        forceRender((value) => value + 1);
+      },
+      onTurn: (frame) => {
+        const entry = states.current.get(threadId);
+        if (!entry) return;
+        entry.status = frame.status;
+        if (frame.grounding) {
+          entry.verdict = {
+            grounding: frame.grounding,
+            citations: frame.citations ?? [],
+            maxScore: entry.verdict?.maxScore ?? 0,
+            cutoff: entry.verdict?.cutoff ?? 0,
+          };
+        }
+        forceRender((value) => value + 1);
+      },
+      onError: (message) => {
+        const entry = states.current.get(threadId);
+        if (!entry) return;
+        entry.error = message;
+        forceRender((value) => value + 1);
+      },
+      onFinished: () => forceRender((value) => value + 1),
+    },
+  };
+  const session = createAskChat(threadId, seedMessages(turns), hooks);
+  // A turn the store still calls `running` is resumed on mount, so a reload
+  // mid-answer shows the stored text and then the rest of the reply.
+  const running = turns.find((turn) => turn.status === "running");
+  if (running) session.resumeTurnId.current = running.turn_id;
+  return { session, verdict: verdictFromTurns(turns), status: null, error: null };
+}
+
+/** The verdict the store already holds for the newest answered turn, if any. */
+function verdictFromTurns(turns: AskTurn[]): AskVerdict | null {
+  const answered = [...turns]
+    .reverse()
+    .find((turn) => askTurnStatus.safeParse(turn.status).success && turn.grounding);
+  if (!answered?.grounding) return null;
+  return { grounding: answered.grounding, citations: answered.citations, maxScore: 0, cutoff: 0 };
 }
