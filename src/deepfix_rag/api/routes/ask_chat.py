@@ -57,7 +57,7 @@ from deepfix_rag.grounding import Grounding
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.interactions import get_interaction, replace_interaction, update_answer
 from deepfix_rag.service import INDEX_PREPARING
-from deepfix_rag.tracing import trace_request
+from deepfix_rag.tracing import TurnTrace, turn_trace
 
 router = APIRouter(tags=["ask-chat"])
 
@@ -379,6 +379,45 @@ async def _relay(
     interaction_id: str,
     question_text: str,
 ) -> AsyncIterator[str]:
+    """One trace per turn, kept open while the turn runs, then settled.
+
+    The trace is the context and the relay is the body, so each tool call is a
+    child span of the turn rather than a trace of its own (FR-020). A tracing
+    failure is logged inside `turn_trace` and never reaches the member.
+    """
+    with turn_trace(
+        interaction_id,
+        {"question": question, "thread_id": thread.thread_id, "turn_id": turn.turn_id},
+        {"thread_id": thread.thread_id, "turn_id": turn.turn_id},
+    ) as trace:
+        async for frame in _relay_body(
+            request,
+            settings=settings,
+            user=user,
+            thread=thread,
+            turn=turn,
+            question=question,
+            history=history,
+            interaction_id=interaction_id,
+            question_text=question_text,
+            trace=trace,
+        ):
+            yield frame
+
+
+async def _relay_body(
+    request: Request,
+    *,
+    settings: Settings,
+    user: User,
+    thread: ask_chat.Thread,
+    turn: ask_chat.Turn,
+    question: str,
+    history: list[ask_chat.Turn],
+    interaction_id: str,
+    question_text: str,
+    trace: TurnTrace,
+) -> AsyncIterator[str]:
     """Forward the turn's parts, then settle its row on every exit path.
 
     The answer text is written on every delta, so a resume replays exactly what
@@ -391,6 +430,7 @@ async def _relay(
     status = "failed"
     failure: str | None = None
     seen_text: list[str] = []
+    trace_id = trace.trace_id
 
     def store_hits(calls: list[ask_chat_turn.ToolCall]) -> None:
         """Persist the hits as each search completes, so a stop keeps the evidence."""
@@ -409,7 +449,16 @@ async def _relay(
             answer="".join(seen_text),
             results=results,
             build_id=calls[-1].result.build_id or "",
-            trace_id=None,
+            trace_id=trace_id,
+        )
+        latest = calls[-1]
+        # One child span per call, carrying the numbers that made it useful:
+        # the query, how many passages survived, the best score, and the latency.
+        trace.tool_call(
+            query=latest.result.query,
+            passage_count=len(latest.result.passages),
+            max_score=latest.result.max_score,
+            duration_ms=latest.duration_ms,
         )
 
     yield chat_stream.sse(chat_stream.start_part(turn_id))
@@ -464,6 +513,8 @@ async def _relay(
             outcome=outcome,
             interaction_id=interaction_id,
             partial="".join(seen_text),
+            trace_id=trace_id,
+            trace=trace,
         )
         registry_for(request.app.state).close(turn_id)
     grounding = stored.grounding or Grounding.NO_RELEVANT_SOURCES.value
@@ -502,6 +553,8 @@ def _settle(
     outcome: ask_chat_turn.TurnOutcome | None,
     interaction_id: str,
     partial: str,
+    trace_id: str | None,
+    trace: TurnTrace,
 ) -> ask_chat.Turn:
     """Finish the turn's one ``interactions`` row and its terminal state.
 
@@ -512,19 +565,6 @@ def _settle(
     mirror, and the optimizer's export keep reading one shape.
     """
     if outcome is not None:
-        trace_id = trace_request(
-            "ask_chat",
-            turn.turn_id,
-            {"question": question},
-            {
-                "answer": outcome.answer,
-                "grounding": outcome.grounding,
-                "passages": [
-                    {"doc_id": passage.doc_id, "score": passage.score}
-                    for passage in outcome.passages
-                ],
-            },
-        )
         replace_interaction(
             settings.product_db_path,
             interaction_id,
@@ -537,6 +577,17 @@ def _settle(
     else:
         # A turn with no outcome keeps the question and whatever text was read.
         update_answer(settings.product_db_path, interaction_id, partial)
+    # The trace's terminal half: what it produced and how it ended, so a cancelled
+    # or failed turn is accounted for too (FR-020, AC 5).
+    trace.outputs(
+        {
+            "status": status,
+            "answer": outcome.answer if outcome else partial,
+            "grounding": outcome.grounding if outcome else None,
+        }
+    )
+    trace.tag("status", status)
+    trace.tag("grounding", outcome.grounding if outcome else None)
     return ask_chat.finish_turn(
         settings.product_db_path,
         turn.turn_id,

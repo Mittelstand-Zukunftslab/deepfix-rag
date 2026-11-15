@@ -156,6 +156,11 @@ class ExportResult:
 def init_feedback(db_path: Path) -> None:
     """Create the append-only vote log and the mirror of MLflow assessment ids."""
     init_interactions(db_path)
+    # The export reads a chat turn's standalone query through a LEFT JOIN on this
+    # table, so it must exist even on a database no chat has written to yet.
+    from deepfix_rag.ask_chat import init_ask_chat
+
+    init_ask_chat(db_path)
     with connect(db_path) as conn:
         conn.execute(
             """
@@ -624,9 +629,14 @@ def _latest_events(
             f"""
             SELECT e.event_id, e.user_id, e.interaction_id, e.target, e.rank, e.action,
                    e.doc_id, e.passage_key, e.passage_text, e.created_at, e.sync_status,
-                   e.attempt_count, i.query, i.config_path, i.answer, i.trace_id
+                   e.attempt_count, i.config_path, i.answer, i.trace_id,
+                   -- A chat turn's standalone search query is the question the
+                   -- optimizer can score; a single-turn ask or search has no
+                   -- ask_chat_turns row, so it keeps its own query (FR-021).
+                   COALESCE(t.retrieval_query, i.query) AS query
             FROM feedback_events AS e
             JOIN interactions AS i ON i.interaction_id = e.interaction_id
+            LEFT JOIN ask_chat_turns AS t ON t.turn_id = i.turn_id
             WHERE {where}
               AND e.rowid = (
                     SELECT e2.rowid FROM feedback_events AS e2

@@ -98,6 +98,7 @@ class ToolCall:
     name: str
     arguments: dict[str, Any]
     result: ask_chat.SearchResult
+    duration_ms: int = 0
 
 
 @dataclass
@@ -311,6 +312,7 @@ async def run_turn(
                 break
             # FR-005: a first step with no call means the server searches itself,
             # so no turn can answer without a retrieval having happened.
+            search_started = time.monotonic()
             result = await ask_chat.search_documents(
                 coordinator,
                 settings.product_db_path,
@@ -318,6 +320,7 @@ async def run_turn(
                 max_passage_chars=settings.ASK_CHAT_MAX_PASSAGE_CHARS,
                 max_displayed_hits=settings.MAX_DISPLAYED_HITS,
             )
+            search_ms = int((time.monotonic() - search_started) * 1000)
             searches_run += 1
             build_id = result.build_id or build_id
             call = ToolCall(
@@ -325,6 +328,7 @@ async def run_turn(
                 name=ask_chat.TOOL_NAME,
                 arguments={"query": question},
                 result=result,
+                duration_ms=search_ms,
             )
             tool_calls.append(call)
             if on_tool_call is not None:
@@ -364,6 +368,7 @@ async def run_turn(
                     ],
                 }
             )
+            search_started = time.monotonic()
             try:
                 result = await ask_chat.search_documents(
                     coordinator,
@@ -380,9 +385,16 @@ async def run_turn(
                     {"role": "tool", "tool_call_id": call_id, "content": f"Error: {exc}"}
                 )
                 continue
+            search_ms = int((time.monotonic() - search_started) * 1000)
             searches_run += 1
             build_id = result.build_id or build_id
-            call = ToolCall(call_id=call_id, name=name, arguments=arguments, result=result)
+            call = ToolCall(
+                call_id=call_id,
+                name=name,
+                arguments=arguments,
+                result=result,
+                duration_ms=search_ms,
+            )
             tool_calls.append(call)
             if on_tool_call is not None:
                 # Written as each call finishes, so a turn cancelled before its
