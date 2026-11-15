@@ -12,6 +12,7 @@ import { groupThreadsByDate } from "@/features/admin-chat/thread-groups";
 import type { ChatThreadSummaryResponse } from "@/client";
 import { adminChatService } from "@/services/admin-chat-service";
 import { useAdminChatStore } from "@/stores/admin-chat-store";
+import { useAppearanceStore } from "@/stores/appearance-store";
 
 /**
  * The page's states and its shell. The chat itself talks to the AI SDK runtime,
@@ -173,6 +174,25 @@ describe("the chat shell", () => {
     expect(remove).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete thread" }));
     expect(remove).toHaveBeenCalledWith("a");
+  });
+});
+
+describe("appearance", () => {
+  it("toggles the document's dark class and remembers the choice", async () => {
+    useAppearanceStore.setState({ appearance: "light" });
+    vi.spyOn(adminChatService, "threads").mockResolvedValue([]);
+    render(<AdminChatPage chatEnabled />);
+
+    const toggle = await screen.findByRole("button", { name: "Switch to dark appearance" });
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    fireEvent.click(toggle);
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(useAppearanceStore.getState().appearance).toBe("dark");
+    expect(screen.getByRole("button", { name: "Switch to light appearance" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch to light appearance" }));
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    useAppearanceStore.setState({ appearance: "light" });
   });
 });
 

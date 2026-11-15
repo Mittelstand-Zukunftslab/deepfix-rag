@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import type { ChatActionCard, ChatRun, ChatThreadSummary } from "@/schemas/admin-chat";
 import { adminChatService } from "@/services/admin-chat-service";
 import { useAdminChatStore } from "@/stores/admin-chat-store";
+import { applyAppearance, useAppearanceStore } from "@/stores/appearance-store";
 
 /**
  * The admin chat page.
@@ -110,6 +111,12 @@ function AdminChat({ email }: { email: string }) {
   const loaded = useRef(new Map<string, ThreadState>());
   const collapsed = useAdminChatStore((store) => store.sidebarCollapsed);
   const toggleSidebar = useAdminChatStore((store) => store.toggleSidebar);
+  const appearance = useAppearanceStore((store) => store.appearance);
+  const toggleAppearance = useAppearanceStore((store) => store.toggleAppearance);
+
+  useEffect(() => {
+    applyAppearance(appearance);
+  }, [appearance]);
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -292,6 +299,7 @@ function AdminChat({ email }: { email: string }) {
   return (
     <div className="flex h-full min-h-0 w-full">
       <aside
+        id="admin-chat-sidebar"
         aria-label="Conversations"
         className={cn(
           "hidden shrink-0 border-e border-sidebar-border transition-[width] duration-200 ease-out md:block",
@@ -306,11 +314,15 @@ function AdminChat({ email }: { email: string }) {
           title={activeTitle}
           collapsed={collapsed}
           drawerOpen={drawerOpen}
+          appearance={appearance}
           onToggleSidebar={() => {
-            toggleSidebar();
-            setDrawerOpen(false);
+            // Below `md` the sidebar is a drawer, so the header control opens it
+            // instead of collapsing a column that is not on screen.
+            if (window.matchMedia("(max-width: 767px)").matches) setDrawerOpen((open) => !open);
+            else toggleSidebar();
           }}
           onDrawerOpenChange={setDrawerOpen}
+          onToggleAppearance={toggleAppearance}
           drawer={sidebar}
         />
 

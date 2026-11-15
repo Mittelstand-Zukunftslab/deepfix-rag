@@ -1,4 +1,5 @@
-import { Bot, PanelLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Bot, Moon, PanelLeftClose, PanelLeftOpen, Sun } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -11,19 +12,33 @@ export function ChatHeader({
   title,
   collapsed,
   drawerOpen,
+  appearance,
   onToggleSidebar,
   onDrawerOpenChange,
+  onToggleAppearance,
   drawer,
 }: {
   title: string;
   collapsed: boolean;
   drawerOpen: boolean;
+  appearance: "light" | "dark";
   onToggleSidebar: () => void;
   onDrawerOpenChange: (open: boolean) => void;
-  drawer: React.ReactNode;
+  onToggleAppearance: () => void;
+  drawer: ReactNode;
 }) {
   const isMobile = useIsMobile();
   const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
+  const dark = appearance === "dark";
+  // Below `md` the sidebar is a drawer, so the control opens and closes it rather
+  // than collapsing a column that is not on screen; the label has to say which.
+  const sidebarLabel = isMobile
+    ? drawerOpen
+      ? "Hide conversations"
+      : "Show conversations"
+    : collapsed
+      ? "Show conversations"
+      : "Hide conversations";
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card/60 px-3 backdrop-blur">
@@ -31,8 +46,9 @@ export function ChatHeader({
         variant="ghost"
         size="icon"
         onClick={onToggleSidebar}
-        aria-label={collapsed ? "Show conversations" : "Hide conversations"}
-        aria-expanded={!collapsed}
+        aria-label={sidebarLabel}
+        aria-expanded={isMobile ? drawerOpen : !collapsed}
+        aria-controls="admin-chat-sidebar"
         className="shrink-0"
       >
         <ToggleIcon className="size-4" aria-hidden />
@@ -51,6 +67,17 @@ export function ChatHeader({
         {ASSISTANT_NAME}
       </span>
 
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onToggleAppearance}
+        aria-pressed={dark}
+        aria-label={dark ? "Switch to light appearance" : "Switch to dark appearance"}
+        className="shrink-0"
+      >
+        {dark ? <Sun className="size-4" aria-hidden /> : <Moon className="size-4" aria-hidden />}
+      </Button>
+
       {isMobile ? (
         <Sheet open={drawerOpen} onOpenChange={onDrawerOpenChange}>
           <SheetContent side="left" className="w-72 border-sidebar-border bg-sidebar p-0">
@@ -62,6 +89,3 @@ export function ChatHeader({
     </header>
   );
 }
-
-/** The header control's icon for the collapsed state, exported for the sidebar's own rail. */
-export const SidebarToggleIcon = PanelLeft;

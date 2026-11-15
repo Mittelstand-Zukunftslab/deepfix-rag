@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Done
 
 ## Summary
 The chat is readable and usable in both light and dark appearance, follows the same tokens as the rest of the web app, and collapses to a single column on a phone where the thread list becomes a drawer.
@@ -37,6 +37,23 @@ The chat is readable and usable in both light and dark appearance, follows the s
 - The drawer uses the existing `Sheet` primitive from `src/components/ui/sheet.tsx`, which already traps focus and closes on Escape.
 
 ## Definition of done
-- [ ] Code complete
-- [ ] `bun run typecheck`, `bun run lint`, `bun run test` pass
+- [x] Code complete
+- [x] `bun run typecheck`, `bun run lint`, `bun run test` pass
 - [ ] Story committed on `feat/hermes-optimizer` before CHAT-023 starts
+
+## Verification note
+
+`styles.css` gained the `.dark` block its own header comment promised, with an oklch value for every token `:root`
+declares, so every `dark:` utility in the app now resolves instead of falling through to the light value. The
+appearance choice lives in `src/stores/appearance-store.ts` (persisted) and is applied by toggling `dark` on the
+document element; the header control's accessible name is `Switch to dark appearance` / `Switch to light
+appearance`, and `admin-chat-page.test.tsx` asserts both the class and the stored choice.
+
+The drawer needed one change outside the chat: the app shell's navigation was a fixed 288px column at every width,
+which on a 390px phone left the chat about 100px wide. `AppSidebar` is now a drawer below `md` and the same icon rail
+above it, and `AppShell` no longer draws its email/sign-out bar on `/admin/chat`, which has its own account footer
+and header. `/search`, `/admin`, and `/chat` were captured after the change and render unchanged.
+
+Not done: the 4.5:1 contrast of every dark pair is asserted by construction (foreground `L 0.945` on background
+`L 0.191`, muted `L 0.735` on card `L 0.226`) rather than measured per component; a mechanical audit would need a
+contrast tool this run does not have.
