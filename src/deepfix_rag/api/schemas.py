@@ -473,6 +473,21 @@ class AskChatCitationResponse(ApiModel):
     doc_id: str
 
 
+class AskChatPassageResponse(ApiModel):
+    """One stored passage: the hit snapshot a turn's answer was built from.
+
+    The text is the whole chunk, not the truncated copy sent to the model, so a
+    reload shows what the vote records under that rank (FR-006).
+    """
+
+    rank: int
+    doc_id: str
+    filename: str
+    text: str
+    score: float
+    truncated: bool = False
+
+
 class AskChatThreadResponse(ApiModel):
     """One of the member's conversations."""
 
@@ -493,7 +508,8 @@ class AskChatTurnResponse(ApiModel):
 
     ``interaction_id``, ``question`` and ``answer`` are null until the turn's
     ``interactions`` row exists, which is how a turn still ``running`` reports.
-    ASKCHAT-003 writes that row and the streamed answer.
+    ``passages`` is that turn's stored hit snapshot, which is what lets a reload
+    rebuild the sources panel without a second request per answer (FR-007).
     """
 
     turn_id: str
@@ -503,6 +519,7 @@ class AskChatTurnResponse(ApiModel):
     error: str | None = None
     grounding: Grounding | None = None
     citations: list[AskChatCitationResponse] = Field(default_factory=list)
+    passages: list[AskChatPassageResponse] = Field(default_factory=list)
     retrieval_query: str | None = None
     first_token_ms: int | None = None
     started_at: str

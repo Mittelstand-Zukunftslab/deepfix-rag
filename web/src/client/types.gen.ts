@@ -54,6 +54,41 @@ export type AskChatCompletionRequest = {
 };
 
 /**
+ * AskChatPassageResponse
+ *
+ * One stored passage: the hit snapshot a turn's answer was built from.
+ *
+ * The text is the whole chunk, not the truncated copy sent to the model, so a
+ * reload shows what the vote records under that rank (FR-006).
+ */
+export type AskChatPassageResponse = {
+    /**
+     * Doc Id
+     */
+    doc_id: string;
+    /**
+     * Filename
+     */
+    filename: string;
+    /**
+     * Rank
+     */
+    rank: number;
+    /**
+     * Score
+     */
+    score: number;
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Truncated
+     */
+    truncated: boolean;
+};
+
+/**
  * AskChatRenameRequest
  *
  * A new thread title. The store trims it, so the length is measured after trimming.
@@ -112,7 +147,8 @@ export type AskChatThreadResponse = {
  *
  * ``interaction_id``, ``question`` and ``answer`` are null until the turn's
  * ``interactions`` row exists, which is how a turn still ``running`` reports.
- * ASKCHAT-003 writes that row and the streamed answer.
+ * ``passages`` is that turn's stored hit snapshot, which is what lets a reload
+ * rebuild the sources panel without a second request per answer (FR-007).
  */
 export type AskChatTurnResponse = {
     /**
@@ -142,6 +178,10 @@ export type AskChatTurnResponse = {
      * The interactions row that holds this turn's question and answer.
      */
     interaction_id: string | null;
+    /**
+     * Passages
+     */
+    passages: Array<AskChatPassageResponse>;
     /**
      * Question
      */

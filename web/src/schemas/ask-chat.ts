@@ -33,6 +33,17 @@ export const askThread = z.object({
 });
 export type AskThread = z.infer<typeof askThread>;
 
+/** One passage in a `search_documents` tool output, and in a stored turn. */
+export const askPassage = z.object({
+  rank: z.number(),
+  doc_id: z.string(),
+  filename: z.string(),
+  text: z.string(),
+  score: z.number(),
+  truncated: z.boolean(),
+});
+export type AskPassage = z.infer<typeof askPassage>;
+
 /**
  * One stored turn. `question`, `answer` and `interaction_id` are null until the
  * turn's `interactions` row exists, which is what a turn still `running` looks
@@ -46,6 +57,7 @@ export const askTurn = z.object({
   error: z.string().nullable().optional(),
   grounding: askGrounding.nullable().optional(),
   citations: z.array(askCitation),
+  passages: z.array(askPassage).optional(),
   retrieval_query: z.string().nullable().optional(),
   first_token_ms: z.number().nullable().optional(),
   started_at: z.string(),
@@ -80,17 +92,6 @@ export const askGroundingFrame = z.object({
   cutoff: z.number(),
 });
 export type AskGroundingFrame = z.infer<typeof askGroundingFrame>;
-
-/** One passage in a `search_documents` tool output. */
-export const askPassage = z.object({
-  rank: z.number(),
-  doc_id: z.string(),
-  filename: z.string(),
-  text: z.string(),
-  score: z.number(),
-  truncated: z.boolean(),
-});
-export type AskPassage = z.infer<typeof askPassage>;
 
 /** The tool's output object (D-2), which is also what the sources panel reads. */
 export const askSearchOutput = z.object({

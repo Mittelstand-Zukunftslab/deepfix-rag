@@ -239,6 +239,11 @@ export const deleteAskChatThread = <ThrowOnError extends boolean = false>(option
  * Show one conversation with its turns
  *
  * The thread and its turns in order, each with its grounding and citations.
+ *
+ * Each turn also carries its stored passages, so a reload rebuilds the sources
+ * panel from the interaction snapshot instead of issuing a request per answer
+ * (FR-007). The texts are the full chunks, because that is what the vote's rank
+ * resolves to.
  */
 export const getAskChatThread = <ThrowOnError extends boolean = false>(options: Options<GetAskChatThreadData, ThrowOnError>): RequestResult<GetAskChatThreadResponses, GetAskChatThreadErrors, ThrowOnError> => (options.client ?? client).get<GetAskChatThreadResponses, GetAskChatThreadErrors, ThrowOnError>({ url: '/ask/chat/threads/{thread_id}', ...options });
 

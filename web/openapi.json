@@ -56,6 +56,46 @@
         "title": "AskChatCompletionRequest",
         "type": "object"
       },
+      "AskChatPassageResponse": {
+        "description": "One stored passage: the hit snapshot a turn's answer was built from.\n\nThe text is the whole chunk, not the truncated copy sent to the model, so a\nreload shows what the vote records under that rank (FR-006).",
+        "properties": {
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rank",
+          "doc_id",
+          "filename",
+          "text",
+          "score",
+          "truncated"
+        ],
+        "title": "AskChatPassageResponse",
+        "type": "object"
+      },
       "AskChatRenameRequest": {
         "description": "A new thread title. The store trims it, so the length is measured after trimming.",
         "properties": {
@@ -123,7 +163,7 @@
         "type": "object"
       },
       "AskChatTurnResponse": {
-        "description": "One question and the answer stored for it.\n\n``interaction_id``, ``question`` and ``answer`` are null until the turn's\n``interactions`` row exists, which is how a turn still ``running`` reports.\nASKCHAT-003 writes that row and the streamed answer.",
+        "description": "One question and the answer stored for it.\n\n``interaction_id``, ``question`` and ``answer`` are null until the turn's\n``interactions`` row exists, which is how a turn still ``running`` reports.\n``passages`` is that turn's stored hit snapshot, which is what lets a reload\nrebuild the sources panel without a second request per answer (FR-007).",
         "properties": {
           "answer": {
             "anyOf": [
@@ -198,6 +238,13 @@
             "description": "The interactions row that holds this turn's question and answer.",
             "title": "Interaction Id"
           },
+          "passages": {
+            "items": {
+              "$ref": "#/components/schemas/AskChatPassageResponse"
+            },
+            "title": "Passages",
+            "type": "array"
+          },
           "question": {
             "anyOf": [
               {
@@ -262,6 +309,7 @@
           "error",
           "grounding",
           "citations",
+          "passages",
           "retrieval_query",
           "first_token_ms",
           "started_at",
@@ -4003,7 +4051,7 @@
         ]
       },
       "get": {
-        "description": "The thread and its turns in order, each with its grounding and citations.",
+        "description": "The thread and its turns in order, each with its grounding and citations.\n\nEach turn also carries its stored passages, so a reload rebuilds the sources\npanel from the interaction snapshot instead of issuing a request per answer\n(FR-007). The texts are the full chunks, because that is what the vote's rank\nresolves to.",
         "operationId": "get_ask_chat_thread",
         "parameters": [
           {

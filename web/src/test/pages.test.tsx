@@ -98,6 +98,9 @@ describe("Dashboard pages", () => {
       vote: null,
     };
 
+    // A single-turn result carries no validated citations, so D-10's rule makes
+    // it Partly grounded rather than Grounded: the evidence is there and the
+    // answer's prose does not point at it.
     const grounded = renderWithQuery(
       <AskResultView
         askedQuery="harbor"
@@ -106,8 +109,9 @@ describe("Dashboard pages", () => {
         hits={[hit]}
       />,
     );
-    expect(screen.getByText("Grounded")).toBeTruthy();
+    expect(screen.getByText("Partly grounded")).toBeTruthy();
     expect(screen.getByText("1 passage used")).toBeTruthy();
+    expect(screen.queryByText("Grounded")).toBeNull();
     expect(screen.queryByText(/Evaluated/)).toBeNull();
     grounded.unmount();
 
@@ -120,6 +124,7 @@ describe("Dashboard pages", () => {
       />,
     );
     expect(screen.queryByText("Grounded")).toBeNull();
+    expect(screen.queryByText("Partly grounded")).toBeNull();
     expect(screen.getAllByText("Not found in the documents").length).toBeGreaterThan(0);
     expect(screen.getByText("Answer declined")).toBeTruthy();
     expect(screen.queryByText(/Evaluated/)).toBeNull();

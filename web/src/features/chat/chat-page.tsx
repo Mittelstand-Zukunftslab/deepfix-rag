@@ -21,12 +21,22 @@ import {
   type AskThreadChat,
 } from "@/features/chat/ask-chat-transport";
 import { AskThreadSidebar } from "@/features/chat/ask-thread-sidebar";
+import { GroundingBadge } from "@/features/chat/answer-grounding";
+import {
+  AnswerWithCitations,
+  SourcesPanel,
+  SourcesToggle,
+  type SourcesState,
+} from "@/features/chat/sources-panel";
 import { IndexPreparing } from "@/features/index/index-preparing";
 import { cn } from "@/lib/utils";
 import {
+  askSearchOutput,
   askTurnStatus,
+  type AskCitation,
   type AskGrounding,
   type AskGroundingFrame,
+  type AskPassage,
   type AskTurn,
 } from "@/schemas/ask-chat";
 import { askChatService } from "@/services/ask-chat-service";
@@ -63,6 +73,10 @@ type ThreadState = {
   verdict: AskVerdict | null;
   status: AskTurn["status"] | null;
   error: string | null;
+  /** Stored turns' interaction ids, by turn id, so a passage vote has a target. */
+  storedAnswers: Record<string, string>;
+  /** The newest stored turn's passages, read from the thread response on load. */
+  storedPassages: AskPassage[];
 };
 
 const COMPOSER_BUTTON =
@@ -227,6 +241,25 @@ export function AskPage({ indexReady = true }: { indexReady?: boolean }) {
 function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadState }) {
   const helpers = useChat<UIMessage>({ chat: state.session.chat });
   const runtime = useAISDKRuntime(helpers);
+  const [showSources, setShowSources] = useState(true);
+  const [selectedRank, setSelectedRank] = useState<number | null>(null);
+  // The passages come from the messages' tool parts, so a reload rebuilds the
+  // panel from what the stream carried rather than from the answer's prose.
+  const sources: SourcesState = {
+    // The streamed tool output wins while a turn is live; a reloaded thread has
+    // no such part, so it falls back to the passages the store returned with the
+    // turn (FR-007, AC 3).
+    passages:
+      passagesFromMessages(helpers.messages).length > 0
+        ? passagesFromMessages(helpers.messages)
+        : state.storedPassages,
+    citations: state.verdict?.citations ?? [],
+    interactionId: latestInteractionId(state, helpers.messages),
+  };
+  const selectCitation = (rank: number) => {
+    setShowSources(true);
+    setSelectedRank(rank);
+  };
 
   useEffect(() => {
     if (!state.session.resumeTurnId.current) return;
@@ -239,44 +272,86 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="flex h-12 shrink-0 items-center border-b border-border/60 bg-muted/20 px-4">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 bg-muted/20 px-4">
         <span className="truncate text-label-sm font-medium text-foreground">Conversation</span>
-      </div>
-      <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-        <div
-          aria-live="polite"
-          data-testid="ask-chat-stream"
-          className="mx-auto flex max-w-3xl flex-col gap-6"
-        >
-          <ThreadPrimitive.Root className="flex flex-col gap-6">
-            <ThreadPrimitive.Empty>
-              <div className="rounded-3xl border border-dashed border-border/80 bg-gradient-to-b from-muted/30 via-muted/15 to-transparent px-6 py-14 text-center">
-                <h2 className="text-headline-md text-foreground">Ask about your corpus</h2>
-                <p className="mt-2 text-body-md text-muted-foreground">
-                  Every answer cites the passages it used, and every passage stays votable.
-                </p>
-              </div>
-            </ThreadPrimitive.Empty>
-            <ThreadPrimitive.Messages>{() => <MessageRow />}</ThreadPrimitive.Messages>
-            <ThreadError state={state} />
-          </ThreadPrimitive.Root>
+        <div className="flex items-center gap-2">
+          {state.verdict ? (
+            <GroundingBadge
+              grounding={state.verdict.grounding}
+              citations={state.verdict.citations}
+            />
+          ) : null}
+          {sources.passages.length > 0 ? (
+            <SourcesToggle
+              open={showSources}
+              count={sources.passages.length}
+              onToggle={() => setShowSources((open) => !open)}
+            />
+          ) : null}
         </div>
       </div>
-      <div className="border-t border-border/60 bg-background/95 p-3 sm:p-4">
-        <div className="mx-auto max-w-3xl">
-          <AskComposer
-            threadId={threadId}
-            onRegenerate={() => void helpers.regenerate()}
-            canRegenerate={state.status === "completed" || state.status === "failed"}
-            isRefusal={state.verdict?.grounding === "no_relevant_sources"}
-          />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+            <div
+              aria-live="polite"
+              data-testid="ask-chat-stream"
+              className="mx-auto flex max-w-3xl flex-col gap-6"
+            >
+              <ThreadPrimitive.Root className="flex flex-col gap-6">
+                <ThreadPrimitive.Empty>
+                  <div className="rounded-3xl border border-dashed border-border/80 bg-gradient-to-b from-muted/30 via-muted/15 to-transparent px-6 py-14 text-center">
+                    <h2 className="text-headline-md text-foreground">Ask about your corpus</h2>
+                    <p className="mt-2 text-body-md text-muted-foreground">
+                      Every answer cites the passages it used, and every passage stays votable.
+                    </p>
+                  </div>
+                </ThreadPrimitive.Empty>
+                <ThreadPrimitive.Messages>
+                  {() => (
+                    <MessageRow
+                      citations={latestCitations(state)}
+                      onSelectCitation={selectCitation}
+                    />
+                  )}
+                </ThreadPrimitive.Messages>
+                <ThreadError state={state} />
+              </ThreadPrimitive.Root>
+            </div>
+          </div>
+          <div className="border-t border-border/60 bg-background/95 p-3 sm:p-4">
+            <div className="mx-auto max-w-3xl">
+              <AskComposer
+                threadId={threadId}
+                onRegenerate={() => void helpers.regenerate()}
+                canRegenerate={state.status === "completed" || state.status === "failed"}
+                isRefusal={state.verdict?.grounding === "no_relevant_sources"}
+              />
+            </div>
+          </div>
         </div>
+        {showSources && sources.passages.length > 0 ? (
+          <div className="w-full shrink-0 overflow-y-auto border-s border-border/60 p-3 md:w-auto lg:max-w-sm">
+            <SourcesPanel
+              state={sources}
+              selectedRank={selectedRank}
+              onSelect={setSelectedRank}
+              onVote={() => undefined}
+            />
+          </div>
+        ) : null}
       </div>
     </AssistantRuntimeProvider>
   );
 }
 
-function MessageRow() {
+function MessageRow({
+  citations,
+  onSelectCitation,
+}: {
+  citations: AskCitation[];
+  onSelectCitation: (rank: number) => void;
+}) {
   const role = useAuiState((state) => state.message.role);
   return (
     <div data-role={role}>
@@ -289,15 +364,57 @@ function MessageRow() {
                   {text}
                 </p>
               ) : (
-                <div className="text-body-md leading-relaxed text-foreground">
-                  <ChatMarkdown prose={false}>{text}</ChatMarkdown>
-                </div>
+                <AnswerWithCitations
+                  answer={text}
+                  citations={citations}
+                  onSelect={onSelectCitation}
+                />
               ),
           }}
         />
       </MessagePrimitive.Root>
     </div>
   );
+}
+
+/**
+ * Every passage the conversation's tool calls delivered, in the order they
+ * arrived, one entry per rank of the newest search.
+ *
+ * `search_documents` is the only tool, so a `tool-search_documents` part with an
+ * output is the panel's source. Later calls win: a turn that searched twice is
+ * showing the passages its answer was built from.
+ */
+export function passagesFromMessages(messages: UIMessage[]): AskPassage[] {
+  let latest: AskPassage[] = [];
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-search_documents") continue;
+      const output = (part as { output?: unknown }).output;
+      const parsed = askSearchOutput.safeParse(output);
+      if (parsed.success) latest = parsed.data.passages;
+    }
+  }
+  return latest;
+}
+
+/** The newest verdict's citations, for the answer currently on screen. */
+function latestCitations(state: ThreadState): AskCitation[] {
+  return state.verdict?.citations ?? [];
+}
+
+/**
+ * The interaction the newest answer belongs to, which is what a vote names.
+ *
+ * A live turn has no id until the server has stored its row, so this reads the
+ * stored map the `onFinished` refresh fills in. `null` means the vote falls back
+ * to local state, which is what the passage card does when there is nothing to
+ * POST to yet.
+ */
+function latestInteractionId(state: ThreadState, messages: UIMessage[]): string | null {
+  const assistant = [...messages].reverse().find((message) => message.role === "assistant");
+  if (!assistant) return null;
+  return state.storedAnswers[assistant.id] ?? null;
 }
 
 function AskComposer({
@@ -424,7 +541,33 @@ function threadState(
         entry.error = message;
         forceRender((value) => value + 1);
       },
-      onFinished: () => forceRender((value) => value + 1),
+      onFinished: () => {
+        // A stored turn's interaction id is what a vote needs, and it only exists
+        // once the server has written the row, so the thread is re-read after the
+        // stream ends. It also refreshes the stored answer text and its verdict.
+        void askChatService
+          .getThread(threadId)
+          .then((detail) => {
+            const entry = states.current.get(threadId);
+            if (!entry) return;
+            entry.storedAnswers = Object.fromEntries(
+              detail.turns
+                .filter((turn) => turn.interaction_id)
+                .map((turn) => [turn.turn_id, turn.interaction_id as string]),
+            );
+            const newest = detail.turns[detail.turns.length - 1];
+            if (newest?.grounding) {
+              entry.verdict = {
+                grounding: newest.grounding,
+                citations: newest.citations,
+                maxScore: entry.verdict?.maxScore ?? 0,
+                cutoff: entry.verdict?.cutoff ?? 0,
+              };
+            }
+            forceRender((value) => value + 1);
+          })
+          .catch(() => undefined);
+      },
     },
   };
   const session = createAskChat(threadId, seedMessages(turns), hooks);
@@ -432,7 +575,18 @@ function threadState(
   // mid-answer shows the stored text and then the rest of the reply.
   const running = turns.find((turn) => turn.status === "running");
   if (running) session.resumeTurnId.current = running.turn_id;
-  return { session, verdict: verdictFromTurns(turns), status: null, error: null };
+  return {
+    session,
+    verdict: verdictFromTurns(turns),
+    status: null,
+    error: null,
+    storedAnswers: Object.fromEntries(
+      turns
+        .filter((turn) => turn.interaction_id)
+        .map((turn) => [turn.turn_id, turn.interaction_id as string]),
+    ),
+    storedPassages: [...turns].reverse().find((turn) => turn.passages?.length)?.passages ?? [],
+  };
 }
 
 /** The verdict the store already holds for the newest answered turn, if any. */

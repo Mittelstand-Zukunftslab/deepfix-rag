@@ -43,15 +43,17 @@ from deepfix_rag.api.identity import User
 from deepfix_rag.api.schemas import (
     AskChatCitationResponse,
     AskChatCompletionRequest,
+    AskChatPassageResponse,
     AskChatRenameRequest,
     AskChatThreadDetailResponse,
     AskChatThreadResponse,
     AskChatTurnResponse,
 )
 from deepfix_rag.config.settings import LOGGER, Settings
+from deepfix_rag.documents import document_filenames
 from deepfix_rag.grounding import Grounding
 from deepfix_rag.indexing import IndexCoordinator
-from deepfix_rag.interactions import replace_interaction, update_answer
+from deepfix_rag.interactions import get_interaction, replace_interaction, update_answer
 from deepfix_rag.service import INDEX_PREPARING
 from deepfix_rag.tracing import trace_request
 
@@ -106,17 +108,60 @@ def create_ask_chat_thread(request: Request) -> AskChatThreadResponse:
     summary="Show one conversation with its turns",
 )
 def get_ask_chat_thread(thread_id: str, request: Request) -> AskChatThreadDetailResponse:
-    """The thread and its turns in order, each with its grounding and citations."""
+    """The thread and its turns in order, each with its grounding and citations.
+
+    Each turn also carries its stored passages, so a reload rebuilds the sources
+    panel from the interaction snapshot instead of issuing a request per answer
+    (FR-007). The texts are the full chunks, because that is what the vote's rank
+    resolves to.
+    """
     user = current_user(request)
     settings = get_settings(request)
     thread = _owned_thread(settings, thread_id, user)
+    turns = ask_chat.thread_turns(settings.product_db_path, thread_id, user.id)
+    ids = [turn.interaction_id for turn in turns if turn.interaction_id]
+    names = document_filenames(settings.product_db_path, _doc_ids(settings, ids))
     return AskChatThreadDetailResponse(
         thread=_thread_response(thread),
         turns=[
-            _turn_response(turn)
-            for turn in ask_chat.thread_turns(settings.product_db_path, thread_id, user.id)
+            _turn_response(
+                turn,
+                _stored_passages(settings, turn, names),
+            )
+            for turn in turns
         ],
     )
+
+
+def _doc_ids(settings: Settings, interaction_ids: list[str]) -> list[str]:
+    """Every document id the turns' hits name, so the filenames are one query."""
+    ids: list[str] = []
+    for interaction_id in interaction_ids:
+        stored = get_interaction(settings.product_db_path, interaction_id)
+        if stored is not None:
+            ids.extend(hit.doc_id for hit in stored.hits)
+    return ids
+
+
+def _stored_passages(
+    settings: Settings, turn: ask_chat.Turn, names: dict[str, str]
+) -> list[AskChatPassageResponse]:
+    """One turn's stored hits, in rank order, as the panel reads them."""
+    if not turn.interaction_id:
+        return []
+    stored = get_interaction(settings.product_db_path, turn.interaction_id)
+    if stored is None:
+        return []
+    return [
+        AskChatPassageResponse(
+            rank=hit.rank,
+            doc_id=hit.doc_id,
+            filename=names.get(hit.doc_id, hit.doc_id),
+            text=hit.text,
+            score=hit.score,
+        )
+        for hit in stored.hits
+    ]
 
 
 @router.patch(
@@ -598,7 +643,9 @@ def _thread_response(thread: ask_chat.Thread) -> AskChatThreadResponse:
     )
 
 
-def _turn_response(turn: ask_chat.Turn) -> AskChatTurnResponse:
+def _turn_response(
+    turn: ask_chat.Turn, passages: list[AskChatPassageResponse] | None = None
+) -> AskChatTurnResponse:
     return AskChatTurnResponse(
         turn_id=turn.turn_id,
         seq=turn.seq,
@@ -612,6 +659,7 @@ def _turn_response(turn: ask_chat.Turn) -> AskChatTurnResponse:
             )
             for citation in turn.citations
         ],
+        passages=passages or [],
         retrieval_query=turn.retrieval_query,
         first_token_ms=turn.first_token_ms,
         started_at=turn.started_at,
