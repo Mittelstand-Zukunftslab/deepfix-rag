@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentPropsWithoutRef,
+} from "react";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -11,6 +18,7 @@ import {
 import { useAISDKRuntime, useAISDKError } from "@assistant-ui/react-ai-sdk";
 import { useChat, type UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
+import { ArrowDown, Copy, RefreshCw, Wrench } from "lucide-react";
 
 import { ChatComposer } from "@/features/admin-chat/chat-composer";
 import { ThreadWelcome } from "@/features/admin-chat/thread-welcome";
@@ -21,6 +29,7 @@ import {
   type ChatHooks,
   type ThreadChat,
 } from "@/features/admin-chat/chat-transport";
+import { cn } from "@/lib/utils";
 import type { ChatToolProgress } from "@/schemas/admin-chat";
 
 /**
@@ -119,13 +128,22 @@ function ComposerSeed({ prompt }: { prompt: string | undefined }) {
 function ThreadBody({ disabled }: { disabled: boolean }) {
   return (
     // `ThreadPrimitive.Root` is the scope a suggestion writes its prompt into.
-    <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col gap-6">
+    <ThreadPrimitive.Root className="relative flex min-h-0 flex-1 flex-col gap-6">
       <ThreadWelcome />
-      <div aria-live="polite" className="flex flex-col gap-3" data-testid="admin-chat-stream">
+      <div aria-live="polite" className="flex flex-col gap-6" data-testid="admin-chat-stream">
         <ThreadPrimitive.Messages>{() => <MessageRow />}</ThreadPrimitive.Messages>
         <ThreadError />
       </div>
       <div className="sticky bottom-0 mt-auto bg-background pb-2">
+        <ThreadPrimitive.ScrollToBottom asChild>
+          <button
+            type="button"
+            aria-label="Scroll to bottom"
+            className="absolute -top-12 start-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-soft transition-colors hover:text-foreground disabled:invisible"
+          >
+            <ArrowDown className="size-4" aria-hidden />
+          </button>
+        </ThreadPrimitive.ScrollToBottom>
         <ChatComposer disabled={disabled} />
       </div>
     </ThreadPrimitive.Root>
@@ -138,7 +156,7 @@ function MessageRow() {
   if (role === "user") {
     return (
       <div data-testid={`chat-message-${id}`} data-role="user">
-        <MessagePrimitive.Root className="flex justify-end">
+        <MessagePrimitive.Root>
           <MessagePrimitive.Parts
             components={{
               Text: ({ text }) => <ChatMessageView role="user" content={text} />,
@@ -153,6 +171,7 @@ function MessageRow() {
 
 function AssistantMessage({ id }: { id: string }) {
   const isLast = useAuiState((state) => state.message.isLast);
+  const isRunning = useAuiState((state) => state.message.status?.type === "running");
   return (
     <div data-testid={`chat-message-${id}`} data-role="assistant" className="group/message">
       <MessagePrimitive.Parts
@@ -161,14 +180,30 @@ function AssistantMessage({ id }: { id: string }) {
           data: { by_name: { "deepfix-tool": ToolRow } },
         }}
       />
+      {isRunning ? (
+        <p
+          role="status"
+          className="mt-2 flex items-center gap-1.5 text-label-sm text-muted-foreground"
+        >
+          <span className="size-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
+          Working…
+        </p>
+      ) : null}
       {isLast ? (
         <ActionBarPrimitive.Root
           hideWhenRunning
           autohide="not-last"
-          className="mt-1 flex gap-1 opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100"
+          className="mt-2 flex items-center gap-1 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100"
         >
-          <ActionBarPrimitive.Reload className="rounded px-1.5 py-1 text-label-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground">
-            Regenerate
+          <ActionBarPrimitive.Copy asChild>
+            <IconButton aria-label="Copy">
+              <Copy className="size-3.5" aria-hidden />
+            </IconButton>
+          </ActionBarPrimitive.Copy>
+          <ActionBarPrimitive.Reload asChild>
+            <IconButton aria-label="Regenerate">
+              <RefreshCw className="size-3.5" aria-hidden />
+            </IconButton>
           </ActionBarPrimitive.Reload>
         </ActionBarPrimitive.Root>
       ) : null}
@@ -176,9 +211,32 @@ function AssistantMessage({ id }: { id: string }) {
   );
 }
 
+/** A small action-bar control that forwards the primitive's props, so `asChild` still works. */
+const IconButton = forwardRef<HTMLButtonElement, ComponentPropsWithoutRef<"button">>(
+  function IconButton({ className, children, ...props }, ref) {
+    return (
+      <button
+        ref={ref}
+        type="button"
+        className={cn(
+          "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors",
+          "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          className,
+        )}
+        {...props}
+      >
+        {children}
+      </button>
+    );
+  },
+);
+
 function ToolRow({ data }: { data: ChatToolProgress }) {
   return (
-    <p className="text-label-sm text-muted-foreground">{data.label ?? data.tool ?? "Working…"}</p>
+    <p className="mt-2 flex items-center gap-2 rounded-md bg-muted/60 px-2 py-1 text-label-sm text-muted-foreground">
+      <Wrench className="size-3" aria-hidden />
+      {data.label ?? data.tool ?? "Working…"}
+    </p>
   );
 }
 

@@ -410,6 +410,65 @@ describe("one copy of every message", () => {
   });
 });
 
+describe("rendering an answer", () => {
+  it("renders markdown and a code block with a copy button, and a plain user bubble", async () => {
+    const reply = [
+      "## Champion",
+      "",
+      "The **fusion** weight is `0.4`.",
+      "",
+      "```json",
+      '{ "fusion": 0.4 }',
+      "```",
+    ].join("\n");
+    THREADS["thread-markdown"] = thread("thread-markdown", "Markdown", [
+      message("m-1", "user", "# not a heading", "turn-m"),
+      message("m-2", "assistant", reply, "turn-m"),
+    ]);
+    stubServer(() => sse([sseBody(turnParts(TURN, "Unused"))]));
+    vi.spyOn(adminChatService, "threads").mockResolvedValue([
+      summary("thread-markdown", "Markdown"),
+    ]);
+    render(<AdminChatPage chatEnabled={true} />);
+
+    // The user's text is text: its hash never becomes a heading.
+    expect(await screen.findByText("# not a heading")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "not a heading" })).toBeNull();
+
+    expect(screen.getByRole("heading", { name: "Champion" })).toBeTruthy();
+    const code = document.querySelector("pre code");
+    expect(code?.textContent).toContain('"fusion": 0.4');
+    expect(screen.getByText("json")).toBeTruthy();
+    // The code block's own copy button, plus the message action bar's.
+    expect(screen.getAllByRole("button", { name: "Copy" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("HERMES chat").length).toBeGreaterThan(0);
+  });
+
+  it("shows a working indicator while a reply streams and hides it when it settles", async () => {
+    let release: () => void = () => undefined;
+    const slow = new ReadableStream<Uint8Array>({
+      start(controller) {
+        release = () => {
+          controller.enqueue(new TextEncoder().encode(sseBody(turnParts(TURN, "Done."))));
+          controller.close();
+        };
+      },
+    });
+    stubServer(
+      () => new Response(slow, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+    render(<AdminChatPage chatEnabled={true} />);
+    await waitFor(() => expect(screen.getByText("Alpha answer")).toBeTruthy());
+    await send("Hallo");
+    await waitFor(() => expect(screen.getByRole("status", { name: "" })).toBeTruthy());
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+    await waitFor(() => expect(screen.getByText("Done.")).toBeTruthy());
+  });
+});
+
 describe("regenerate", () => {
   it("asks the server to replace the last answer rather than append one", async () => {
     const { posts } = stubServer(() => sse([sseBody(turnParts(TURN, "Second answer"))]));

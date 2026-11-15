@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Done
 
 ## Summary
 Assistant replies render as prose in the centred column — no bubble — with markdown, code blocks that carry a copy button, and a hover action bar offering copy and regenerate. User messages sit in a subtle bubble with an avatar label. Regenerate still replaces the answer in place.
@@ -42,6 +42,25 @@ Assistant replies render as prose in the centred column — no bubble — with m
 - `MessagePrimitive.Parts` still receives the `data-deepfix-tool` renderer, so the step row keeps working.
 
 ## Definition of done
-- [ ] Code complete
-- [ ] `bun run typecheck`, `bun run lint`, `bun run test` pass
+- [x] Code complete
+- [x] `bun run typecheck`, `bun run lint`, `bun run test` pass
 - [ ] Story committed on `feat/hermes-optimizer` before CHAT-023 starts
+
+## Verification note
+
+The assistant half renders through `ChatMarkdown` from `web/src/components/chat/markdown.tsx`, the same component
+the Ask page uses (CHAT-016), so a code block's language, its horizontal scroll and its copy button are one
+implementation for both chats. The user half is a right-aligned muted bubble with a user glyph, and it stays plain
+text: the test feeds it a leading `#` and asserts no heading is produced.
+
+The action bar is `ActionBarPrimitive.Copy` and `ActionBarPrimitive.Reload`, wrapped in a small forwardRef button so
+`asChild` forwards the primitive's handler; regenerate therefore posts through the same `regenerate: true` path the
+CHAT-014/015 tests pin, and `admin-chat-session.test.tsx`'s regenerate case is unchanged. The streaming indicator is
+a `role="status"` line driven by `message.status.type === "running"`, and `ThreadPrimitive.ScrollToBottom` renders
+the control labelled **Scroll to bottom**.
+
+Editing a user message is not offered: the backend has no edit or branch route, and a dead control would be worse
+than none.
+
+`admin-chat-session.test.tsx` grew two cases (markdown + code + copy, and the streaming indicator) and now has 13.
+`bun run typecheck`, `bun run lint` (0 errors) and `bun run test` (108 cases) pass.
