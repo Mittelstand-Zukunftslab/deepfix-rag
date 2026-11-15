@@ -13,13 +13,15 @@ const sourceFiles = (dir: string): string[] =>
   });
 
 // server.ts proxies `/api` in production. api.ts is the session fetch adapter for the
-// generated client. admin-chat-sse.ts is the admin chat's stream reader: the AI SDK's UI
-// message stream is consumed frame by frame, which the generated client cannot do, so that
-// one module owns the fetch. Its own test pins its only target to a `/api/admin/chat/...` path.
+// generated client. admin-chat-sse.ts and ask-chat-sse.ts are the two chats' stream
+// readers: the AI SDK's UI message stream is consumed frame by frame, which the generated
+// client cannot do, so those two modules own the fetch. Each one's own test pins its
+// target paths to `/api/admin/chat/...` and `/api/ask/chat/...` respectively.
 const EXEMPT = new Set([
   "server.ts",
   "api.ts",
   join("services", "admin-chat-sse.ts"),
+  join("services", "ask-chat-sse.ts"),
   join("test", "api-boundary.test.ts"),
 ]);
 
