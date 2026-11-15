@@ -1,0 +1,73 @@
+# ASKCHAT-004 — Stop, resume, regenerate, and fail honestly
+
+## Type
+Feature
+
+## Status
+Draft
+
+## Summary
+Stop ends an answer without losing it. A reload mid-answer resumes the reply in place. Regenerate replaces an answer at the same position instead of stacking a second one under it. A failure says so, offers regenerate, and leaves nothing stuck.
+
+## PRD traceability
+- Related: FR-014, FR-015, FR-016, FR-018
+- Decisions: D-4 (Stop cancels the stream, keeps the text and the evidence), D-9 (a regenerate clears votes rather than deleting the interaction)
+- Journeys: J1 steps 3–4, J3
+- NFR touchpoints: NFR-2 (no row left `running`, a dropped connection is a normal end), NFR-4 (another member's turn is 404), NFR-1 (resume replays once)
+
+## Dependencies
+- Requires: ASKCHAT-003 (the streaming route, the tool loop, and the `litellm.acompletion` generator).
+- Blocks: ASKCHAT-005 (counts turns), ASKCHAT-010 (the trace includes the cancelled path).
+
+## Acceptance criteria
+
+**Stop**
+
+1. Given a turn streaming to a browser, when the browser closes the connection, then the route's generator cancels the in-flight retrieval, closes the LiteLLM async generator so the upstream request is ended rather than left running, and stops writing.
+2. Given that same abort, when the database is read, then the turn's status is `cancelled` with an `ended_at`, the assistant text written so far is stored, and any tool results already received are stored as that turn's `interaction_hits` so the sources panel survives the stop.
+3. Given that same abort, when the stream has any remaining ability to write, then a terminal `data-deepfix-turn` with `status: "cancelled"` is emitted before the stream closes, so a later resume and the browser agree on the status.
+4. Given a stopped turn, when `POST /feedback` is called on its answer or on one of its passages, then the vote is accepted — a stopped answer is still votable, because it is a thing the member read.
+5. Given a stopped turn, when the log is read, then the disconnect produced one structured line and no exception traceback: a dropped connection is a normal end, not an error.
+
+**Resume**
+
+6. Given `GET /ask/chat/turns/{turn_id}/stream`, when the turn is `running` in this API process, then it first replays the text stored for that turn as `text-start` / `text-delta` / `text-end` and then forwards new deltas until the terminal frame, and the replayed text appears exactly once.
+7. Given the same route, when the turn is not running here — finished, or a restart, or another worker — then it sends the stored text once and one terminal `data-deepfix-turn` carrying the stored status and grounding.
+8. Given an unknown `turn_id`, or one belonging to another member, when the route is called, then 404.
+9. Given a resume in flight, when the browser connects, then the route answers with the same `x-vercel-ai-ui-message-stream: v1` stream as the completions route, so the client's `reconnectToStream` needs no second parser.
+
+**Regenerate**
+
+10. Given a thread whose newest turn is `completed` or `cancelled`, when a request arrives with `regenerate: true`, then that turn's answer is replaced in place and its `turn_id` is reused, so the thread does not grow a second answer beside the first.
+11. Given the same regenerate, when the thread is re-read, then it contains exactly one assistant turn for that position, not two, and the previous answer's text is nowhere in it.
+12. Given votes on the replaced answer or its passages, when the regenerate completes, then each is cleared through the existing `clear` action in `feedback.record_vote`, which also deletes the mirrored MLflow assessment. No new vote action and no `feedback_events.action` `CHECK` change.
+13. Given a regenerate request whose newest turn is `running`, when it arrives, then it is refused with 409 rather than replacing a reply that is still being written.
+14. Given a thread whose newest turn is `no_relevant_sources`, when the browser renders it, then it offers no regenerate control. The refusal is the product's answer, not a transient failure.
+
+**Failure**
+
+15. Given a model failure mid-stream, when it happens, then the stream emits an `error` part with a sentence that names no credential and no private path, then a terminal `data-deepfix-turn` with `status: "failed"`.
+16. Given that failed turn, when the database is read, then the status is `failed`, `error` holds the sentence, and no `running` row remains.
+17. Given a failed turn, when the browser renders it, then regenerate is offered and pressing it produces a fresh attempt at the same position.
+
+**The required test**
+
+18. Given the real fake OpenAI-compatible endpoint and the real app, when `tests/test_ask_chat_stream.py` runs, then it covers: a client that closes the socket mid-stream leaves a `cancelled` row with the partial text and the tool's hits, and the fake server records that its response stream was **closed** rather than merely abandoned; a resume of that turn returns the stored text once and then the terminal frame; a regenerate leaves one assistant message and one `clear` event per prior vote; a failure frame yields `failed` and a regenerate that follows succeeds. No mocks.
+
+## Out of scope
+- Editing an earlier message and re-running from there. Replacing the newest turn is the whole of regenerate in this release.
+- Branching a conversation into two threads.
+- Cancelling anything other than this turn. A stop never touches a vote, another turn, or any other member's request.
+- Persisting an in-flight stream across an API restart. The resume route reports the stored status instead, as AC 7 says.
+
+## Notes
+- The abort path is one function, not two. Closing the upstream generator and writing the `cancelled` row belong together in the module so a later edit cannot do one without the other.
+- `src/deepfix_rag/api/chat_turns.py` already implements the live-registry plus stored-text-fallback shape for the admin chat: a `dict[turn_id, LiveTurn]` with subscriber queues, published to from the relay and closed in the same `finally` that settles the row. Reuse that pattern rather than inventing a second registry; one uvicorn worker is the stated assumption, and the stored-text fallback is what makes a second worker degrade instead of break.
+- Regenerate's "newest turn" resolution belongs on the server, because the AI SDK's reload drops the message it replaces and the browser cannot reliably name it. Resolve it from the stored thread exactly as the admin chat's `_regenerate_target` does.
+- The `cancelled` row must keep its partial text. A stopped answer that loses its words is worse than a failed one, because the member cannot tell what they had.
+
+## Definition of done
+- [ ] Code complete
+- [ ] The four end-to-end cases in AC 18 green against the real fake endpoint and the real app
+- [ ] `uv run ruff check`, `uv run ruff format --check`, and `uv run --env-file .env pytest -m "not network and not e2e"` pass
+- [ ] Committed on its own before ASKCHAT-005 starts

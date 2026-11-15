@@ -1,7 +1,7 @@
 # PRD validation
 
 - PRD path: `tasks/prd-ask-streaming-multiturn.md`
-- Validated: 15 November 2026 (third pass), against the tree at `642f720` on
+- Validated: 15 November 2026 (fourth pass), against the tree at `223a122` on
   `feat/hermes-optimizer`
 - Verdict: **Pass** — no blockers, no open questions, no actions outstanding
 
@@ -14,10 +14,13 @@ dimensions, verdict rules, or report template is changed.
 
 Passes: the first validated the original draft (**Block**, five blockers). The
 second verified those fixes and the six should-fix items (**Pass with actions**,
-the four open questions remaining). The third — this one — validates the PRD
-after the product owner answered all four on 2026-11-15, and checks that each
-answer was carried through every requirement, story, and acceptance criterion
-rather than only recorded.
+the four open questions remaining). The third validated the PRD after the product
+owner answered all four on 2026-11-15, and checked that each answer was carried
+through every requirement, story, and acceptance criterion rather than only
+recorded. The fourth — this one — was written after **ASK-001, ASK-002 and
+ASK-006 landed** (`97aef60`, `00aba89`, `223a122`) and after the eleven stories
+were drafted in `tasks/stories-ask-chat/`, and it re-checked every claim the PRD
+makes about the code against the code that now exists.
 
 ## Summary scores
 
@@ -42,6 +45,18 @@ a date, a statement of what it replaces, and a follow-through check.
 | A grounded but uncited answer shows as **Partly grounded** | **D-10** | FR-009 states all four badge states rather than two; ASKCHAT-008 says Partly grounded is a warning, never an error, and never blocks the answer or the vote; Success Metrics makes the partly-grounded rate readable from `ask_chat_turns.citations`; D-10 holds the badge table |
 | Threads unbounded, 50-item list cap, no prune | **D-11** | FR-010 says "no pagination beyond it" and "no retention window and no prune job"; ASKCHAT-001 adds a no-prune criterion and a test that a years-old thread still lists and loads; ASKCHAT-007's list criterion says the 50 is a display cap and the control copy must not imply loss; D-11 names the conditions that would reopen it |
 
+## Fourth pass: what the landed ASK- work changed
+
+Three claims the PRD made about the tree were stale, and D-10's badge table
+disagreed with the copy that had shipped. All four are corrected in this pass.
+
+| Claim | Was | Now |
+| :--- | :--- | :--- |
+| The ASK- work's status | "in flight … not in the tree at `642f720`", with a `rg` result quoted and a rename cost stated | Landed at `97aef60` / `00aba89` / `223a122`; `src/deepfix_rag/grounding.py`, `rerank.min_relevance_score`, and `pendingBySession` are named as code the stories consume |
+| Who applies the relevance floor | The tool drops passages below the cutoff, using `split_by_relevance_floor` | `QueryService.retrieve` already applies it through `_search_split`; the tool **reports** survivors and does not filter again. ASKCHAT-002's AC 4, 5 and 11 are rewritten accordingly — the first draft asserted the tool would return `[]` while `retrieve` returned passages, which is the divergence FR-024 forbids |
+| The badge's rendered states | Four states with four labels, two of them new | ASK-001 ships "Not found in the documents" for both `declined` and `no_relevant_sources`, separated by their notes, so this feature adds **one** rendered state (**Partly grounded**). `GROUNDING_BADGE` is a `Record<Grounding, …>`, so it must be a `(grounding, citationCount)` function rather than a fourth key |
+| The tool's `top_k` | "integer 1..8, default `rerank.top_n`" | Clamped into `[1, displayed_limit(config, MAX_DISPLAYED_HITS)]`, the helper the product already uses to decide what a member is shown |
+
 ## Findings
 
 ### Blockers (must fix before story breakdown)
@@ -63,6 +78,12 @@ passage text (FR-006 keeps the full text so `passage_key` matches), the
 path (FR-032), the overstated redaction claim (NFR-4 now names
 `EMBEDDING_API_KEY` and `COHERE_API_KEY`), and the ASK- dependency being described
 as present when it is not.
+
+The fourth pass added one of its own and closed it: **the PRD's story bodies and
+the story files could have drifted**, because both state acceptance criteria. The
+rule recorded in the Handoff is that the story file wins and a disagreement is
+fixed there first, and this pass reconciled the two where they touched —
+ASKCHAT-002's floor handling, ASKCHAT-008's badge labels.
 
 ### Nice-to-have
 

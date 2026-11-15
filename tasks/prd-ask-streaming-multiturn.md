@@ -1,11 +1,13 @@
 # PRD: Ask becomes a streaming, multi-turn chat with the RAG as a tool
 
-> **Status: plan. Nothing here is implemented.** Reviewed against the tree at
-> `642f720` on `feat/hermes-optimizer`, 15 November 2026. All decisions are
-> settled: **D-1 … D-6 and D-8** while the document was written, **D-7 and
-> D-9 … D-11** by the product owner on 2026-11-15. Validated with `validate-prd`
-> — see `tasks/prd-ask-streaming-multiturn-validation.md` and "Validation
-> (validate-prd)" below. There are no open questions.
+> **Status: plan. Nothing here is implemented.** Drafted against the tree at
+> `642f720`, re-reviewed at `223a122` on `feat/hermes-optimizer`, 15 November
+> 2026, after ASK-001, ASK-002 and ASK-006 landed. All decisions are settled:
+> **D-1 … D-6 and D-8** while the document was written, **D-7 and D-9 … D-11**
+> by the product owner on 2026-11-15. Validated with `validate-prd` — see
+> `tasks/prd-ask-streaming-multiturn-validation.md` and "Validation
+> (validate-prd)" below. There are no open questions. The stories are in
+> `tasks/stories-ask-chat/`.
 
 ## Overview
 
@@ -166,7 +168,7 @@ The tool's contract, declared in `src/deepfix_rag/ask_chat.py`:
 ```jsonc
 // input
 { "query": "string, 1..500 chars, the standalone search query",
-  "top_k": "integer 1..8, optional, default rerank.top_n" }
+  "top_k": "integer, optional; clamped into [1, displayed_limit(config, MAX_DISPLAYED_HITS)]" }
 
 // output
 { "query": "the query actually searched",
@@ -181,11 +183,14 @@ The tool's contract, declared in `src/deepfix_rag/ask_chat.py`:
   `release()` lease the `/retrieval` and `/ask` routes use, so it reads the
   champion's `retrieval.top_k` → rerank → `rerank.top_n` window, and it is
   pinned to one build for the whole turn.
-- **The relevance cutoff is the ASK- setting.** Passages below the configurable
-  minimum relevance score are dropped before the model sees them. The cutoff
-  filters; it never reorders. If nothing survives, the tool returns
-  `grounding: "no_relevant_sources"` and zero passages, and the model is
-  instructed to say it does not have enough information.
+- **The relevance floor is ASK-002's setting, and it is already applied.** Passages
+  below `rerank.min_relevance_score` never reach the tool: `QueryService.retrieve`
+  → `_search_split` → `RAGWorkflow._ranker_split` drops them, so the tool reports
+  survivors rather than filtering again, and a second threshold cannot drift from
+  the one the optimizer tunes. The floor filters; it never reorders. If nothing
+  survives, the tool returns `grounding: "no_relevant_sources"` and zero
+  passages, and the model is instructed to say it does not have enough
+  information.
 - **A turn always retrieves.** The first model step is made with
   `tool_choice: "required"`. If that step still ends without a tool call — a
   provider that ignores the hint, a malformed frame — **the server executes
@@ -205,16 +210,26 @@ The tool's contract, declared in `src/deepfix_rag/ask_chat.py`:
 
 ### D-3: Grounding is the ASK- status plus a separate citation verdict
 
-The in-flight ASK- work adds an explicit grounding status — `grounded`,
-`no_relevant_sources`, `declined` — and a configurable minimum relevance score.
-This PRD consumes that enum and **does not add a value to it**, because a second
-agent is editing the same surface right now and a wider enum would collide.
+ASK-001 and ASK-002 **landed** on `feat/hermes-optimizer` at `97aef60` and
+`00aba89` and are the foundation this decision stands on:
+
+- `src/deepfix_rag/grounding.py` owns `Grounding` (`grounded`, `declined`,
+  `no_relevant_sources`), the shared `DEFLECTION_PHRASES` list, and
+  `grounding_for(answer)`. `AskResponse` and `InteractionResponse` both carry a
+  required `grounding` field, so a reload draws the same badge.
+- `RAGConfig.rerank.min_relevance_score` (0..1, default `0.2`, set explicitly in
+  `configs/champion.yaml`) is the floor. `RAGWorkflow._ranker_split` is its one
+  implementation, called by the rerank step and by `QueryService._search_split`,
+  so eval and the live routes agree.
+
+This PRD consumes that enum and **does not add a value to it**, because a wider
+enum would collide with the code that now derives and stores it.
 
 Instead, a turn persists two things:
 
 | Field | Values | Meaning |
 | :--- | :--- | :--- |
-| `grounding` | `grounded`, `no_relevant_sources`, `declined` | `grounded` requires at least one passage at or above the cutoff to have been delivered to the model. `no_relevant_sources` means the cutoff dropped everything. `declined` means passages were available and the answer contains a refusal phrase from `evaluation.runner.DEFLECTION_PHRASES`. |
+| `grounding` | `grounded`, `no_relevant_sources`, `declined` | `grounded` requires at least one passage at or above `rerank.min_relevance_score` to have been delivered to the model. `no_relevant_sources` means the floor dropped everything. `declined` means passages were available and `grounding.grounding_for(answer)` matches a `DEFLECTION_PHRASES` entry or one of its `DEFLECTION_PATTERNS`. |
 | `citations` | `[{ marker, rank, doc_id }]`, validated | The `[n]` markers the answer actually used, each resolved to a delivered passage at or above the cutoff. A marker that resolves to nothing, or to a filtered-out passage, is dropped and counted. |
 
 The table's meaning column is this PRD's reading of what the ASK- statuses mean
@@ -400,15 +415,19 @@ record, not the member's conversation.
 Decided by the product owner on **2026-11-15**. This replaces the open question
 "should a turn be allowed to answer with no citation when passages were found?".
 
-Yes, it is allowed. The badge has four states and the two-level distinction is
-deliberate:
+Yes, it is allowed. ASK-001 landed the badge as a `Record<Grounding, …>` in
+`web/src/features/chat/grounding-copy.ts` with two distinct labels —
+`grounded` → "Grounded", and both `declined` and `no_relevant_sources` → "Not
+found in the documents" — plus `groundingNote`, which separates the last two by
+their note ("Answer declined" / "No matching passages"). This decision adds
+**one** rendered state on top and changes nothing else:
 
-| Data | Badge | Style |
-| :--- | :--- | :--- |
-| `grounding == "grounded"` and `citations` non-empty | **Grounded** | success |
-| `grounding == "grounded"` and `citations` empty | **Partly grounded** | warning |
-| `grounding == "no_relevant_sources"` | **No relevant sources** | neutral |
-| `grounding == "declined"` | **Declined** | neutral |
+| Grounding | Citations | Badge | Note |
+| :--- | :--- | :--- | :--- |
+| `grounded` | non-empty | **Grounded** (landed copy) | `N passages used` (landed) |
+| `grounded` | empty | **Partly grounded** (new, warning style) | `N passages used` |
+| `declined` | — | **Not found in the documents** (landed copy) | `Answer declined` (landed) |
+| `no_relevant_sources` | — | **Not found in the documents** (landed copy) | `No matching passages` (landed) |
 
 Why: the model is instructed to cite, and a non-compliant answer is a quality
 defect rather than a product state. Turning a model slip into a member-visible
@@ -455,8 +474,9 @@ tick, exactly as `admin_chat.prune_audit` does — one story, no schema change.
   returns ranked passages.
 - **Passage** — one retrieved chunk: `doc_id`, filename, text, score, rank. The
   same object the Ask page's passages drawer already shows as a hit.
-- **Cutoff** — the configurable minimum relevance score (ASK- work). Passages
-  below it are dropped before the model sees them.
+- **Cutoff** — `rerank.min_relevance_score` in `RAGConfig` (ASK-002, default 0.2).
+  Passages below it are dropped inside the retrieval path, before the model sees
+  them. Used interchangeably with "relevance floor"; both mean this one setting.
 - **Grounding status** — one of `grounded`, `no_relevant_sources`, `declined`
   (D-3).
 - **Citation** — a `[n]` marker in the answer that resolves to a delivered
@@ -589,7 +609,8 @@ tick, exactly as `admin_chat.prune_audit` does — one story, no schema change.
    passages above the cutoff and `grounding: "no_relevant_sources"`.
 2. The answer says "I do not have enough information" — a phrase from
    `DEFLECTION_PHRASES`, so the evaluator counts it as a refusal rather than an
-   answer — and the badge reads **No relevant sources** instead of Grounded.
+   answer — and the badge reads **Not found in the documents** with "No matching
+   passages" beside it, instead of Grounded.
 3. The member presses **Regenerate**. The browser's reload trigger replaces this
    answer in place; the turn id is stable, the previous answer's text does not
    appear beside the new one, and any vote on the replaced answer is cleared with
@@ -605,12 +626,12 @@ may slip one release), or **Could** (nice, unplanned).
 | FR-001 | The agent loop must run in deepfix-api. The browser must reach it only through the same-origin `/api/ask/chat/*` path on the existing BFF proxy, must receive no model key and no model id, and must receive the AI SDK UI message stream (`x-vercel-ai-ui-message-stream: v1`) as `src/deepfix_rag/api/chat_stream.py` already emits it. | Must | G7, D-1. One credential holder; the admin chat proves the protocol works through this proxy. |
 | FR-002 | The stream must carry `start`, `start-step`, `text-start`, `text-delta`, `text-end`, `tool-input-start`, `tool-input-available`, `tool-output-available`, `finish-step`, `finish`, `data-deepfix-grounding`, `data-deepfix-turn`, `error`, and `data: [DONE]`, in that grammar, and must not be buffered: the first delta reaches the browser when the model produced it. | Must | G1, D-1. The AI SDK's parser and Assistant UI's message parts are what render this; anything else needs a hand-written renderer. |
 | FR-003 | `POST /ask/chat/completions` must accept `{thread_id, messages}` for a signed-in member, rebuild the conversation from the store, and answer 401 unsigned, 404 for another member's thread, 429 over a limit, and 503 while the index is preparing, each with a sentence the UI shows. | Must | G4, G7. Same contract the admin chat's route already has, with the member's role instead of admin. |
-| FR-004 | `search_documents` must be the only tool, must run on the serving index through `QueryService.retrieve` with the champion config, must drop passages below the configured minimum relevance score before the model sees them, and must return the passage shape in D-2. Its depth must come from the existing `displayed_limit(config, MAX_DISPLAYED_HITS)` helper — `rerank.top_n` when rerank is on, `retrieval.top_k` otherwise, then the display cap — and a requested `top_k` must be clamped into `[1, displayed_limit(...)]`, never widening what the single-turn product would show. | Must | G3, D-2, G6. The cutoff is the grounding decision, so it belongs in the tool, not the prompt; and the tool's window must be the product's window, not a second one. |
+| FR-004 | `search_documents` must be the only tool, must run on the serving index through `QueryService.retrieve` with the champion config, must return only what survives the landed `rerank.min_relevance_score` floor (which that path already applies — the tool reports, it does not re-filter), and must return the passage shape in D-2. Its depth must come from the existing `displayed_limit(config, MAX_DISPLAYED_HITS)` helper — `rerank.top_n` when rerank is on, `retrieval.top_k` otherwise, then the display cap — and a requested `top_k` must be clamped into `[1, displayed_limit(...)]`, never widening what the single-turn product would show. | Must | G3, D-2, G6. The floor is the grounding decision and it already lives in one place; the tool's window must be the product's window, not a second one. |
 | FR-005 | Every turn must retrieve. The first model step must be sent with `tool_choice: "required"`; if that step ends with no tool call, the server must execute `search_documents` itself with the user's message, append the result, and continue. A turn must make at most `ASK_CHAT_MAX_TOOL_CALLS` tool calls and the last permitted step must be sent with `tool_choice: "none"`. An unknown `toolName` must be rejected, not executed. | Must | G3, D-2. Otherwise "no retrieval happened" is representable, and the grounding verdict becomes a guess. |
 | FR-006 | The passages a turn's tool returned must be persisted as that turn's `interaction_hits`, ranked in tool order, so `POST /feedback` with `target: "passage"` and a rank keeps working with no new endpoint, and so reloading the thread restores the panel from the store. The **full** passage text must be stored even when the text sent to the model was truncated at `ASK_CHAT_MAX_PASSAGE_CHARS`, because `passage_key` is a hash of the text and `build_questions` groups on it: storing the truncated text would give a chat passage a different key from the same chunk's single-turn passage, and the two votes would never combine. | Must | G5, D-5. Votes are keyed on `(interaction_id, rank)`, so the ranks must be the ones the member sees, and the passage identity must be the one the optimizer already knows. |
 | FR-007 | The sources panel must be rendered from the `tool-output-available` parts of the message, never from parsing the answer's prose, and must survive a reload by being rebuilt from the stored message parts. | Must | G3. A prose parser breaks on the first table or footnote and would disagree with what the model saw. |
 | FR-008 | The system prompt must require `[n]` citation markers for every factual claim drawn from a passage; the server must validate each marker against the passages delivered in that turn, keep only markers that resolve to a passage at or above the cutoff, persist them in `ask_chat_turns.citations`, and emit them in `data-deepfix-grounding`. | Must | G3, D-3. A citation is only meaningful if it resolves to something the model was given. |
-| FR-009 | Each turn must persist `grounding` as one of `grounded`, `no_relevant_sources`, `declined`. `grounded` requires at least one passage at or above the cutoff to have been delivered; `declined` requires a `DEFLECTION_PHRASES` match. The badge must have exactly four states: "Grounded" only when `grounding == "grounded"` **and** `citations` is non-empty; "Partly grounded" when it is grounded without a citation; "No relevant sources" and "Declined" for the other two. | Must | G3, D-3, D-10. This is the ASK- enum, unchanged, plus a verdict the answer can fail — and D-10 settles that an uncited grounded answer is a warning, not an error. |
+| FR-009 | Each turn must persist `grounding` using the landed `Grounding` enum (`grounded`, `declined`, `no_relevant_sources`) and classify with the landed `grounding.grounding_for(answer)` — never a second phrase list. `grounded` requires at least one passage at or above `rerank.min_relevance_score` to have been delivered to the model; `no_relevant_sources` when the floor dropped everything. The badge must extend the landed `GROUNDING_BADGE` / `groundingNote` pair with exactly one new state: **Grounded** only when `grounding == "grounded"` **and** `citations` is non-empty; **Partly grounded** when grounded without a citation; the landed "Not found in the documents" badge with its landed note ("Answer declined" / "No matching passages") for the other two. | Must | G3, D-3, D-10. The enum, the classifier and the badge copy are ASK-001's, so this feature derives and labels grounding the same way `POST /ask` does. |
 | FR-010 | Threads must be server-side and per member: `GET /ask/chat/threads` (newest first, limit 50, no pagination beyond it), `POST /ask/chat/threads`, `GET /ask/chat/threads/{thread_id}` (thread, turns, and their grounding/citations), `PATCH /ask/chat/threads/{thread_id}` (rename, 1–120 characters), `DELETE /ask/chat/threads/{thread_id}` (hard delete of turns and thread in one transaction; the `interactions` rows and their votes are kept, because they are the member's feedback history and the optimizer's dataset). Any other member's thread id must answer 404. There must be no retention window and no prune job on these tables. | Must | G4, G5, D-5, D-9, D-11. Deleting a conversation must not delete evidence the optimizer already ingested, and 50 is a display cap rather than a lifecycle rule. |
 | FR-011 | The upstream conversation must be built from the store, never from the client's array: the system prompt, then the last `ASK_CHAT_MAX_HISTORY_MESSAGES` stored messages, then the new user message. A request whose last message is not a user message must be 400. | Must | G2, G7. The client cannot rewrite the policy or claim a history that never happened. |
 | FR-012 | A follow-up must be retrievable: the tool's own `query` argument is what is searched, and it must be stored as `ask_chat_turns.retrieval_query` while `interactions.query` keeps the member's literal message. No separate query-rewriting model call is added in this release. | Must | G2, G5, D-6. The model already has the history; a second rewrite call would add a model hop and a second thing to evaluate. |
@@ -734,17 +755,15 @@ No FR is unlinked to a goal (see Traceability), and no FR contradicts a non-goal
 
 ### Dependencies
 
-- **The in-flight ASK- work on this branch**, which this PRD builds on and does
-  not replace: the explicit grounding status
-  (`grounded` / `no_relevant_sources` / `declined`), the configurable minimum
-  relevance score in the RAG config, and per-session pending state. **It is not
-  in the tree at `642f720`**: `rg` finds no `grounded`, `no_relevant_sources`,
-  `declined`, or minimum-score setting in `src/`, `web/src/`, or `configs/`, and
-  `chat-page.tsx` still has one page-level `pending`/`pendingQuery` pair. The
-  stories below consume its names and are ordered so the first one that needs
-  the cutoff (ASKCHAT-002) runs after it lands. If the ASK- work names the
-  setting or the statuses differently, the reconciling change is one rename in
-  `src/deepfix_rag/config/schema.py` plus one in the tool, not a redesign.
+- **The ASK- work, which has landed.** ASK-001 (`97aef60`), ASK-002 (`00aba89`)
+  and ASK-006 (`223a122`) are on `feat/hermes-optimizer` and this PRD builds on
+  them without replacing them: the `Grounding` enum and
+  `grounding.grounding_for` in `src/deepfix_rag/grounding.py`, the
+  `rerank.min_relevance_score` floor and `RAGWorkflow._ranker_split`, the
+  `grounding` field on `AskResponse` and `InteractionResponse`, and the
+  per-session `pendingBySession` map in `web/src/features/chat/chat-page.tsx`.
+  The stories consume those names as they exist. No story renames a field or
+  re-implements the floor.
 - **The admin Hermes chat's infrastructure**, which is in the tree: the AI SDK
   UI message stream builders (`src/deepfix_rag/api/chat_stream.py`), the live
   turn registry (`src/deepfix_rag/api/chat_turns.py`), the per-thread `Chat`
@@ -766,9 +785,11 @@ No FR is unlinked to a goal (see Traceability), and no FR contradicts a non-goal
 
 ### Assumptions (labelled)
 
-- **(assumption)** The ASK- work lands the three statuses with those exact
-  spellings and a minimum relevance score in `RAGConfig`. If it lands a different
-  shape, ASKCHAT-002 and ASKCHAT-003 absorb the rename; no other story changes.
+- **(resolved, 2026-11-15)** The ASK- work landed with exactly those names:
+  `Grounding.GROUNDED` / `DECLINED` / `NO_RELEVANT_SOURCES` in
+  `src/deepfix_rag/grounding.py`, and `rerank.min_relevance_score` in
+  `RAGConfig`. Verified in the tree at `223a122`; no rename is needed and
+  ASKCHAT-002 consumes the setting as-is.
 - **(assumption)** `qwen/qwen3.8-flash` honours `tool_choice: "required"` and
   `"none"` through OpenRouter. Its `supported_parameters` list both, but the
   behaviour is not measured here; ASKCHAT-003 proves it against a local fake
@@ -933,21 +954,21 @@ the optimizer scores.
 - It retrieves through `QueryService.retrieve` under an
   `IndexCoordinator.checkout()` lease, pins the build id for the whole turn, and
   releases it in a `finally`.
-- It drops every passage below the configured minimum relevance score, returns
-  `grounding: "no_relevant_sources"` with an empty list when nothing survives,
-  clamps `top_k` into `[1, displayed_limit(config, MAX_DISPLAYED_HITS)]` using the
-  existing helper in `api/routes/retrieval.py`, and truncates a passage's text at
-  `ASK_CHAT_MAX_PASSAGE_CHARS` with `truncated: true`.
+- It drops every passage below `rerank.min_relevance_score` — by relying on
+  `QueryService.retrieve`, which already applies the floor through
+  `_search_split` → `RAGWorkflow._ranker_split`, not by re-comparing scores —
+  returns `grounding: "no_relevant_sources"` with an empty list when nothing
+  survives, clamps `top_k` into `[1, displayed_limit(config, MAX_DISPLAYED_HITS)]`
+  using the existing helper in `api/routes/retrieval.py`, and truncates a
+  passage's text at `ASK_CHAT_MAX_PASSAGE_CHARS` with `truncated: true`.
 - **Parity test, integration, on the real sample index** (`populated_sample_index_dir`,
   `MockEmbedding`): for a set of queries the tool's `(doc_id, rank, score)`
-  triples equal `QueryService.retrieve(query)` truncated to `displayed_limit` and
-  at the cutoff survivors — same ids, same order, same scores, no rerun, no
-  reordering. This is FR-024 and it fails loudly if anyone "improves" the tool's
-  retrieval.
-- A test with the cutoff raised above every score returns
-  `no_relevant_sources` and an empty list while `QueryService.retrieve` still
-  returns its five passages — the cutoff filters the tool's output, not the
-  index, which is what keeps ASKCHAT-002's parity meaningful.
+  triples equal `QueryService.retrieve(query)` truncated to `displayed_limit` —
+  same ids, same order, same scores, no rerun, no reordering. This is FR-024 and
+  it fails loudly if anyone "improves" the tool's retrieval.
+- A test with `rerank.min_relevance_score` raised above every score returns
+  `no_relevant_sources` and an empty list from **both** the tool and
+  `QueryService.retrieve`, because the floor lives inside the path they share.
 - A test with `rerank.enabled: false` returns the `retrieval.top_k` window capped
   by `displayed_limit` — the same list the Search page shows — so the tool is
   correct on a champion without rerank and cannot offer the model 50 passages.
@@ -1162,21 +1183,24 @@ the one it cites, and know whether it was actually grounded.
   matching passage in the panel; a marker that resolved to nothing is rendered
   as plain text and is never a link.
 - The badge follows FR-009 and D-10 exactly: **Grounded** only when grounded
-  *and* cited, **Partly grounded** when grounded without a citation, **No
-  relevant sources** and **Declined** otherwise, each as text with an icon, not
-  colour alone. Partly grounded is a warning, never an error, and never blocks
-  the answer or the vote.
+  *and* cited, **Partly grounded** when grounded without a citation, and the
+  landed **Not found in the documents** copy with its landed note for `declined`
+  and `no_relevant_sources`. It extends `GROUNDING_BADGE` / `groundingNote` in
+  `web/src/features/chat/grounding-copy.ts` rather than adding a second badge
+  component. Partly grounded is a warning, never an error, and never blocks the
+  answer or the vote.
 - FR-034's badge half: a `no_relevant_sources` turn renders the badge, its own
-  explanation, no passage cards, and no Regenerate control — the four states are
-  distinguishable without reading the answer's prose.
+  note, no passage cards, and no Regenerate control — the four rendered states
+  are distinguishable without reading the answer's prose.
 - The streaming region is `aria-live="polite"`, Stop and Regenerate are named
   buttons, the panel is reachable by keyboard, and focus returns to the composer
   after a turn ends.
 - **Test (`web/src/test/ask-chat-sources.test.tsx`)**: a frame set with two
   passages and a `[1]` citation renders two passage cards, the badge Grounded, and
   a citation button that focuses the first card; the same answer with no marker
-  renders Partly grounded; an empty tool result renders No relevant sources with
-  no passage cards and no regenerate; a vote on a passage calls the feedback
+  renders Partly grounded; an empty tool result renders the landed
+  "Not found in the documents" badge with no passage cards and no regenerate; a
+  vote on a passage calls the feedback
   endpoint with the rank the tool returned; the live region is asserted on the
   streaming element.
 
@@ -1250,7 +1274,7 @@ provider streams tool calls, or the memory budget holds.
   the connection and the turn settling `cancelled`; a follow-up answered; a
   reload mid-answer resuming; a second browser showing the same thread; another
   account's thread id returning 404; the badge transitions for grounded,
-  partly grounded, no relevant sources, and declined.
+  partly grounded, and the two "not found in the documents" notes.
 - `docker stats` is recorded before, during, and after four concurrent turns,
   proving no new container and no cap change, and that the API's memory returns
   to its baseline.
@@ -1260,18 +1284,21 @@ provider streams tool calls, or the memory budget holds.
 
 ## What the code does today
 
-Written from the tree at `642f720` on `feat/hermes-optimizer`, 15 November 2026.
+Written from the tree at `223a122` on `feat/hermes-optimizer`, 15 November 2026.
 Each fact below is cited by file, because the stories assume them.
 
 - **The Ask page is a form shaped like a chat.** `web/src/features/chat/chat-page.tsx`
-  (989 lines) holds `sessions` in `useState`, persists them under
+  holds `sessions` in `useState`, persists them under
   `deepfix.chat_sessions.v2:<ownerId>` / `deepfix.active_session_id.v2:<ownerId>`
-  (`chatStorageKeys`), and keeps one page-level `pending` boolean plus
-  `pendingQuery` — so the composer and both vote paths disable together. There is
-  no `AbortController` and no Stop; the send control renders a `Loader2` spinner
-  while `pending`. Votes go through `feedbackService.submit({interactionId,
-  target, rank, action})`; a `ChatTurn` carries `interactionId` and `answerVote`,
-  and each hit carries its own vote.
+  (`chatStorageKeys`), and — since ASK-006 — keeps
+  `pendingBySession: Record<sessionId, query>`, so only the asking session shows
+  a thinking card and loses its composer. There is still no `AbortController` and
+  no Stop; the send control renders a `Loader2` spinner while its session is
+  pending. Votes go through `feedbackService.submit({interactionId, target, rank,
+  action})`; a `ChatTurn` carries `interactionId` and `answerVote`, and each hit
+  carries its own vote. Since ASK-001 the answer card renders
+  `GroundingBadge` + `groundingNote` from `grounding-copy.ts` against the
+  response's `grounding` field.
 - **The client is non-streaming.** `web/src/services/ask-service.ts` calls the
   generated `askQuestion` (`POST /api/ask`) and throws `AskRequestError` on an
   error payload. There is one stream reader in the repo,
@@ -1287,8 +1314,11 @@ Each fact below is cited by file, because the stories assume them.
   calls `lease.service.answer(query)`, truncates hits with
   `displayed_limit(config, settings.MAX_DISPLAYED_HITS)`, stores one
   `interactions` row and its hits through `_store` → `trace_request` →
-  `record_interaction`, and answers `{interaction_id, answer, error, vote, hits}`.
-  `GET /interactions/{id}` returns 404 for another user's row.
+  `record_interaction`, and answers `{interaction_id, answer, error, vote,
+  grounding, hits}`. When the floor dropped every candidate, `answer` is
+  `NO_RELEVANT_SOURCES_ANSWER`, `error` is null, `hits` is `[]`, and the dropped
+  rows are still stored. `GET /interactions/{id}` returns 404 for another user's
+  row and returns the same `grounding` value.
 - **Generation is non-streaming and single-turn.** `QueryService.answer` runs
   `RAGWorkflow._get_response_synthesizer()`, which builds `SimpleSummarize(llm=…,
   streaming=False)`; `_get_llm` builds `CustomLiteLLM` from
@@ -1334,11 +1364,15 @@ Each fact below is cited by file, because the stories assume them.
   (`ChatMarkdown`) and `web/src/components/chat/composer.tsx`
   (`ChatComposerBar`, `ChatComposerHint`). The Ask page already uses both
   (CHAT-016).
-- **The ASK- work is not in the tree.** No `grounded`, `no_relevant_sources`,
-  `declined`, or minimum-relevance setting exists in `src/`, `web/src/`, or
-  `configs/` at `642f720`; `chat-page.tsx` still has one page-level `pending`.
-  This PRD consumes those names and states the reconciliation cost in
-  "Dependencies & assumptions".
+- **The ASK- work has landed.** At `223a122` the tree carries
+  `src/deepfix_rag/grounding.py` (`Grounding` with `grounded` / `declined` /
+  `no_relevant_sources`, `DEFLECTION_PHRASES`, `DEFLECTION_PATTERNS`,
+  `grounding_for`), a required `grounding` field on `AskResponse` and
+  `InteractionResponse`, `rerank.min_relevance_score` (0.2) in `RAGConfig` and
+  `configs/champion.yaml`, `RAGWorkflow._ranker_split` /
+  `split_by_relevance_floor`, `RAGResult.dropped_results`, and
+  `pendingBySession: Record<sessionId, query>` in `chat-page.tsx`. The stories
+  consume exactly these names.
 - **The model advertises tool calling.** OpenRouter's live model list on
   15 November 2026 reports `qwen/qwen3.8-flash` with `tools` and `tool_choice` in
   `supported_parameters` and a 1,000,000-token context. `example.env` already
@@ -1485,6 +1519,18 @@ Validated with `validate-prd` from
   should-fix item, and no open question remain; the "Open questions" section is
   kept as an index of where each answer lives so a reader who saw an earlier
   draft is not left guessing.
+- **Fourth pass: Pass.** Written after ASK-001, ASK-002 and ASK-006 landed
+  (`97aef60`, `00aba89`, `223a122`) and after the eleven stories were drafted in
+  `tasks/stories-ask-chat/`. Three factual claims had gone stale and are
+  corrected: the PRD no longer says the ASK- work is "in flight" or absent from
+  the tree; the `Grounding` enum and its classifier are named as landed code
+  rather than a forecast; and the tool is described as **reporting** the
+  relevance floor rather than applying it a second time, because
+  `QueryService.retrieve` already applies it through `_search_split`. D-10's
+  badge table is also reconciled with the copy ASK-001 actually ships
+  ("Not found in the documents" for both `declined` and `no_relevant_sources`,
+  separated by their notes), which leaves this feature adding exactly one
+  rendered state rather than four.
 - Dimensions at sign-off: Completeness green, Consistency green, Testability
   green, Traceability green, Feasibility **amber** (two provider behaviours are
   asserted from documentation and a model catalogue rather than measured here,
@@ -1527,5 +1573,12 @@ not have to guess whether it was examined or merely assumed:
 The next steps are **`validate-prd`** (done; see above) and then
 **`create-story`** for ASKCHAT-001 through ASKCHAT-011, one file each under
 `tasks/stories-ask-chat/` with a `*-validation.md` sibling, implemented in the
-order in "User stories". ASKCHAT-002 must not start until the in-flight ASK-
-work that carries the minimum relevance setting is on the branch.
+order in "User stories". Those files exist, and this section is kept as the PRD's
+own record of the order. The ASK- work that carries the `Grounding` enum and
+`rerank.min_relevance_score` is already on the branch at `223a122`, so nothing
+blocks ASKCHAT-001.
+
+When a story and this document disagree, the story file is the more specific
+statement of intent and this document is the more general one; a disagreement is
+a defect in one of them and is fixed in the story file first, because that is
+what an implementer reads.
