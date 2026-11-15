@@ -37,7 +37,16 @@ The redesign is shown, not asserted: screenshots of the empty state, a conversat
 
 Captured in Chrome against `vite dev` on `:8080`, with a local mock answering `/admin/optimization`, `/index`, `/admin/chat/threads`, `/admin/chat/threads/<id>`, `/admin/chat/threads/<id>/runs`, the completions stream, and the resume stream. No FastAPI, Hermes, or model call was involved, and the mock is not committed.
 
-Evidence that the states work, beyond the pictures: the console showed the send control enabled after typing, the Stop control present while the turn streamed (`stop visible while streaming: 1`), and a page-level check that the appearance toggle puts `dark` on the document element and keeps the choice across a reload. `/search`, `/admin`, and `/chat` were captured after the shell change with no failed requests.
+Evidence that the states work, beyond the pictures: the send control was enabled after typing, the Stop control was
+present while the turn streamed (`stop while streaming: 1`), and after the stream ended the send control was back,
+the working indicator was gone, and the reply was on screen (`send back: 1`, `working left: 0`, `reply: 1`). A
+page-level check confirmed that the appearance toggle puts `dark` on the document element and that the choice
+survives a reload.
+
+One honest note on the first capture: the mock's stream never signalled end-of-body, so the page sat on "Working…"
+after the reply text. That was the mock, not the page — with `Connection: close` on the response, the same run
+finished and cleared the indicator. It is worth recording because a screenshot of a spinner is exactly the kind of
+thing that would otherwise be mistaken for a UI defect. `/search`, `/admin`, and `/chat` were captured after the shell change with no failed requests.
 
 `bun run typecheck`, `bun run lint` (0 errors, 15 pre-existing warnings), `bun run test` (112 cases, 15 files), and `bun run build` pass.
 
