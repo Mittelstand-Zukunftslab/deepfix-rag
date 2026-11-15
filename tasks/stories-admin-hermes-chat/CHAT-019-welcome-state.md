@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Done
 
 ## Summary
 An empty thread shows a centred greeting and three suggestion chips — start an optimization, show the champion configuration, summarise recent runs — instead of a bare "no messages yet" line. Picking one fills the composer so the admin can edit before sending.
@@ -38,6 +38,22 @@ An empty thread shows a centred greeting and three suggestion chips — start an
 - The prompts avoid naming a run id, a model, or a host, because the page must stay free of deployment detail.
 
 ## Definition of done
-- [ ] Code complete
-- [ ] `bun run typecheck`, `bun run lint`, `bun run test` pass
+- [x] Code complete
+- [x] `bun run typecheck`, `bun run lint`, `bun run test` pass
 - [ ] Story committed on `feat/hermes-optimizer` before CHAT-023 starts
+
+## Verification note
+
+`thread-welcome.tsx` renders the installed `elements-empty-state` parts: `ThreadWelcome` (runtime: each chip is a
+`ThreadPrimitive.Suggestion` with an explicit prompt and no `send`, so it writes into the composer) and
+`WelcomePanel` (the pre-thread page, same copy, `onPick` opens a thread and hands the prompt to
+`ComposerSeed`). The greeting, the description and the three labels are one set of constants shared by both states
+and by the test.
+
+The chips are inside `ThreadPrimitive.Root`, which is the scope a suggestion writes its prompt into; without it the
+primitive is inert. `ComposerSeed` had to move inside `AssistantRuntimeProvider` — `useAui` reads the runtime the
+provider installs, and the thread component renders above it, which is what an early version got wrong and what the
+pre-thread test caught.
+
+`admin-chat-session.test.tsx` gained two cases: an empty thread's three chips fill the composer and post nothing,
+and a chip on the pre-thread page creates one thread, seeds the composer, and posts nothing.

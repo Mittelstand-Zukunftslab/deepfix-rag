@@ -13,6 +13,7 @@ import { useChat, type UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 
 import { ChatComposer } from "@/features/admin-chat/chat-composer";
+import { ThreadWelcome } from "@/features/admin-chat/thread-welcome";
 import { ChatMessageView } from "@/features/admin-chat/chat-message";
 import {
   createThreadChat,
@@ -67,11 +68,14 @@ export function useChatHooks(handlers: ChatHooks): { current: ChatHooks } {
 export function ChatThread({
   session,
   runningTurnId,
+  initialPrompt,
   disabled,
 }: {
   session: ThreadChat;
   /** The stored turn a page load found still running, resumed once on mount. */
   runningTurnId: string | null;
+  /** A welcome chip's prompt, placed in the composer rather than sent (CHAT-019). */
+  initialPrompt?: string | undefined;
   disabled: boolean;
 }) {
   const helpers = useChat<UIMessage>({ chat: session.chat });
@@ -89,27 +93,42 @@ export function ChatThread({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <ComposerSeed prompt={initialPrompt} />
       <ThreadBody disabled={disabled} />
     </AssistantRuntimeProvider>
   );
 }
 
+/**
+ * Places a chip's prompt in the composer once, without sending it.
+ *
+ * It has to be a child of the provider: `useAui` reads the runtime the provider
+ * installs, and the thread component itself renders above it.
+ */
+function ComposerSeed({ prompt }: { prompt: string | undefined }) {
+  const aui = useAui();
+  const seeded = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!prompt || seeded.current === prompt) return;
+    seeded.current = prompt;
+    aui.composer.setText(prompt);
+  }, [aui, prompt]);
+  return null;
+}
+
 function ThreadBody({ disabled }: { disabled: boolean }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-6">
+    // `ThreadPrimitive.Root` is the scope a suggestion writes its prompt into.
+    <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col gap-6">
+      <ThreadWelcome />
       <div aria-live="polite" className="flex flex-col gap-3" data-testid="admin-chat-stream">
-        <ThreadPrimitive.Empty>
-          <p className="text-body-md text-muted-foreground">
-            No messages yet. Ask a question to start.
-          </p>
-        </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages>{() => <MessageRow />}</ThreadPrimitive.Messages>
         <ThreadError />
       </div>
       <div className="sticky bottom-0 mt-auto bg-background pb-2">
         <ChatComposer disabled={disabled} />
       </div>
-    </div>
+    </ThreadPrimitive.Root>
   );
 }
 

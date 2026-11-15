@@ -99,17 +99,20 @@ function thread(
   return {
     thread: summary(threadId, title),
     messages,
-    turns: [
-      {
-        turn_id: messages.at(-1)!.turn_id!,
-        status: turnStatus,
-        retry_of: null,
-        error: null,
-        first_token_ms: 0,
-        started_at: "2026-11-15T00:00:00+00:00",
-        ended_at: turnStatus === "completed" ? "2026-11-15T00:00:01+00:00" : null,
-      },
-    ],
+    turns:
+      messages.length === 0
+        ? []
+        : [
+            {
+              turn_id: messages.at(-1)!.turn_id!,
+              status: turnStatus,
+              retry_of: null,
+              error: null,
+              first_token_ms: 0,
+              started_at: "2026-11-15T00:00:00+00:00",
+              ended_at: turnStatus === "completed" ? "2026-11-15T00:00:01+00:00" : null,
+            },
+          ],
     actions: [],
   };
 }
@@ -180,6 +183,65 @@ async function send(text: string) {
     screen.getByRole("button", { name: "Send message" }).click();
   });
 }
+
+describe("the welcome state", () => {
+  it("offers three chips on an empty thread and fills the composer without sending", async () => {
+    THREADS["thread-empty"] = thread("thread-empty", "Empty", []);
+    const { posts } = stubServer(() => sse([sseBody(turnParts(TURN, "Unused"))]));
+    vi.spyOn(adminChatService, "threads").mockResolvedValue([summary("thread-empty", "Empty")]);
+    render(<AdminChatPage chatEnabled={true} />);
+
+    // Wait for the thread itself, so the chips below are the thread's own and not
+    // the page's pre-thread welcome.
+    await screen.findByRole("button", { name: "Empty" });
+    const chips = await screen.findAllByRole("button", {
+      name: /optimization run|champion configuration|recent runs/,
+    });
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      "Start an optimization run",
+      "Show the champion configuration",
+      "Summarize the recent runs",
+    ]);
+    expect(posts).toHaveLength(0);
+
+    await act(async () => {
+      chips[1]!.click();
+    });
+    // A chip fills the composer; the admin still has to send it.
+    const composer = screen.getByLabelText("Message the assistant") as HTMLTextAreaElement;
+    await waitFor(() => expect(composer.value).toContain("champion configuration"));
+    expect(posts).toHaveLength(0);
+  });
+
+  it("creates a thread from a chip on the pre-thread page without sending", async () => {
+    const { posts } = stubServer(() => sse([sseBody(turnParts(TURN, "Unused"))]));
+    vi.spyOn(adminChatService, "threads").mockResolvedValue([]);
+    const create = vi
+      .spyOn(adminChatService, "createThread")
+      .mockResolvedValue({ thread_id: "thread-new", title: "", created_at: "", updated_at: "" });
+    THREADS["thread-new"] = thread("thread-new", "New", []);
+    render(<AdminChatPage chatEnabled={true} />);
+
+    const chip = await screen.findByRole("button", { name: "Summarize the recent runs" });
+    await act(async () => {
+      chip.click();
+    });
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Message the assistant") as HTMLTextAreaElement).value,
+      ).toContain("recent optimization runs"),
+    );
+    expect(posts).toHaveLength(0);
+  });
+
+  it("is gone once the thread has a message", async () => {
+    stubServer(() => sse([sseBody(turnParts(TURN, "Unused"))]));
+    render(<AdminChatPage chatEnabled={true} />);
+    await waitFor(() => expect(screen.getByText("Alpha answer")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Start an optimization run" })).toBeNull();
+  });
+});
 
 describe("thread isolation", () => {
   it("keeps each thread's messages to itself across switches", async () => {

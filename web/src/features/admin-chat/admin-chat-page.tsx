@@ -9,6 +9,7 @@ import { ChatThread, useChatHooks, useChatSessions } from "@/features/admin-chat
 import { seedMessages, type ChatHooks } from "@/features/admin-chat/chat-transport";
 import { RunPanel } from "@/features/admin-chat/run-panel";
 import { groupThreadsByDate } from "@/features/admin-chat/thread-groups";
+import { WelcomePanel } from "@/features/admin-chat/thread-welcome";
 import { cn } from "@/lib/utils";
 import type { ChatActionCard, ChatRun, ChatThreadSummary } from "@/schemas/admin-chat";
 import { adminChatService } from "@/services/admin-chat-service";
@@ -98,6 +99,10 @@ function AdminChat({ email }: { email: string }) {
   const [activeThread, setActiveThread] = useState<string | null>(null);
   const [state, setState] = useState<ThreadState>(LOADING);
   const [failure, setFailure] = useState<string | null>(null);
+  /** A chip's prompt, handed to the composer once its new thread is open. */
+  const [pendingPrompt, setPendingPrompt] = useState<{ threadId: string; prompt: string } | null>(
+    null,
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const sessions = useChatSessions();
   const loaded = useRef(new Map<string, ThreadState>());
@@ -185,19 +190,24 @@ function AdminChat({ email }: { email: string }) {
     setDrawerOpen(false);
   }, []);
 
-  const newThread = useCallback(async () => {
-    try {
-      const created = await adminChatService.createThread();
-      const fresh: ThreadState = { ...LOADING, threadId: created.thread_id, seed: [] };
-      loaded.current.set(created.thread_id, fresh);
-      setActiveThread(created.thread_id);
-      setState(fresh);
-      setDrawerOpen(false);
-      await refreshThreads();
-    } catch (error) {
-      setFailure(message(error));
-    }
-  }, [refreshThreads]);
+  const newThread = useCallback(
+    async (prompt?: string) => {
+      try {
+        const created = await adminChatService.createThread();
+        const fresh: ThreadState = { ...LOADING, threadId: created.thread_id, seed: [] };
+        loaded.current.set(created.thread_id, fresh);
+        setActiveThread(created.thread_id);
+        setState(fresh);
+        setDrawerOpen(false);
+        // A chip fills the composer of the thread it opens; it never sends.
+        setPendingPrompt(prompt ? { threadId: created.thread_id, prompt } : null);
+        await refreshThreads();
+      } catch (error) {
+        setFailure(message(error));
+      }
+    },
+    [refreshThreads],
+  );
 
   const deleteThread = useCallback(
     async (threadIdToDelete: string) => {
@@ -306,13 +316,18 @@ function AdminChat({ email }: { email: string }) {
                 key={threadId}
                 session={session}
                 runningTurnId={state.runningTurnId}
+                initialPrompt={
+                  pendingPrompt?.threadId === threadId ? pendingPrompt.prompt : undefined
+                }
                 disabled={false}
               />
             ) : (
               <div className="flex min-h-0 flex-1 flex-col justify-end gap-4">
-                <p className="text-body-md text-muted-foreground">
-                  {activeThread ? "Loading this thread…" : "No conversation open yet."}
-                </p>
+                {activeThread ? (
+                  <p className="text-body-md text-muted-foreground">Loading this thread…</p>
+                ) : (
+                  <WelcomePanel onPick={(prompt) => void newThread(prompt)} />
+                )}
                 <DraftComposer onCreate={() => void newThread()} />
               </div>
             )}
