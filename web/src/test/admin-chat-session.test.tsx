@@ -177,7 +177,7 @@ async function send(text: string) {
     composer.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await act(async () => {
-    screen.getByRole("button", { name: "Send" }).click();
+    screen.getByRole("button", { name: "Send message" }).click();
   });
 }
 
@@ -271,6 +271,68 @@ describe("one copy of every message", () => {
     await waitFor(() => expect(screen.getAllByText("Das ist eine Antwort.")).toHaveLength(1));
     // The replay replaced the seeded message rather than landing beside it.
     expect(document.querySelectorAll("[data-role=assistant]")).toHaveLength(1);
+  });
+
+  it("posts on Enter, leaves a Shift+Enter draft alone, and swaps Send for Stop", async () => {
+    let release: () => void = () => undefined;
+    const slow = new ReadableStream<Uint8Array>({
+      start(controller) {
+        release = () => {
+          // The abort closes the stream first; that is the stop this case proves.
+          try {
+            controller.enqueue(new TextEncoder().encode(sseBody(turnParts(TURN, "Late"))));
+            controller.close();
+          } catch {
+            // already closed by the cancel
+          }
+        };
+      },
+    });
+    const { posts } = stubServer(
+      () => new Response(slow, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    );
+    render(<AdminChatPage chatEnabled={true} />);
+    await waitFor(() => expect(screen.getByText("Alpha answer")).toBeTruthy());
+
+    const composer = screen.getByLabelText("Message the assistant") as HTMLTextAreaElement;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!;
+      setValue.call(composer, "first line");
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+      composer.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(screen.queryByRole("button", { name: "Send message" })).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    // Shift+Enter is a newline, so nothing is posted.
+    await act(async () => {
+      composer.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }),
+      );
+    });
+    expect(posts).toHaveLength(0);
+
+    // Enter sends, and the send control becomes Stop while the turn runs.
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await waitFor(() => expect(posts).toHaveLength(1));
+    const stop = await screen.findByRole("button", { name: "Stop generating" });
+    expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
+
+    await act(async () => {
+      stop.click();
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy());
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
   });
 
   it("seeds a stored answer under its turn id so a resume replaces it", () => {

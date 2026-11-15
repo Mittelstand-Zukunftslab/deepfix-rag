@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Done
 
 ## Summary
 The message box becomes Assistant UI's composer: a rounded, auto-growing surface docked under the conversation, with a send button that turns into stop while a reply streams, Enter to send, Shift+Enter for a newline, and a one-line disclaimer underneath.
@@ -41,6 +41,25 @@ The message box becomes Assistant UI's composer: a rounded, auto-growing surface
 - The thread-less composer is the same component with no runtime behind it, exactly the split the installed `elements-composer` documents (a runtime lane and a standalone lane sharing one shell). It lives in the page, not in a second file, so the two states cannot drift.
 
 ## Definition of done
-- [ ] Code complete
-- [ ] `bun run typecheck`, `bun run lint`, `bun run test` pass
+- [x] Code complete
+- [x] `bun run typecheck`, `bun run lint`, `bun run test` pass
 - [ ] Story committed on `feat/hermes-optimizer` before CHAT-019 starts
+
+## Verification note
+
+`chat-composer.tsx` is now `ComposerPrimitive.Root` + `ComposerPrimitive.Input` + `AuiIf` swapping `Send` for
+`Cancel`, inside the shared `ChatComposerBar`. Auto-grow and Enter/Shift+Enter are the primitive's own behaviour;
+`chat-session.tsx` lost its focus helper because the primitive moves focus back to the input when a run starts
+and the page no longer owns the textarea.
+
+`admin-chat-session.test.tsx` gained one case: a Shift+Enter keydown posts nothing, an Enter keydown posts one turn,
+the control becomes **Stop generating** while it streams, and pressing it returns the composer to **Send message**.
+The send control's accessible name is now `Send message`, which is the one assertion the existing send helper
+needed.
+
+The thread-less state is `DraftComposer`: the same bar and hint with a read-only field and a **Start a
+conversation** control, because there is no runtime to send through until a thread exists. `admin-chat-page.test.tsx`
+covers that path and asserts it creates a thread without calling the completions route.
+
+`bun run typecheck`, `bun run lint` (0 errors), and `bun run test` (103 cases) pass. `bun run build` is run before the
+last story of the set, with CHAT-019 … CHAT-023 on the same tree.

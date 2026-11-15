@@ -177,16 +177,19 @@ describe("the chat shell", () => {
 });
 
 describe("the composer", () => {
-  it("labels the textarea and accepts text", async () => {
+  it("labels the composer and, with no thread yet, offers to start one", async () => {
     const fetchSpy = vi.fn().mockRejectedValue(new Error("offline"));
     vi.stubGlobal("fetch", fetchSpy);
     vi.spyOn(adminChatService, "threads").mockResolvedValue([]);
+    const create = vi.spyOn(adminChatService, "createThread");
     render(<AdminChatPage chatEnabled />);
-    // The thread list loads first; with no threads the composer is disabled.
-    const composer = await screen.findByLabelText("Message the assistant");
-    expect(composer).toBeTruthy();
-    fireEvent.change(composer, { target: { value: "Hallo" } });
-    expect((composer as HTMLTextAreaElement).value).toBe("Hallo");
+    expect(await screen.findByLabelText("Message the assistant")).toBeTruthy();
+    // No thread exists, so the field cannot take a message and the control
+    // starts the conversation instead of pretending to send one.
+    expect(screen.getByLabelText("Message the assistant").getAttribute("readonly")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start a conversation" }));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 });

@@ -14,6 +14,10 @@ None.
 2. AC 5's "send control is disabled" is observable only if the control is a real `<button>`; the primitive renders one. Noted in the AC.
 3. The disclaimer copy was unspecified. AC 6 now states what it must convey and that it is not interactive, leaving the wording to the implementation.
 
+### Rejected candidate
+- Sharing the send control with the Ask page was considered and rejected in CHAT-016: that page cannot cancel its
+  request, so a `streaming` prop would have given it a Stop button it cannot honour.
+
 ### Nice-to-have
 - AC 8 (focus returns after a turn) is already covered by a helper in the page; the AC keeps it so a refactor cannot drop it silently.
 

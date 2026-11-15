@@ -4,7 +4,7 @@ import type { UIMessage } from "ai";
 import { ChatHeader } from "@/features/admin-chat/chat-header";
 import { ChatSidebar } from "@/features/admin-chat/chat-sidebar";
 import { ActionCard } from "@/features/admin-chat/action-card";
-import { ChatComposer } from "@/features/admin-chat/chat-composer";
+import { DraftComposer } from "@/features/admin-chat/chat-composer";
 import { ChatThread, useChatHooks, useChatSessions } from "@/features/admin-chat/chat-session";
 import { seedMessages, type ChatHooks } from "@/features/admin-chat/chat-transport";
 import { RunPanel } from "@/features/admin-chat/run-panel";
@@ -101,7 +101,6 @@ function AdminChat({ email }: { email: string }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const sessions = useChatSessions();
   const loaded = useRef(new Map<string, ThreadState>());
-  const emptyComposer = useRef<HTMLTextAreaElement | null>(null);
   const collapsed = useAdminChatStore((store) => store.sidebarCollapsed);
   const toggleSidebar = useAdminChatStore((store) => store.toggleSidebar);
 
@@ -310,19 +309,11 @@ function AdminChat({ email }: { email: string }) {
                 disabled={false}
               />
             ) : (
-              <div className="flex min-h-[28rem] flex-1 flex-col justify-end gap-4">
+              <div className="flex min-h-0 flex-1 flex-col justify-end gap-4">
                 <p className="text-body-md text-muted-foreground">
-                  {activeThread
-                    ? "Loading this thread…"
-                    : "No messages yet. Ask a question to start."}
+                  {activeThread ? "Loading this thread…" : "No conversation open yet."}
                 </p>
-                <ChatComposer
-                  busy={false}
-                  inputRef={emptyComposer}
-                  onSend={() => undefined}
-                  onStop={() => undefined}
-                  disabled
-                />
+                <DraftComposer onCreate={() => void newThread()} />
               </div>
             )}
             {state.actions.length ? (

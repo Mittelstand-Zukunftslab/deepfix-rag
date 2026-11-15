@@ -89,72 +89,72 @@ export function ChatThread({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ThreadBody helpers={helpers} disabled={disabled} />
+      <ThreadBody disabled={disabled} />
     </AssistantRuntimeProvider>
   );
 }
 
-function ThreadBody({
-  helpers,
-  disabled,
-}: {
-  helpers: UseChatHelpers<UIMessage>;
-  disabled: boolean;
-}) {
-  const aui = useAui();
+function ThreadBody({ disabled }: { disabled: boolean }) {
   return (
-    <div className="flex min-h-[32rem] flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-6">
       <div aria-live="polite" className="flex flex-col gap-3" data-testid="admin-chat-stream">
         <ThreadPrimitive.Empty>
           <p className="text-body-md text-muted-foreground">
             No messages yet. Ask a question to start.
           </p>
         </ThreadPrimitive.Empty>
-        <ThreadPrimitive.Messages>
-          {({ message }) => <MessageRow message={message} />}
-        </ThreadPrimitive.Messages>
+        <ThreadPrimitive.Messages>{() => <MessageRow />}</ThreadPrimitive.Messages>
         <ThreadError />
       </div>
-      <ChatComposer
-        busy={helpers.status === "submitted" || helpers.status === "streaming"}
-        inputRef={useComposerFocus(helpers)}
-        onSend={(content) => void aui.thread.append(content)}
-        onStop={() => aui.thread.cancelRun()}
-        disabled={disabled}
-      />
+      <div className="sticky bottom-0 mt-auto bg-background pb-2">
+        <ChatComposer disabled={disabled} />
+      </div>
     </div>
   );
 }
 
-function MessageRow({ message }: { message: ThreadMessage & { isLast?: boolean } }) {
-  if (message.role === "user") {
+function MessageRow() {
+  const role = useAuiState((state) => state.message.role);
+  const id = useAuiState((state) => state.message.id);
+  if (role === "user") {
     return (
-      <div data-testid={`chat-message-${message.id}`} data-role="user">
-        <ChatMessageView role="user" content={textOf(message)} />
+      <div data-testid={`chat-message-${id}`} data-role="user">
+        <MessagePrimitive.Root className="flex justify-end">
+          <MessagePrimitive.Parts
+            components={{
+              Text: ({ text }) => <ChatMessageView role="user" content={text} />,
+            }}
+          />
+        </MessagePrimitive.Root>
       </div>
     );
   }
+  return <AssistantMessage id={id} />;
+}
+
+function AssistantMessage({ id }: { id: string }) {
+  const isLast = useAuiState((state) => state.message.isLast);
   return (
-    <div data-testid={`chat-message-${message.id}`} data-role="assistant">
+    <div data-testid={`chat-message-${id}`} data-role="assistant" className="group/message">
       <MessagePrimitive.Parts
         components={{
           Text: ({ text }) => <ChatMessageView role="assistant" content={text} />,
           data: { by_name: { "deepfix-tool": ToolRow } },
         }}
       />
-      {message.isLast ? (
-        <ActionBarPrimitive.Root>
-          <ActionBarPrimitive.Reload className="text-label-sm underline">
+      {isLast ? (
+        <ActionBarPrimitive.Root
+          hideWhenRunning
+          autohide="not-last"
+          className="mt-1 flex gap-1 opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100"
+        >
+          <ActionBarPrimitive.Reload className="rounded px-1.5 py-1 text-label-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground">
             Regenerate
           </ActionBarPrimitive.Reload>
         </ActionBarPrimitive.Root>
       ) : null}
     </div>
   );
-}
-
-function textOf(message: { content: readonly { type: string; text?: string }[] }): string {
-  return message.content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
 }
 
 function ToolRow({ data }: { data: ChatToolProgress }) {
@@ -172,16 +172,4 @@ function ThreadError() {
       {errorMessage(error)}
     </p>
   );
-}
-
-/** Focus returns to the composer after a turn settles (FR-025). */
-function useComposerFocus(helpers: UseChatHelpers<UIMessage>) {
-  const ref = useRef<HTMLTextAreaElement | null>(null);
-  const running = helpers.status === "submitted" || helpers.status === "streaming";
-  const wasRunning = useRef(false);
-  useEffect(() => {
-    if (wasRunning.current && !running) ref.current?.focus();
-    wasRunning.current = running;
-  }, [running]);
-  return ref;
 }
