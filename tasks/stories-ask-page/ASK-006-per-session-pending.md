@@ -4,7 +4,7 @@
 Bug
 
 ## Status
-Draft
+Done
 
 ## Summary
 A member who asks a question and switches to another chat, or starts a new one, sees the answer and
@@ -62,8 +62,33 @@ composer, and its own asking state, so a second question in a second session is 
 - `useExternalStoreRuntime` takes `isRunning`; it must report the active session's pending state so the
   Assistant UI runtime does not draw a second assistant placeholder in a session that is not asking.
 
+## Verification note
+
+`chat-page.tsx` replaced the two page-level values with one map,
+`pendingBySession: Record<sessionId, query>`. The active session's entry drives the thinking card,
+the composer's `disabled` / `aria-busy`, and `useExternalStoreRuntime`'s `isRunning`, so a session
+that is not asking is fully usable. `runAsk` captures `sessionId = activeSession.id` before the
+request and appends the turn to that id in both the success and failure paths. `handleDeleteSession`
+drops the entry, so a late response for a deleted session writes nowhere. A `selectedTurnId` update
+is now guarded by an `activeSessionIdRef` comparison, so a question in one session does not move
+another session's viewed turn.
+
+Two web tests cover it, against the real component and a stubbed `askService`:
+
+- "keeps the thinking card and the answer in the session that asked" holds a request open, switches
+  Alpha to Beta, checks Beta has no card and an enabled composer, returns to Alpha and finds its card
+  and disabled composer, lands the answer while Beta is on screen, and checks Beta did not receive it
+  and Alpha did. Run against the pre-change `chat-page.tsx`, this test fails at the first switch with
+  `expected <span class="animate-pulse"></span> to be null` — the thinking card in the wrong session,
+  which is the reported bug.
+- "lets a second session ask while the first is still waiting" holds two requests open at once and
+  checks each answer lands in its own session.
+
+`bun run typecheck`, `bun run lint` (0 errors, 15 pre-existing warnings), `bun run test` (116 cases,
+15 files), and `bun run build` pass.
+
 ## Definition of done
-- [ ] Code complete
-- [ ] Test proves the mid-request switch, the answer's landing session, and a parallel ask
-- [ ] `bun run typecheck`, `bun run lint`, `bun run test` green
-- [ ] Screenshots of pending-in-one-session-while-viewing-another captured against a mocked backend
+- [x] Code complete
+- [x] Test proves the mid-request switch, the answer's landing session, and a parallel ask
+- [x] `bun run typecheck`, `bun run lint`, `bun run test` green
+- [x] Screenshots of pending-in-one-session-while-viewing-another captured against a mocked backend

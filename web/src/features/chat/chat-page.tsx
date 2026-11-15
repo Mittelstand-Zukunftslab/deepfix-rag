@@ -171,8 +171,7 @@ export function AskPage({
   });
 
   const [draft, setDraft] = useState(isControlledMode ? (askedQuery ?? "") : "");
-  const [pending, setPending] = useState(false);
-  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const [pendingBySession, setPendingBySession] = useState<Record<string, string>>({});
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
 
@@ -184,6 +183,10 @@ export function AskPage({
   const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // The session the member is looking at right now, readable from an async
+  // callback without capturing the render that started the request.
+  const activeSessionIdRef = useRef<string>(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
 
   useEffect(() => {
     if (!storageKeys) return;
@@ -200,6 +203,10 @@ export function AskPage({
   const activeSession =
     sessions.find((s) => s.id === activeSessionId) ?? sessions[0] ?? createNewSession();
   const turns = activeSession?.turns ?? [];
+  // Pending belongs to the session that asked, so the thinking card and the
+  // disabled composer follow that session rather than the whole page.
+  const pendingQuery = pendingBySession[activeSession?.id ?? ""] ?? null;
+  const pending = pendingQuery !== null;
 
   const currentTurn =
     (selectedTurnId ? turns.find((t) => t.id === selectedTurnId) : null) ??
@@ -224,6 +231,14 @@ export function AskPage({
 
   const handleDeleteSession = (sessionId: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
+    // A deleted session must not keep its pending entry: a response that lands
+    // afterwards would otherwise re-create a session the member removed.
+    setPendingBySession((prev) => {
+      if (!(sessionId in prev)) return prev;
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
     setSessions((prev) => {
       const remaining = prev.filter((s) => s.id !== sessionId);
       if (remaining.length === 0) {
@@ -263,10 +278,10 @@ export function AskPage({
       return;
     }
 
+    const sessionId = activeSession.id;
     setDraft("");
     setGlobalError(null);
-    setPending(true);
-    setPendingQuery(trimmed);
+    setPendingBySession((prev) => ({ ...prev, [sessionId]: trimmed }));
 
     const turnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -285,9 +300,10 @@ export function AskPage({
         interactionId: response.interaction_id,
       };
 
+      // Land the turn in the session that asked, whatever the member is viewing now.
       setSessions((prev) =>
         prev.map((session) => {
-          if (session.id !== activeSession.id) return session;
+          if (session.id !== sessionId) return session;
           const isFirstTurn = session.turns.length === 0;
           const newTitle =
             isFirstTurn && session.title === "New Chat"
@@ -305,7 +321,10 @@ export function AskPage({
         }),
       );
 
-      setSelectedTurnId(turnId);
+      // A question in one session must not move the other sessions' view.
+      if (activeSessionIdRef.current === sessionId) {
+        setSelectedTurnId(turnId);
+      }
     } catch (caught) {
       const errorMsg = caught instanceof Error ? caught.message : "Unable to ask. Try again.";
       setGlobalError(errorMsg);
@@ -324,14 +343,18 @@ export function AskPage({
 
       setSessions((prev) =>
         prev.map((session) =>
-          session.id === activeSession.id
+          session.id === sessionId
             ? { ...session, turns: [...session.turns, failedTurn], updatedAt: Date.now() }
             : session,
         ),
       );
     } finally {
-      setPending(false);
-      setPendingQuery(null);
+      setPendingBySession((prev) => {
+        if (!(sessionId in prev)) return prev;
+        const next = { ...prev };
+        delete next[sessionId];
+        return next;
+      });
     }
   };
 

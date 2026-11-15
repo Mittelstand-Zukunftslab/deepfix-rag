@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Suspense, type ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AskPage, chatStorageKeys } from "@/features/chat/chat-page";
 import { nextVoteAction } from "@/features/feedback/vote-actions";
@@ -9,6 +9,7 @@ import { indexQueryOptions } from "@/features/index/index-queries";
 import { libraryQueryOptions } from "@/features/library/library-queries";
 import { LibraryPage } from "@/features/library/library-page";
 import { SearchPage } from "@/features/search/search-page";
+import { askService } from "@/services/ask-service";
 import type { IndexStatus } from "@/services/index-service";
 import type { LibraryDocument } from "@/services/library-service";
 
@@ -288,5 +289,162 @@ describe("Ask history", () => {
     expect(bea.map((item: { title: string }) => item.title)).toEqual(["Bea"]);
     expect(screen.queryByText("Bea")).toBeNull();
     expect(screen.queryByText("Shared")).toBeNull();
+  });
+});
+
+describe("Ask pending state", () => {
+  const HIT = {
+    rank: 1,
+    doc_id: "ws_harbor",
+    document_filename: "harbor.txt",
+    text: "The harbor budget was approved.",
+    score: 0.82,
+    vote: null,
+  };
+
+  /** A promise the test resolves, so a request can be held open mid-flight. */
+  function deferred() {
+    let settle: (value: unknown) => void = () => undefined;
+    const promise = new Promise((resolve) => {
+      settle = resolve;
+    });
+    return { promise, settle };
+  }
+
+  it("keeps the thinking card and the answer in the session that asked", async () => {
+    const first = deferred();
+    const spy = vi
+      .spyOn(askService, "ask")
+      .mockImplementationOnce(() => first.promise as ReturnType<typeof askService.ask>);
+
+    // Two named sessions, so a switch is unambiguous before any title changes.
+    const keys = chatStorageKeys("ada");
+    const session = (id: string, title: string) => ({
+      id,
+      title,
+      createdAt: 1,
+      updatedAt: 1,
+      turns: [],
+    });
+    window.localStorage.clear();
+    window.localStorage.setItem(
+      keys.sessions,
+      JSON.stringify([session("alpha", "Alpha"), session("beta", "Beta")]),
+    );
+    window.localStorage.setItem(keys.active, "alpha");
+
+    renderWithQuery(<AskPage ownerId="ada" />);
+    fireEvent.click(screen.getByRole("button", { name: /History/ }));
+
+    // Ask in Alpha.
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
+      target: { value: "what is the harbor budget" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    await screen.findByText(/DeepFix is searching corpus/);
+
+    // Switch to Beta while Alpha's request is still open.
+    fireEvent.click(screen.getByText("Beta"));
+    expect(screen.queryByText(/DeepFix is searching corpus/)).toBeNull();
+    expect((screen.getByRole("textbox", { name: "Ask" }) as HTMLInputElement).disabled).toBe(false);
+
+    // Back in Alpha the card is still there and its composer is busy.
+    fireEvent.click(screen.getByText("Alpha"));
+    await screen.findByText(/DeepFix is searching corpus/);
+    expect((screen.getByRole("textbox", { name: "Ask" }) as HTMLInputElement).disabled).toBe(true);
+
+    // Land the answer while Beta is on screen.
+    fireEvent.click(screen.getByText("Beta"));
+    first.settle({
+      interaction_id: "i-1",
+      answer: "The harbor budget was approved.",
+      error: null,
+      vote: null,
+      grounding: "grounded",
+      hits: [HIT],
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/DeepFix is searching corpus/)).toBeNull();
+    });
+
+    // Beta never received Alpha's answer.
+    expect(screen.queryByText("The harbor budget was approved.")).toBeNull();
+    expect((screen.getByRole("textbox", { name: "Ask" }) as HTMLInputElement).disabled).toBe(false);
+
+    // Alpha holds it.
+    fireEvent.click(screen.getByText("Alpha"));
+    await screen.findByText("Grounded");
+    expect(screen.getAllByText("The harbor budget was approved.").length).toBeGreaterThan(0);
+
+    spy.mockRestore();
+  });
+
+  it("lets a second session ask while the first is still waiting", async () => {
+    const first = deferred();
+    const second = deferred();
+    const spy = vi
+      .spyOn(askService, "ask")
+      .mockImplementationOnce(() => first.promise as ReturnType<typeof askService.ask>)
+      .mockImplementationOnce(() => second.promise as ReturnType<typeof askService.ask>);
+
+    const keys = chatStorageKeys("ada");
+    const session = (id: string, title: string) => ({
+      id,
+      title,
+      createdAt: 1,
+      updatedAt: 1,
+      turns: [],
+    });
+    window.localStorage.clear();
+    window.localStorage.setItem(
+      keys.sessions,
+      JSON.stringify([session("alpha", "Alpha"), session("beta", "Beta")]),
+    );
+    window.localStorage.setItem(keys.active, "alpha");
+
+    renderWithQuery(<AskPage ownerId="ada" />);
+    fireEvent.click(screen.getByRole("button", { name: /History/ }));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
+      target: { value: "alpha question" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    await screen.findByText(/DeepFix is searching corpus/);
+
+    // Beta is usable while Alpha is busy, and asks its own question.
+    fireEvent.click(screen.getByText("Beta"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
+      target: { value: "beta question" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    await waitFor(() => {
+      expect(screen.getByText("beta question")).toBeTruthy();
+    });
+
+    // Each answer lands in its own session.
+    second.settle({
+      interaction_id: "i-beta",
+      answer: "Beta answer.",
+      error: null,
+      vote: null,
+      grounding: "grounded",
+      hits: [],
+    });
+    await screen.findByText("Beta answer.");
+    expect(screen.queryByText("Alpha answer.")).toBeNull();
+
+    first.settle({
+      interaction_id: "i-alpha",
+      answer: "Alpha answer.",
+      error: null,
+      vote: null,
+      grounding: "grounded",
+      hits: [],
+    });
+    fireEvent.click(screen.getByText("Alpha"));
+    await screen.findByText("Alpha answer.");
+    expect(screen.queryByText("Beta answer.")).toBeNull();
+
+    spy.mockRestore();
   });
 });
