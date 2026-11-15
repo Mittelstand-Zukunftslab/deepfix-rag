@@ -605,6 +605,50 @@ def update_assistant_text(db_path: Path, message_id: str, content: str) -> None:
         )
 
 
+def replace_turn_messages(
+    db_path: Path,
+    thread_id: str,
+    turn_id: str,
+    *,
+    prompt: str,
+) -> tuple[Message, Message]:
+    """Rewrite the messages of one turn, keeping their place in the thread.
+
+    A regenerate replaces the answer it names rather than appending a second
+    one, so the thread keeps one user/assistant pair per answered question. Both
+    messages keep their id and ``seq``; the prompt is rewritten and the assistant
+    text restarts empty, which is the row a resume replays and the relay fills.
+    """
+    init_admin_chat(db_path)
+    at = _now()
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT * FROM admin_chat_messages WHERE thread_id = ? AND turn_id = ? ORDER BY seq",
+            (thread_id, turn_id),
+        ).fetchall()
+        user_row = next((row for row in rows if row["role"] == "user"), None)
+        assistant_row = next((row for row in rows if row["role"] == "assistant"), None)
+        if user_row is None or assistant_row is None:
+            raise ValueError("That turn has no complete user/assistant pair to regenerate.")
+        conn.execute(
+            "UPDATE admin_chat_messages SET content = ? WHERE message_id = ?",
+            (prompt, str(user_row["message_id"])),
+        )
+        conn.execute(
+            "UPDATE admin_chat_messages SET content = '' WHERE message_id = ?",
+            (str(assistant_row["message_id"]),),
+        )
+        conn.execute(
+            "UPDATE admin_chat_threads SET updated_at = ? WHERE thread_id = ?",
+            (at, thread_id),
+        )
+        return (
+            _message_from_row(user_row),
+            _message_from_row(assistant_row),
+        )
+
+
 def start_turn(
     db_path: Path,
     thread_id: str,
@@ -613,11 +657,31 @@ def start_turn(
     admin_email: str = "",
     retry_of: str | None = None,
     request_chars: int = 0,
+    reuse_turn_id: str | None = None,
 ) -> Turn:
-    """Open one turn in ``running``. ``retry_of`` must be a turn in the same thread."""
+    """Open one turn in ``running``. ``retry_of`` must be a turn in the same thread.
+
+    ``reuse_turn_id`` reopens an existing turn instead of opening a new one, which
+    is what a regenerate does: the thread's turn list does not grow, and the
+    retried answer replaces its own row rather than arriving as a second attempt
+    beside it. The row's ``retry_of`` and its original ``started_at`` are kept, so
+    a reused turn still names what it originally answered.
+    """
     init_admin_chat(db_path)
     if retry_of is not None:
         _assert_turn_in_thread(db_path, retry_of, thread_id)
+    if reuse_turn_id is not None:
+        _assert_turn_in_thread(db_path, reuse_turn_id, thread_id)
+        with connect(db_path) as conn:
+            conn.execute(
+                """
+                UPDATE admin_chat_turns
+                SET status = 'running', error = NULL, request_chars = ?, ended_at = NULL
+                WHERE turn_id = ? AND status != 'running'
+                """,
+                (request_chars, reuse_turn_id),
+            )
+        return get_turn(db_path, reuse_turn_id)
     turn_id = _new_id()
     at = _now()
     with connect(db_path) as conn:

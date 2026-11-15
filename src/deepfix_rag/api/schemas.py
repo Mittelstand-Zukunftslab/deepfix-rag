@@ -345,11 +345,18 @@ class ChatCompletionRequest(ApiModel):
     The server rebuilds the upstream conversation from the stored thread, so this
     array is a consistency check rather than the prompt: the client cannot rewrite
     the system message or claim a history that never happened.
+
+    ``retry_of`` names the earlier turn whose answer is being asked for again.
+    With ``regenerate`` the turn is reused and its answer replaced in place, which
+    is what the chat UI's regenerate control does: the thread does not grow a
+    second answer beside the first. Without it, a retry opens a new turn and the
+    thread keeps both attempts (CHAT-005).
     """
 
     thread_id: str = Field(min_length=1)
     messages: list[ChatMessageModel] = Field(min_length=1)
     retry_of: str | None = None
+    regenerate: bool = False
 
 
 class ChatThreadResponse(ApiModel):

@@ -74,6 +74,7 @@ MISCONFIGURED_MESSAGE = (
     "and HERMES_CHAT_MODEL or HERMES_MODEL."
 )
 STALE_HISTORY_MESSAGE = "The conversation is out of date. Reload the thread."
+NOTHING_TO_REGENERATE_MESSAGE = "There is no earlier answer to regenerate."
 TOO_LONG_MESSAGE = "This reply took too long and was stopped."
 UPSTREAM_FAILED_MESSAGE = "The assistant could not answer. Try again."
 CANCELLED_MESSAGE = "The browser closed the connection."
@@ -146,11 +147,18 @@ async def admin_chat_completion(
 
     thread = _owned_thread(settings, payload.thread_id, user.id)
     stored = admin_chat.thread_messages(settings.product_db_path, thread.thread_id, user.id)
+    # A regenerate names the answer it replaces. The UI cannot send that id (the
+    # AI SDK's reload drops the message it is replacing), so the server resolves
+    # it from the thread: the newest answered turn. Everything downstream then
+    # treats it exactly like a retry, which is what keeps the checks honest.
+    regenerate_of = _regenerate_target(stored) if payload.regenerate else None
+    retry_of = regenerate_of if regenerate_of is not None else payload.retry_of
     _check_limits(settings, payload)
-    _check_history(stored, payload)
+    _check_history(stored, payload, retry_of)
     # A retry replaces the answer it names, so that turn's messages stay out of
     # the upstream conversation while the thread still shows both turns.
-    history = _retried_history(stored, payload.retry_of)
+    history = _retried_history(stored, retry_of)
+    prompt = payload.messages[-1].content
 
     refusal = admin_chat.check_rate_limit(
         settings.product_db_path,
@@ -181,36 +189,55 @@ async def admin_chat_completion(
             thread.thread_id,
             user.id,
             admin_email=user.email,
-            retry_of=payload.retry_of,
+            retry_of=retry_of,
             request_chars=sum(len(item.content) for item in payload.messages),
+            reuse_turn_id=regenerate_of,
         )
     except ValueError as exc:
         raise HTTPException(status_code=BAD_REQUEST, detail=str(exc)) from exc
-    admin_chat.append_message(
-        settings.product_db_path,
-        thread.thread_id,
-        role="user",
-        content=payload.messages[-1].content,
-        turn_id=turn.turn_id,
-    )
-    # The assistant message exists from the first moment, so a resume has a row
-    # to replay even when the reply ends empty.
-    reply = admin_chat.append_message(
-        settings.product_db_path,
-        thread.thread_id,
-        role="assistant",
-        content="",
-        turn_id=turn.turn_id,
-    )
+    if regenerate_of is None:
+        admin_chat.append_message(
+            settings.product_db_path,
+            thread.thread_id,
+            role="user",
+            content=prompt,
+            turn_id=turn.turn_id,
+        )
+        # The assistant message exists from the first moment, so a resume has a
+        # row to replay even when the reply ends empty.
+        reply = admin_chat.append_message(
+            settings.product_db_path,
+            thread.thread_id,
+            role="assistant",
+            content="",
+            turn_id=turn.turn_id,
+        )
+    else:
+        # A regenerate reuses the turn and its rows: the same user and assistant
+        # messages, with the assistant text restarted, so the thread never shows
+        # the question or the answer twice.
+        _, reply = admin_chat.replace_turn_messages(
+            settings.product_db_path,
+            thread.thread_id,
+            turn.turn_id,
+            prompt=prompt,
+        )
     registry = registry_for(request.app.state)
     registry.open(turn.turn_id, thread.thread_id)
-    _audit(settings, user, turn.turn_id, thread.thread_id, "turn_started", "turn started")
+    _audit(
+        settings,
+        user,
+        turn.turn_id,
+        thread.thread_id,
+        "turn_started",
+        f"turn regenerated from {regenerate_of}" if regenerate_of else "turn started",
+    )
     _log(thread.thread_id, turn.turn_id, "turn_started")
 
     upstream = await _open_upstream(
         settings,
         history=history,
-        prompt=payload.messages[-1].content,
+        prompt=prompt,
         thread_id=thread.thread_id,
         turn_id=turn.turn_id,
         digest=_digest(request, settings),
@@ -266,7 +293,23 @@ def _retried_history(
     return [message for message in history if message.turn_id != retry_of]
 
 
-def _check_history(history: list[admin_chat.Message], payload: ChatCompletionRequest) -> None:
+def _regenerate_target(history: list[admin_chat.Message]) -> str:
+    """The turn a regenerate replaces: the newest answered turn in the thread.
+
+    Regenerating always concerns the last assistant answer, which is what the
+    UI's reload control acts on. A thread with no answer yet has nothing to
+    replace, so it is a 400 rather than a silent no-op.
+    """
+    answered = [message.turn_id for message in history if message.role == "assistant"]
+    target = next((turn_id for turn_id in reversed(answered) if turn_id), None)
+    if target is None:
+        raise HTTPException(status_code=BAD_REQUEST, detail=NOTHING_TO_REGENERATE_MESSAGE)
+    return target
+
+
+def _check_history(
+    history: list[admin_chat.Message], payload: ChatCompletionRequest, retry_of: str | None
+) -> None:
     """The client's array must agree with the stored thread and end with a user turn.
 
     A retry drops the answer it replaces, so that one assistant message is left
@@ -275,7 +318,7 @@ def _check_history(history: list[admin_chat.Message], payload: ChatCompletionReq
     """
     if payload.messages[-1].role != "user":
         raise HTTPException(status_code=BAD_REQUEST, detail=STALE_HISTORY_MESSAGE)
-    expected = _retried_history(history, payload.retry_of)
+    expected = _retried_history(history, retry_of)
     if len(payload.messages) - 1 != len(expected):
         raise HTTPException(status_code=BAD_REQUEST, detail=STALE_HISTORY_MESSAGE)
     for stored, sent in zip(expected, payload.messages[:-1], strict=True):

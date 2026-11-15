@@ -252,6 +252,75 @@ def test_retry_creates_a_linked_turn_and_streams_a_fresh_reply(
     assert len(turns) == 2
 
 
+def test_a_regenerate_replaces_the_last_answer_instead_of_duplicating_it(
+    tmp_path: Path, hermes: StandIn, identity: IdentityIssuer
+) -> None:
+    """The reload control replaces the answer it is pressed on.
+
+    The AI SDK's reload drops the assistant message from the client array before
+    it posts, so the server resolves the target from the thread instead. One user
+    message and one assistant message stay; the turn is reused; the audit row is
+    still written and names what was regenerated.
+    """
+    settings = _settings(tmp_path, hermes)
+    with _client(settings, identity) as client:
+        thread_id = _thread(client, identity)
+        _send(client, thread_id, "Hallo")
+        first = client.get(f"/admin/chat/threads/{thread_id}").json()
+        turn_id = first["turns"][-1]["turn_id"]
+        # Exactly what the AI SDK sends on reload: the user message, no answer.
+        without_answer = [
+            {"role": m["role"], "content": m["content"]}
+            for m in first["messages"]
+            if m["role"] == "user"
+        ]
+        response = client.post(
+            "/admin/chat/completions",
+            json={"thread_id": thread_id, "messages": without_answer, "regenerate": True},
+        )
+        assert response.status_code == 200, response.text
+        after = client.get(f"/admin/chat/threads/{thread_id}").json()
+        audit = [
+            row["kind"]
+            for row in client.get("/admin/chat/audit").json()
+            if row.get("turn_id") == turn_id
+        ]
+    assert [m["role"] for m in after["messages"]] == ["user", "assistant"]
+    assert [m["content"] for m in after["messages"]] != ["", ""]
+    assert after["messages"][0]["content"] == "Hallo"
+    assert after["messages"][1]["content"] == "Das ist eine Antwort."
+    assert [t["turn_id"] for t in after["turns"]] == [turn_id]
+    assert after["turns"][0]["status"] == "completed"
+    # The audit row is written for the reused turn, and it says it was a regenerate.
+    assert "turn_started" in audit
+    with connect(settings.product_db_path) as conn:
+        details = [
+            str(row["detail"])
+            for row in conn.execute(
+                "SELECT detail FROM admin_chat_audit WHERE turn_id = ?", (turn_id,)
+            )
+        ]
+    assert any("regenerated" in detail for detail in details)
+
+
+def test_a_regenerate_with_no_answer_to_replace_is_400(
+    tmp_path: Path, hermes: StandIn, identity: IdentityIssuer
+) -> None:
+    settings = _settings(tmp_path, hermes)
+    with _client(settings, identity) as client:
+        thread_id = _thread(client, identity)
+        response = client.post(
+            "/admin/chat/completions",
+            json={
+                "thread_id": thread_id,
+                "messages": [{"role": "user", "content": "Hallo"}],
+                "regenerate": True,
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["detail"] == routes.NOTHING_TO_REGENERATE_MESSAGE
+
+
 def test_every_chat_route_is_gated_or_an_exempt_constant() -> None:
     """Every chat path is gated on the flag, or is one of the two exempt constants.
 

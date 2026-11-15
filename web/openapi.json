@@ -234,7 +234,7 @@
         "type": "object"
       },
       "ChatCompletionRequest": {
-        "description": "An OpenAI-shaped turn request.\n\nThe server rebuilds the upstream conversation from the stored thread, so this\narray is a consistency check rather than the prompt: the client cannot rewrite\nthe system message or claim a history that never happened.",
+        "description": "An OpenAI-shaped turn request.\n\nThe server rebuilds the upstream conversation from the stored thread, so this\narray is a consistency check rather than the prompt: the client cannot rewrite\nthe system message or claim a history that never happened.\n\n``retry_of`` names the earlier turn whose answer is being asked for again.\nWith ``regenerate`` the turn is reused and its answer replaced in place, which\nis what the chat UI's regenerate control does: the thread does not grow a\nsecond answer beside the first. Without it, a retry opens a new turn and the\nthread keeps both attempts (CHAT-005).",
         "properties": {
           "messages": {
             "items": {
@@ -243,6 +243,11 @@
             "minItems": 1,
             "title": "Messages",
             "type": "array"
+          },
+          "regenerate": {
+            "default": false,
+            "title": "Regenerate",
+            "type": "boolean"
           },
           "retry_of": {
             "anyOf": [
