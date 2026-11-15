@@ -6,6 +6,7 @@ Operator-facing documents. Product planning lives in `tasks/`; the front door is
 | :--- | :--- |
 | [`deployment.md`](deployment.md) | Deploying to Dokploy: memory caps, `--no-deps` rebuilds, auto-deploy off, domains, secrets. |
 | [`admin-hermes-chat-verification.md`](admin-hermes-chat-verification.md) | Verifying the admin Hermes chat on a deployed stack, with chat off and with chat on. |
+| [`admin-chat-interface-review.md`](admin-chat-interface-review.md) | The `better-interface` review of the redesigned chat: findings, what was rejected, and what is still unverified. |
 
 Reference material elsewhere:
 
