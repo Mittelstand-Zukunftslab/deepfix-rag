@@ -52,6 +52,11 @@ _WHITESPACE = re.compile(r"\s+")
 
 # The two reads a thread load makes, as constants so a test can assert the query
 # plan of the SQL the module actually issues rather than a copy of it (AC 4).
+#
+# The turns read joins the ``interactions`` row that holds the question and the
+# answer. One assistant turn writes exactly one such row (FR-019), which is what
+# keeps the join one-to-one; a second row for the same turn would be a defect in
+# that writer rather than a case this read has to resolve.
 THREADS_BY_OWNER_SQL = (
     "SELECT thread_id, title, owner_id, owner_email, created_at, updated_at "
     "FROM ask_chat_threads WHERE owner_id = ? ORDER BY updated_at DESC LIMIT ?"
