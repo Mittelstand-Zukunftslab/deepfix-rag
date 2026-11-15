@@ -99,6 +99,8 @@ function AdminChat({ email }: { email: string }) {
   const [activeThread, setActiveThread] = useState<string | null>(null);
   const [state, setState] = useState<ThreadState>(LOADING);
   const [failure, setFailure] = useState<string | null>(null);
+  /** A failed confirm, kept on the card that failed so it stays retryable (CHAT-007). */
+  const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
   /** A chip's prompt, handed to the composer once its new thread is open. */
   const [pendingPrompt, setPendingPrompt] = useState<{ threadId: string; prompt: string } | null>(
     null,
@@ -236,13 +238,19 @@ function AdminChat({ email }: { email: string }) {
             item.action_id === card.action_id ? { ...item, status: "confirmed" as const } : item,
           ),
         }));
+        setCardErrors((current) => {
+          const { [card.action_id]: _cleared, ...rest } = current;
+          return rest;
+        });
         if (activeThread) {
           await adminChatService.linkRun(activeThread, run.run_id);
           const runs = await adminChatService.runs(activeThread);
           setState((current) => ({ ...current, runs }));
         }
       } catch (error) {
-        setFailure(message(error));
+        // A failed confirm belongs on its own card: the run did not start, and the
+        // card has to stay confirmable so the admin can retry.
+        setCardErrors((current) => ({ ...current, [card.action_id]: message(error) }));
       }
     },
     [activeThread],
@@ -258,7 +266,7 @@ function AdminChat({ email }: { email: string }) {
         ),
       }));
     } catch (error) {
-      setFailure(message(error));
+      setCardErrors((current) => ({ ...current, [card.action_id]: message(error) }));
     }
   }, []);
 
@@ -337,6 +345,7 @@ function AdminChat({ email }: { email: string }) {
                   <ActionCard
                     key={card.action_id}
                     card={card}
+                    error={cardErrors[card.action_id]}
                     onConfirm={confirm}
                     onDismiss={dismiss}
                   />

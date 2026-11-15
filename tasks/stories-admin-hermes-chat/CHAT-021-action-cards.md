@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Done
 
 ## Summary
 The proposed-run card and the linked-run panel are restyled as Assistant UI surfaces inside the conversation column. Their behaviour is unchanged: only the admin's confirm starts a run, dismiss marks the card rejected without starting anything, and a failure stays on the card.
@@ -37,6 +37,24 @@ The proposed-run card and the linked-run panel are restyled as Assistant UI surf
 - The card is rendered from `state.actions`, not from a message part, because it is server state the page owns. It sits at the top of the message column's footer area so it never scrolls away from the run it will start.
 
 ## Definition of done
-- [ ] Code complete
-- [ ] `bun run typecheck`, `bun run lint`, `bun run test` pass
+- [x] Code complete
+- [x] `bun run typecheck`, `bun run lint`, `bun run test` pass
 - [ ] Story committed on `feat/hermes-optimizer` before CHAT-023 starts
+
+## Verification note
+
+The card and the run panel kept their props and their behaviour and changed their container: a `section` with
+`role="group"`, the action sentence as its accessible name, the status as a badge, the reason and the
+"nothing happens until you do" line, and Confirm/Dismiss as real buttons. Both use the composer's radius and the
+semantic tokens, so nothing new was added to the palette.
+
+A failed confirm now lives on its card (`cardErrors` in the page) instead of the page-level alert, which is what
+CHAT-007 asked for and what makes a retryable failure retryable. Dismiss uses the same map, so a rejected card that
+fails to reject also says so in place.
+
+`admin-chat-session.test.tsx` gained three cases: confirm calls `confirmAction`, links the run and renders the run
+panel while disabling the card's buttons; dismiss calls `rejectAction`, never `confirmAction`, never posts a turn,
+and shows `rejected`; a rejected confirm leaves its message on the card with `role="alert"` and the Confirm button
+enabled.
+
+`bun run typecheck`, `bun run lint` (0 errors) and `bun run test` (111 cases) pass.
