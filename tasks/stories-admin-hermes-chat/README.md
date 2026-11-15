@@ -130,6 +130,40 @@ The PRD carries the decision as **D-7**; what it changes in the stories, and wha
 Nothing in the backend design changes: the chat gateway is still the OpenAI-compatible Hermes API, deepfix-api is
 still the only caller, and no key or model id reaches the browser.
 
+## Amendment: the LibreChat redesign (owner request 2026-11-15)
+
+The product owner judged the shipped page "not good at all" and asked for the look and behaviour of LibreChat,
+built from Assistant UI's prebuilt elements rather than hand-written markup. That is a UI change with no new
+backend contract, so it is planned as CHAT-016 … CHAT-023 and follows the same rules as the stories above: one
+story per commit, tested before the next starts, on `feat/hermes-optimizer`.
+
+| Id | Title | Depends on |
+| :--- | :--- | :--- |
+| CHAT-016 | One set of chat components for Ask and Hermes chat | — |
+| CHAT-017 | A LibreChat-style shell for the chat page | CHAT-016, CHAT-015 |
+| CHAT-018 | The Assistant UI composer | CHAT-016, CHAT-017 |
+| CHAT-019 | A welcome state with starting points | CHAT-017, CHAT-018 |
+| CHAT-020 | Messages, markdown, and the action bar | CHAT-017, CHAT-018 |
+| CHAT-021 | Action cards and run panels in the new design | CHAT-020 |
+| CHAT-022 | Dark mode and the mobile drawer | CHAT-017 … CHAT-021 |
+| CHAT-023 | Prove the redesign against a mocked backend | CHAT-017 … CHAT-022 |
+
+Four decisions are fixed by the brief and are not re-opened in a story:
+
+- **The Ask page's chat components are reused, not reimplemented.** The Ask page already renders a chat — a
+  composer bar, a markdown answer body with code blocks, a message stream, an empty state with starter prompts.
+  Those pieces move to `web/src/components/chat/` in CHAT-016 and both pages import them; the Ask page's own
+  tests pass unchanged, and a change there is a regression rather than a test update.
+- **Assistant UI's prebuilt components are the starting point, not a reference.** `thread`, `thread-list`, and the
+  `elements-*` items are installed with `npx assistant-ui@latest add …` and adapted in place, so the composer,
+  markdown renderer, message actions, and empty state come from the registry rather than from new local markup.
+- **The thread list stays the backend's.** Assistant UI's runtime thread list would put every thread on one
+  runtime, which is the shape CHAT-015 removed. The page keeps one AI SDK `Chat` per thread and draws its own list
+  from `adminChatService.threads()`, grouping by date with `date-fns`.
+- **Nothing that CHAT-013 … CHAT-015 fixed may regress**: one runtime per thread across a mid-stream switch, no
+  duplicate after reload, regenerate replaces in place through `ActionBarPrimitive.Reload` and the `regenerate`
+  flag, stop keeps the partial text, and dismissing a card starts nothing.
+
 ## Test commands
 
 Python, from the repository root:

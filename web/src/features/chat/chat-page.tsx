@@ -29,9 +29,9 @@ import {
   User as UserIcon,
   X,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
+import { ChatComposerBar, ChatComposerHint } from "@/components/chat/composer";
+import { ChatMarkdown } from "@/components/chat/markdown";
 import { TopBar } from "@/components/layout/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -781,9 +781,7 @@ export function AskPage({
                               </div>
 
                               <div className="prose prose-sm dark:prose-invert max-w-none text-body-md leading-relaxed text-foreground">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {turn.answer}
-                                </ReactMarkdown>
+                                <ChatMarkdown prose={false}>{turn.answer}</ChatMarkdown>
                               </div>
 
                               <div className="flex items-center justify-between border-t border-border/40 pt-3">
@@ -876,44 +874,42 @@ export function AskPage({
               {/* 3. Bottom Prompt Composer (Gemini / ChatGPT Style Floating Input) */}
               <div className="border-t border-border/60 bg-background/95 p-3 backdrop-blur-md sm:p-4">
                 <div className="mx-auto max-w-3xl">
-                  <ComposerPrimitive.Root
-                    asChild
-                    className="relative flex items-center gap-2 rounded-2xl border border-input bg-card/90 px-3 py-1.5 shadow-sm transition-all focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/20 hover:border-border"
-                    aria-label="Ask composer"
-                  >
-                    <form onSubmit={onSubmit} className="flex w-full items-center gap-2">
-                      <label className="sr-only" htmlFor="ask-input">
-                        Ask
-                      </label>
-                      <Input
-                        id="ask-input"
-                        aria-label="Ask"
-                        value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
-                        placeholder="Ask a question about the corpus..."
-                        disabled={pending}
-                        aria-busy={pending}
-                        className="h-10 min-h-[40px] flex-1 border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0 md:text-sm"
-                      />
-                      <Button
-                        type="submit"
-                        size="icon"
-                        className="h-9 w-9 shrink-0 rounded-xl transition-all"
-                        disabled={pending || !draft.trim()}
-                        aria-busy={pending}
-                        aria-label="Ask"
-                      >
-                        {pending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <ArrowUp className="h-4 w-4" />
-                        )}
-                      </Button>
+                  <ComposerPrimitive.Root asChild className="relative" aria-label="Ask composer">
+                    <form onSubmit={onSubmit} className="w-full">
+                      <ChatComposerBar>
+                        <label className="sr-only" htmlFor="ask-input">
+                          Ask
+                        </label>
+                        <Input
+                          id="ask-input"
+                          aria-label="Ask"
+                          value={draft}
+                          onChange={(event) => setDraft(event.target.value)}
+                          placeholder="Ask a question about the corpus..."
+                          disabled={pending}
+                          aria-busy={pending}
+                          className="h-10 min-h-[40px] flex-1 border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0 md:text-sm"
+                        />
+                        <Button
+                          type="submit"
+                          size="icon"
+                          className="h-9 w-9 shrink-0 rounded-xl transition-all"
+                          disabled={pending || !draft.trim()}
+                          aria-busy={pending}
+                          aria-label="Ask"
+                        >
+                          {pending ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <ArrowUp className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </ChatComposerBar>
                     </form>
                   </ComposerPrimitive.Root>
-                  <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
+                  <ChatComposerHint>
                     DeepFix searches indexed documents and grounds answers with citations.
-                  </p>
+                  </ChatComposerHint>
                 </div>
               </div>
             </AssistantRuntimeProvider>
