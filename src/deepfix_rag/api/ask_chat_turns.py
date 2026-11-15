@@ -26,7 +26,6 @@ import threading
 
 from deepfix_rag import ask_chat
 from deepfix_rag.api import chat_stream
-from deepfix_rag.grounding import Grounding
 
 
 @dataclass
@@ -115,11 +114,14 @@ async def resume_frames(
     registry: AskTurnRegistry,
     db_path: Path,
     turn: ask_chat.Turn,
+    displayed_floor: float = 0.0,
 ) -> AsyncIterator[str]:
     """Replay the stored answer, then tail the live turn if it runs in this process.
 
     The stored text is sent exactly once, as one delta, so a reconnect cannot show
-    a partial answer twice (FR-016).
+    a partial answer twice (FR-016). ``displayed_floor`` is the deployment's
+    configured relevance floor, reported on the grounding part so a resumed answer
+    carries the same number a live one did rather than a placeholder.
     """
     turn_id = turn.turn_id
     text_id = f"{turn_id}-text"
@@ -143,14 +145,25 @@ async def resume_frames(
     settled = ask_chat.get_turn(db_path, turn_id, turn.owner_id)
     yield chat_stream.sse(chat_stream.text_end(text_id))
     yield chat_stream.sse(chat_stream.step_finish_part())
-    grounding = settled.grounding or Grounding.NO_RELEVANT_SOURCES.value
+    # A resumed turn reports the verdict the turn actually reached. A turn that
+    # never searched has no grounding at all, so it reports none rather than
+    # claiming "no relevant sources" — that phrase is a statement about a search,
+    # and a failed or refused turn never made one.
+    grounding = settled.grounding
     citations = [
         {"marker": citation.marker, "rank": citation.rank, "doc_id": citation.doc_id}
         for citation in settled.citations
     ]
-    if settled.status != "running":
+    if settled.status != "running" and grounding is not None:
         yield chat_stream.sse(
-            chat_stream.grounding_part(grounding, citations, max_score=0.0, cutoff=0.0)
+            chat_stream.grounding_part(
+                grounding,
+                citations,
+                max_score=0.0,
+                # The floor the deployment is configured with, not a placeholder:
+                # a member comparing two answers should see one number.
+                cutoff=displayed_floor,
+            )
         )
     yield chat_stream.sse(
         chat_stream.turn_part(turn_id, settled.status, grounding=grounding, citations=citations)

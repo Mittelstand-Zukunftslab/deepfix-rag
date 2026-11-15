@@ -128,11 +128,22 @@ export type AskChatPassageResponse = {
 /**
  * AskChatRenameRequest
  *
- * A new thread title. The store trims it, so the length is measured after trimming.
+ * A new thread title.
+ *
+ * The bound is on the **trimmed** title, and the store is the one that applies
+ * it: whitespace is collapsed and stripped, and only then is the length checked
+ * against 120. That is why this field's `max_length` is a payload guard rather
+ * than the rule — a title of exactly 120 characters arriving with trailing
+ * spaces is a valid rename, and a field that measured the raw string would
+ * refuse it. `min_length` is 1 so an entirely empty body field is still a
+ * validation error; a whitespace-only title passes here and is refused by the
+ * store as empty-after-trimming, which is the same 400 either way.
  */
 export type AskChatRenameRequest = {
     /**
      * Title
+     *
+     * The new title. Leading and trailing whitespace is removed before the 1 to 120 character limit is applied.
      */
     title: string;
 };

@@ -280,29 +280,60 @@ async def run_turn(
 
         # The last permitted step forces prose, which bounds the loop (FR-005).
         at_limit = searches_run >= settings.ASK_CHAT_MAX_TOOL_CALLS
+        forced = not at_limit and not searches_run
         yield chat_stream.step_start_part()
         text_id = f"step-{step_index}-text"
         yield chat_stream.text_start(text_id)
         step = _Step()
-        async for chunk in _stream_completion(
-            settings,
-            model,
-            messages,
-            tool_choice="none" if at_limit else "required",
-        ):
-            _check_deadline(deadline)
-            if is_disconnected is not None and await is_disconnected():
-                raise TurnCancelled("browser closed")
-            delta = _first_delta(chunk)
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                step.text += content
-                collected.append(content)
-                if first_token_ms is None:
-                    first_token_ms = int((time.monotonic() - started) * 1000)
-                # Forwarded as it arrives: a step is never buffered before sending.
-                yield chat_stream.text_delta(text_id, content)
-            step.calls.extend(_delta_tool_calls(delta))
+        try:
+            async for chunk in _step_chunks(
+                settings,
+                model,
+                messages,
+                forced=forced,
+                at_limit=at_limit,
+            ):
+                _check_deadline(deadline)
+                if is_disconnected is not None and await is_disconnected():
+                    raise TurnCancelled("browser closed")
+                delta = _first_delta(chunk)
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    step.text += content
+                    collected.append(content)
+                    if first_token_ms is None:
+                        first_token_ms = int((time.monotonic() - started) * 1000)
+                    # Forwarded as it arrives: a step is never buffered before sending.
+                    yield chat_stream.text_delta(text_id, content)
+                step.calls.extend(_delta_tool_calls(delta))
+        except _ToolChoiceUnsupported:
+            # The provider refused the *forced* step before emitting anything. A
+            # rejection is a fact about the provider, not the member's question, so
+            # the step is retried unforced; if that is refused too, the turn falls
+            # back to the server-side search (FR-005) instead of failing.
+            step = _Step()
+            try:
+                async for chunk in _step_chunks(
+                    settings, model, messages, forced=False, at_limit=at_limit
+                ):
+                    _check_deadline(deadline)
+                    delta = _first_delta(chunk)
+                    content = delta.get("content")
+                    if isinstance(content, str) and content:
+                        step.text += content
+                        collected.append(content)
+                        yield chat_stream.text_delta(text_id, content)
+                    step.calls.extend(_delta_tool_calls(delta))
+            except Exception as exc:
+                # An unforced step's 400 is normally a real failure, but when the
+                # provider has just refused the forced shape it is part of the same
+                # capability mismatch: leave the step empty so the server searches,
+                # rather than failing a turn the product can still answer.
+                LOGGER.warning(
+                    "The provider refused the unforced step too (%s); searching server-side",
+                    type(exc).__name__,
+                )
+                step = _Step()
         yield chat_stream.text_end(text_id)
         yield chat_stream.step_finish_part()
         step_index += 1
@@ -311,34 +342,28 @@ async def run_turn(
             if searches_run:
                 break
             # FR-005: a first step with no call means the server searches itself,
-            # so no turn can answer without a retrieval having happened.
-            search_started = time.monotonic()
-            result = await ask_chat.search_documents(
+            # so no turn can answer without a retrieval having happened. This is
+            # also the path a provider takes when it refuses the forced step.
+            call = await _server_search(
                 coordinator,
-                settings.product_db_path,
-                {"query": question},
-                max_passage_chars=settings.ASK_CHAT_MAX_PASSAGE_CHARS,
-                max_displayed_hits=settings.MAX_DISPLAYED_HITS,
+                settings,
+                question,
+                on_tool_call=on_tool_call,
+                tool_calls=tool_calls,
+                previous=build_id,
             )
-            search_ms = int((time.monotonic() - search_started) * 1000)
             searches_run += 1
-            build_id = result.build_id or build_id
-            call = ToolCall(
-                call_id="server",
-                name=ask_chat.TOOL_NAME,
-                arguments={"query": question},
-                result=result,
-                duration_ms=search_ms,
-            )
-            tool_calls.append(call)
-            if on_tool_call is not None:
-                on_tool_call(tool_calls)
+            build_id = call.result.build_id or build_id
             yield chat_stream.tool_input_start(call.call_id, call.name)
             yield chat_stream.tool_input_available(call.call_id, call.name, call.arguments)
-            yield chat_stream.tool_output_available(call.call_id, result.as_dict())
+            yield chat_stream.tool_output_available(call.call_id, call.result.as_dict())
             messages.append(_assistant_tool_message("", call))
             messages.append(
-                {"role": "tool", "tool_call_id": call.call_id, "content": passage_block(result)}
+                {
+                    "role": "tool",
+                    "tool_call_id": call.call_id,
+                    "content": passage_block(call.result),
+                }
             )
             continue
 
@@ -428,7 +453,18 @@ async def _stream_completion(
     *,
     tool_choice: str,
 ) -> AsyncIterator[Any]:
-    """One streamed model step, closed on the way out however it ends."""
+    """One streamed model step, closed on the way out however it ends.
+
+    ``tool_choice: "required"`` is sent with thinking switched off. OpenRouter
+    routes ``qwen/qwen3.8-flash`` to a provider whose reasoning mode rejects a
+    forced tool choice with a 400 ("The tool_choice parameter does not support
+    being set to required or object in thinking mode"), so the two cannot be
+    combined. The flag goes in ``extra_body`` because that is what reaches the
+    provider verbatim; LiteLLM maps it to the provider's own spelling. ``auto``
+    and ``none`` are sent with the model's own default, because neither asks the
+    provider for anything it cannot do in thinking mode.
+    """
+    forced = tool_choice == "required"
     stream = await litellm.acompletion(
         model=model,
         api_base=settings.LLM_BASE_URL,
@@ -439,6 +475,12 @@ async def _stream_completion(
         tools=[ask_chat.SEARCH_DOCUMENTS_TOOL],
         tool_choice=tool_choice,
         stream=True,
+        # One attempt is one HTTP call. LiteLLM's default retries a request it has
+        # already been told is invalid, which would send a refused `required` call
+        # three times and delay this module's own recovery by the backoff; the
+        # recovery below is the retry policy.
+        num_retries=0,
+        **({"extra_body": {"reasoning": {"enabled": False}}} if forced else {}),
     )
     try:
         async for chunk in stream:
@@ -449,6 +491,98 @@ async def _stream_completion(
         closer = getattr(stream, "aclose", None)
         if closer is not None:
             await closer()
+
+
+class _ToolChoiceUnsupported(RuntimeError):
+    """The provider refused a forced tool choice before emitting anything.
+
+    This is a capability mismatch between a provider and the request, not a defect
+    in the member's question: on 2026-11-15 OpenRouter routed `LLM_MODEL` to a
+    provider that answers 400 "The tool_choice parameter does not support being
+    set to required or object in thinking mode" for every turn. The step is
+    retried unforced and the turn then falls back to the server's own search, so
+    the product keeps answering rather than failing every question.
+    """
+
+
+async def _step_chunks(
+    settings: Settings,
+    model: str,
+    messages: list[dict[str, Any]],
+    *,
+    forced: bool,
+    at_limit: bool,
+) -> AsyncIterator[Any]:
+    """One step's chunks, with a provider's ``tool_choice`` refusal typed.
+
+    A 400 raised while *opening* the step, before any chunk arrived, means the
+    provider rejected the request shape. Only a forced step can be refused this
+    way, so only a forced step is retried; a 400 on an unforced step is a real
+    failure and is re-raised.
+    """
+    choice = "none" if at_limit else ("required" if forced else "auto")
+    try:
+        async for chunk in _stream_completion(settings, model, messages, tool_choice=choice):
+            yield chunk
+    except Exception as exc:
+        if forced and _is_tool_choice_rejection(exc):
+            LOGGER.warning(
+                "The provider refused tool_choice=required (%s); retrying unforced",
+                type(exc).__name__,
+            )
+            raise _ToolChoiceUnsupported(str(exc)) from exc
+        raise
+
+
+def _is_tool_choice_rejection(exc: Exception) -> bool:
+    """True when a provider's 400 names a ``tool_choice`` limitation.
+
+    The sentence is matched rather than the exception class, because LiteLLM
+    surfaces it as ``BadRequestError`` — the same class as any other 400 — and
+    only the text distinguishes "this provider cannot force a tool call" from
+    "your request is malformed".
+    """
+    text = str(exc).lower()
+    if "tool_choice" not in text:
+        return False
+    return "does not support" in text or "not supported" in text or "unsupported" in text
+
+
+async def _server_search(
+    coordinator: IndexCoordinator,
+    settings: Settings,
+    question: str,
+    *,
+    on_tool_call: Callable[[list["ToolCall"]], None] | None,
+    tool_calls: list["ToolCall"],
+    previous: str | None,
+) -> "ToolCall":
+    """Run the one tool on the member's own message, as the server's fallback.
+
+    FR-005 requires this: a first step that arrives without a tool call — whether
+    the model ignored the hint or the provider refused the forced step — still
+    ends in a retrieval, so the grounding verdict always has evidence to judge.
+    """
+    search_started = time.monotonic()
+    result = await ask_chat.search_documents(
+        coordinator,
+        settings.product_db_path,
+        {"query": question},
+        max_passage_chars=settings.ASK_CHAT_MAX_PASSAGE_CHARS,
+        max_displayed_hits=settings.MAX_DISPLAYED_HITS,
+    )
+    call = ToolCall(
+        call_id="server",
+        name=ask_chat.TOOL_NAME,
+        arguments={"query": question},
+        result=result,
+        duration_ms=int((time.monotonic() - search_started) * 1000),
+    )
+    tool_calls.append(call)
+    if on_tool_call is not None:
+        on_tool_call(tool_calls)
+    del previous
+    return call
 
 
 def _check_deadline(deadline: float) -> None:

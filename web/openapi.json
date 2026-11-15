@@ -136,10 +136,11 @@
         "type": "object"
       },
       "AskChatRenameRequest": {
-        "description": "A new thread title. The store trims it, so the length is measured after trimming.",
+        "description": "A new thread title.\n\nThe bound is on the **trimmed** title, and the store is the one that applies\nit: whitespace is collapsed and stripped, and only then is the length checked\nagainst 120. That is why this field's `max_length` is a payload guard rather\nthan the rule — a title of exactly 120 characters arriving with trailing\nspaces is a valid rename, and a field that measured the raw string would\nrefuse it. `min_length` is 1 so an entirely empty body field is still a\nvalidation error; a whitespace-only title passes here and is refused by the\nstore as empty-after-trimming, which is the same 400 either way.",
         "properties": {
           "title": {
-            "maxLength": 120,
+            "description": "The new title. Leading and trailing whitespace is removed before the 1 to 120 character limit is applied.",
+            "maxLength": 1000,
             "minLength": 1,
             "title": "Title",
             "type": "string"
@@ -4181,7 +4182,7 @@
     },
     "/ask/chat/threads/{thread_id}": {
       "delete": {
-        "description": "Remove the thread and its turns. The interactions and votes behind them stay (D-9).",
+        "description": "Remove the thread and its turns. The interactions and votes behind them stay (D-9).\n\nA delete is idempotent for the member who owns the thread: the second call\nanswers 204 exactly as the first did, because \"it is gone\" is the outcome the\ncaller asked for. An id that was never this member's — another member's, or one\nthat never existed — answers 404, so a delete is still not a way to probe for\nsomebody else's ids. The two are told apart by a marker row written in the same\ntransaction as the delete, not by the thread's absence.",
         "operationId": "delete_ask_chat_thread",
         "parameters": [
           {
@@ -4276,7 +4277,7 @@
         ]
       },
       "patch": {
-        "description": "Set a title of 1 to 120 characters. A title outside that is 400, stored unchanged.",
+        "description": "Rename a conversation.\n\nThe title is trimmed first and measured after: one to 120 characters once\nsurrounding whitespace is gone. A title that is empty after trimming, or\nlonger than 120 then, is a 400 and the stored title is unchanged.",
         "operationId": "rename_ask_chat_thread",
         "parameters": [
           {

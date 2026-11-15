@@ -239,6 +239,53 @@ describe("the Ask page", () => {
     expect(calls.find((call) => call.method === "DELETE")?.url).toBe("/ask/chat/threads/thread-1");
   });
 
+  it("treats a deleted conversation as deleted, not as a failure to delete", async () => {
+    // The server answers 204 for a thread the member already deleted and 404 for
+    // an id that was never theirs, so neither may surface as a failure: the
+    // thread is gone, which is what pressing Delete asked for. The generated
+    // client is stubbed here because a relative URL cannot be built under jsdom;
+    // what is under test is the service's handling of the result shapes.
+    vi.resetModules();
+    vi.doMock("@/client", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@/client")>();
+      return {
+        ...actual,
+        deleteAskChatThread: vi.fn(async ({ path }: { path: { thread_id: string } }) => {
+          // A successful delete carries no body and no error.
+          if (path.thread_id === "thread-ok") {
+            return {
+              data: undefined,
+              error: undefined,
+              response: new Response(null, { status: 204 }),
+            };
+          }
+          // A retried delete: the server says the id is not this member's.
+          if (path.thread_id === "thread-again") {
+            return {
+              data: undefined,
+              error: { detail: "No conversation with that id." },
+              response: new Response(null, { status: 404 }),
+            };
+          }
+          // A real failure must still surface.
+          return {
+            data: undefined,
+            error: { detail: "The server is having trouble." },
+            response: new Response(null, { status: 500 }),
+          };
+        }),
+      };
+    });
+    const { askChatService: service } = await import("@/services/ask-chat-service");
+    await expect(service.deleteThread("thread-ok")).resolves.toBeUndefined();
+    // A retried delete is a success, not an error the member cannot act on.
+    await expect(service.deleteThread("thread-again")).resolves.toBeUndefined();
+    // The tolerance is narrow: a real failure is still reported.
+    await expect(service.deleteThread("thread-broken")).rejects.toThrow();
+    vi.doUnmock("@/client");
+    vi.resetModules();
+  });
+
   it("starts a conversation from the empty state and creates one on the server", async () => {
     const calls = stubApi({ threads: [], detail: { thread: THREAD, turns: [] } }, () =>
       streamResponse(answerFrames()),

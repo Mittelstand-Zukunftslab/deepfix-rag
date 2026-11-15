@@ -147,6 +147,11 @@ _SCHEMA = f"""
         started_at TEXT NOT NULL,
         ended_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS ask_chat_deleted_threads (
+        thread_id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        deleted_at TEXT NOT NULL
+    );
 """
 
 # One index per load query, plus the owner lookup the rate limit counts on.
@@ -361,7 +366,7 @@ def get_thread(db_path: Path, thread_id: str, owner_id: str) -> Thread:
 
 
 def rename_thread(db_path: Path, thread_id: str, owner_id: str, title: str) -> Thread:
-    """Set a thread's title. One to 120 characters; anything else is refused, unchanged."""
+    """Set a thread's title, measuring the trimmed title against 1..120 characters."""
     cleaned = _checked_title(title)
     get_thread(db_path, thread_id, owner_id)
     with connect(db_path) as conn:
@@ -644,7 +649,14 @@ class TurnBusy(RuntimeError):
 
 
 def _checked_title(title: str) -> str:
-    """The trimmed title, or a ``ValueError`` when it is empty or longer than 120."""
+    """The title collapsed to one line and trimmed, or a ``ValueError`` when it fails.
+
+    The 120-character limit applies to the **trimmed** title, so trailing or
+    leading whitespace never counts against a member's budget. A title that is
+    empty once trimmed is refused, which is the same 400 as one that is too long.
+    This is the one place the rule lives; the route's field only guards the raw
+    payload against an absurd size.
+    """
     cleaned = _WHITESPACE.sub(" ", title).strip()
     if not 1 <= len(cleaned) <= TITLE_MAX_CHARS:
         raise ValueError(f"A thread title must be 1 to {TITLE_MAX_CHARS} characters.")
@@ -654,10 +666,14 @@ def _checked_title(title: str) -> str:
 def delete_thread(db_path: Path, thread_id: str, owner_id: str) -> bool:
     """Hard-delete one thread, its turns first, in one transaction (D-9).
 
-    Returns ``True`` when this call removed it and ``False`` when there was
-    nothing of this member's to remove, which the route answers 404 either way
-    so another member's id does not leak. The turn's ``interactions`` row, its
-    hits, and its votes are deliberately untouched.
+    Returns ``True`` when this call removed the thread, ``False`` when the member
+    already deleted it, and raises ``KeyError`` when the id is not one of theirs.
+    The marker row is what keeps the two apart after the thread is gone: without
+    it, "deleted a moment ago" and "never yours" would be the same observation,
+    and the route could not answer 204 for the first and 404 for the second.
+
+    The turn's ``interactions`` row, its hits, and its votes are deliberately
+    untouched.
     """
     init_ask_chat(db_path)
     with connect(db_path) as conn:
@@ -667,6 +683,17 @@ def delete_thread(db_path: Path, thread_id: str, owner_id: str) -> bool:
             (thread_id, owner_id),
         ).fetchone()
         if row is None:
+            # Not a live thread of this member's: either they deleted it already,
+            # which is a delete that succeeded, or it was never theirs.
+            already = conn.execute(
+                """
+                SELECT 1 FROM ask_chat_deleted_threads
+                WHERE thread_id = ? AND owner_id = ?
+                """,
+                (thread_id, owner_id),
+            ).fetchone()
+            if already is None:
+                raise KeyError(thread_id)
             return False
         conn.execute(
             "DELETE FROM ask_chat_turns WHERE thread_id = ? AND owner_id = ?",
@@ -675,6 +702,16 @@ def delete_thread(db_path: Path, thread_id: str, owner_id: str) -> bool:
         conn.execute(
             "DELETE FROM ask_chat_threads WHERE thread_id = ? AND owner_id = ?",
             (thread_id, owner_id),
+        )
+        # Written in the same transaction as the delete, so a failed delete leaves
+        # no marker behind and the retry is a real delete.
+        conn.execute(
+            """
+            INSERT INTO ask_chat_deleted_threads (thread_id, owner_id, deleted_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(thread_id) DO UPDATE SET deleted_at = excluded.deleted_at
+            """,
+            (thread_id, owner_id, _now()),
         )
     return True
 

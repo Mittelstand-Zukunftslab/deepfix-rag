@@ -110,6 +110,24 @@ class TurnTrace:
         except Exception:
             LOGGER.exception("MLflow turn tag failed for this turn")
 
+    def failed(self, reason: str) -> None:
+        """Mark the trace ``ERROR``, which is the trace's state rather than a tag.
+
+        A failed turn must not read as a healthy trace in the MLflow UI: the tag
+        says what the status was, and this says the trace itself failed, so a
+        reviewer filtering by state sees it. ``LiveSpan.set_status`` takes the
+        status alone — the description goes on the span's attributes, because this
+        MLflow version's signature has no second argument. Best effort, like every
+        other call here: a member's answer must not depend on MLflow.
+        """
+        try:
+            if self._span is None:
+                return
+            self._span.set_attributes({"deepfix.failure": reason})
+            self._span.set_status("ERROR")
+        except Exception:
+            LOGGER.exception("MLflow turn status failed for this turn")
+
 
 @contextmanager
 def turn_trace(
@@ -120,31 +138,36 @@ def turn_trace(
     """Open one chat turn's trace, tag it, and close it whatever happens.
 
     Yields a :class:`TurnTrace` even when tracing is unavailable — with a ``None``
-    trace id — so the caller never branches on whether MLflow is up.
+    trace id — so the caller never branches on whether MLflow is up. A failure to
+    *open* the trace is logged and the turn runs untraced; a failure from the
+    caller's own body is re-raised, because swallowing it here would hide a real
+    turn failure behind a tracing concern.
     """
     try:
         import mlflow
 
         mlflow.set_experiment(PRODUCT_EXPERIMENT)
-        with mlflow.start_span(name="ask_chat") as span:
-            trace_id = str(span.trace_id) if span.trace_id else None
-            trace = TurnTrace(trace_id, span)
-            span.set_inputs(inputs)
-            if trace_id is not None:
-                try:
-                    mlflow.set_trace_tag(trace_id, "interaction_id", interaction_id)
-                    for key, value in tags.items():
-                        if value:
-                            mlflow.set_trace_tag(trace_id, key, value)
-                except Exception:
-                    LOGGER.exception("MLflow turn tags failed for this turn")
-            try:
-                yield trace
-            finally:
-                try:
-                    mlflow.flush_trace_async_logging()
-                except Exception:
-                    LOGGER.exception("MLflow flush failed for this turn")
+        span = mlflow.start_span(name="ask_chat")
     except Exception:
         LOGGER.exception("MLflow tracing failed for %s", interaction_id)
         yield TurnTrace(None, None)
+        return
+    with span as live:
+        trace_id = str(live.trace_id) if live.trace_id else None
+        trace = TurnTrace(trace_id, live)
+        live.set_inputs(inputs)
+        if trace_id is not None:
+            try:
+                mlflow.set_trace_tag(trace_id, "interaction_id", interaction_id)
+                for key, value in tags.items():
+                    if value:
+                        mlflow.set_trace_tag(trace_id, key, value)
+            except Exception:
+                LOGGER.exception("MLflow turn tags failed for this turn")
+        try:
+            yield trace
+        finally:
+            try:
+                mlflow.flush_trace_async_logging()
+            except Exception:
+                LOGGER.exception("MLflow flush failed for this turn")

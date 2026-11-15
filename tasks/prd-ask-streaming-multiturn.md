@@ -1,13 +1,29 @@
 # PRD: Ask becomes a streaming, multi-turn chat with the RAG as a tool
 
-> **Status: plan. Nothing here is implemented.** Drafted against the tree at
-> `642f720`, re-reviewed at `223a122` on `feat/hermes-optimizer`, 15 November
-> 2026, after ASK-001, ASK-002 and ASK-006 landed. All decisions are settled:
-> **D-1 … D-6 and D-8** while the document was written, **D-7 and D-9 … D-11**
-> by the product owner on 2026-11-15. Validated with `validate-prd` — see
+> **Status: built. ASKCHAT-001 … ASKCHAT-010 are implemented and committed on
+> `feat/ask-chat-streaming`; ASKCHAT-011 is a prepared operator runbook that has
+> not been run.** Drafted against the tree at `642f720`, re-reviewed at `223a122`
+> on `feat/hermes-optimizer`, 15 November 2026, after ASK-001, ASK-002 and
+> ASK-006 landed. All decisions are settled: **D-1 … D-6 and D-8** while the
+> document was written, **D-7 and D-9 … D-11** by the product owner on
+> 2026-11-15.
+>
+> **This revision is the post-implementation correction pass.** It describes what
+> was actually built rather than what was planned, and it fixes the fifteen places
+> the stories turned out to be wrong plus two behaviours inherited from ASKCHAT-001
+> (see "Corrections after implementation" below). Every correction is a change to
+> this document and to `tasks/stories-ask-chat/`; **no production code changed in
+> this pass**.
+>
+> Two behaviours are documented as current and **left as open decisions** rather
+> than quietly fixed: a `DELETE` of an already-deleted thread answers 404 (not an
+> idempotent 204), and `rename_thread` trims before it measures the 120-character
+> bound, so the route's `max_length` and the store disagree at the edge. See
+> "Open questions".
+>
+> Validated with `validate-prd` — see
 > `tasks/prd-ask-streaming-multiturn-validation.md` and "Validation
-> (validate-prd)" below. There are no open questions. The stories are in
-> `tasks/stories-ask-chat/`.
+> (validate-prd)" below. The stories are in `tasks/stories-ask-chat/`.
 
 ## Overview
 
@@ -163,7 +179,11 @@ tool's *schema* is declared once, in Python, and mirrored by a Zod schema in
 
 ### D-2: `search_documents` is the only tool, it always runs, and it returns the cutoff's survivors
 
-The tool's contract, declared in `src/deepfix_rag/ask_chat.py`:
+The tool's contract is declared once, as `SEARCH_DOCUMENTS_SCHEMA` in
+`src/deepfix_rag/ask_chat.py`. The OpenAI-style function definition the loop
+sends (`SEARCH_DOCUMENTS_TOOL`) is built from that same object at import time, so
+the schema the provider validates against and the schema the tests and the loop
+read cannot be two different things.
 
 ```jsonc
 // input
@@ -182,7 +202,8 @@ The tool's contract, declared in `src/deepfix_rag/ask_chat.py`:
   `QueryService.retrieve` through the same `IndexCoordinator.checkout()` /
   `release()` lease the `/retrieval` and `/ask` routes use, so it reads the
   champion's `retrieval.top_k` → rerank → `rerank.top_n` window, and it is
-  pinned to one build for the whole turn.
+  pinned to one build for the whole turn. The lease is released in a `finally`,
+  so a raised error cannot pin a build that is being replaced.
 - **The relevance floor is ASK-002's setting, and it is already applied.** Passages
   below `rerank.min_relevance_score` never reach the tool: `QueryService.retrieve`
   → `_search_split` → `RAGWorkflow._ranker_split` drops them, so the tool reports
@@ -191,6 +212,11 @@ The tool's contract, declared in `src/deepfix_rag/ask_chat.py`:
   survives, the tool returns `grounding: "no_relevant_sources"` and zero
   passages, and the model is instructed to say it does not have enough
   information.
+- **`displayed_limit` lives in the domain layer.** It moved from
+  `src/deepfix_rag/api/routes/retrieval.py` to `src/deepfix_rag/service.py`, beside
+  `INDEX_PREPARING`, so the tool can reuse the product's one definition of "how
+  many passages a member sees" without the domain layer importing from the HTTP
+  layer. `POST /retrieval`, `POST /ask`, and the tool all read that same function.
 - **A turn always retrieves.** The first model step is made with
   `tool_choice: "required"`. If that step still ends without a tool call — a
   provider that ignores the hint, a malformed frame — **the server executes
@@ -207,6 +233,9 @@ The tool's contract, declared in `src/deepfix_rag/ask_chat.py`:
   contain "ignore your instructions".
 - **No tool writes anything.** There is exactly one tool, it is read-only, and
   the route rejects any other `toolName` the model emits instead of looping.
+- **A bad argument is data, not a failure.** A `query` that fails the declared
+  schema makes the tool return `{"error": "…"}` as that call's output, and the
+  model may correct it and call again. The turn does not fail on it.
 
 ### D-3: Grounding is the ASK- status plus a separate citation verdict
 
@@ -247,13 +276,21 @@ passages that pass the cutoff" without touching the ASK- enum.
 
 ### D-4: Stop cancels the model stream, keeps the text, and keeps the evidence
 
-The browser's `Chat` abort closes the fetch; ASGI reports the disconnect; the
-route cancels the generator. Then:
+The browser's `Chat` abort closes the fetch. Starlette then **closes the relay
+generator**, which unwinds the loop as a `GeneratorExit` — not as an `Exception`,
+so `except Exception` never sees it. That single fact shaped the implementation:
+the relay's terminal state is written in a `finally`, and the cancelled path is
+caught explicitly. The first attempt used `except Exception` alone and left the
+row `running`; a real-socket test is what caught it, and a `TestClient` never
+could, because it cannot abort mid-stream.
 
-- The partial assistant text is kept and stored, as the admin chat does
-  (`admin_chat.update_assistant_text` is its analogue). A stopped turn is
-  readable, not lost.
-- Tool results already obtained are kept, so the sources panel survives Stop.
+Then:
+
+- The partial assistant text is kept and stored, written on every delta so a
+  resume replays exactly what the member had read. A stopped turn is readable,
+  not lost.
+- Tool results already obtained are kept, because they are written as each search
+  completes rather than at the end. The sources panel survives Stop.
 - The turn is stored `cancelled` with `ended_at`, and a `data-deepfix-turn` part
   carrying that status is still emitted before the stream closes, so the UI and a
   later resume agree.
@@ -262,8 +299,14 @@ route cancels the generator. Then:
   abandons the *wait*, not the HTTP request to OpenRouter, which runs to
   completion and bills every token. The tool loop therefore calls
   `litellm.acompletion(..., stream=True)` directly and closes the async
-  generator on cancellation. This is a requirement, not an implementation
+  generator in a `finally`. This is a requirement, not an implementation
   detail: without it Stop does not stop cost.
+- **`drop_params` is set once, at import.** `litellm_additional_kwargs()` calls
+  `configure_litellm_drop_params()`, which assigns the process-wide
+  `litellm.drop_params` flag; `src/deepfix_rag/llm.py` already calls it on import.
+  The loop reads the flag rather than re-setting it per model step, because a
+  global side effect inside a request is a race with any other request in the
+  same process. The effective value is identical.
 - Stop never deletes a turn, never cancels anything else, and never touches a
   feedback vote.
 
@@ -277,15 +320,62 @@ the table rebuild D-5 exists to avoid. `clear` already deletes the mirrored MLfl
 assessment (`mlflow.delete_assessment` in `feedback.py`), which is exactly the
 intent.
 
+Two rules the first draft left implicit and the implementation had to settle:
+
+- **A running turn is never replaced.** Regenerate resolves its target from the
+  newest turn in the store, and if that turn is `running` the request answers
+  **409** rather than replacing a reply that is still being written. Without the
+  check, a reload pressed twice would race two writers onto one answer.
+- **A `failed` turn is a valid target.** FR-018 offers regenerate for a failed
+  answer, so `failed` must be replaceable; only `running` is refused. The target
+  set is `completed`, `failed`, `cancelled`.
+- **A regenerate reuses the turn's one `interactions` row.** The row is opened
+  before the first byte and rewritten in place, so a regenerate does not create a
+  second row and the thread's join stays one-to-one (FR-019).
+
 ### D-5: Threads are server-side, per member; localStorage is imported once
 
 New tables in the same SQLite database the API already uses
-(`settings.product_db_path`, via `deepfix_rag.storage.connect`):
+(`settings.product_db_path`, via `deepfix_rag.storage.connect`), as built:
 
 | Table | Columns |
 | :--- | :--- |
-| `ask_chat_threads` | `thread_id` PK, `title`, `owner_id`, `owner_email`, `created_at`, `updated_at` |
+| `ask_chat_threads` | `thread_id` PK, `title`, `owner_id`, `owner_email`, `created_at`, `updated_at`, `legacy_session_id` |
 | `ask_chat_turns` | `turn_id` PK, `thread_id`, `owner_id`, `seq`, `status` (`running`/`completed`/`failed`/`cancelled`), `retry_of`, `error`, `grounding`, `citations` (JSON), `retrieval_query`, `first_token_ms`, `started_at`, `ended_at` |
+
+`legacy_session_id` is the browser session a thread was imported from, and it is
+what makes FR-033 idempotent **per session id** rather than per payload: a member
+who loads two browsers must not duplicate the first browser's threads. It is
+nullable, because a thread created in the product has no legacy session. It was
+added by ASKCHAT-009 with the same `PRAGMA table_info` + `ALTER TABLE … ADD COLUMN`
+guard the `interactions` columns use, so an existing database gains it in place.
+
+**The turn table holds turn state only.** The question and the answer are *not* in
+`ask_chat_turns`: they live in the `interactions` row the turn links to through
+`interactions.turn_id`, because FR-019 requires exactly one such row per assistant
+turn and it must be the row votes, history, the MLflow mirror, and the export read.
+The two reads a thread load makes therefore join it — a thread load is the thread,
+its turns, and each turn's `interactions` row:
+
+```sql
+-- turns by thread: the state columns, plus the answer the interaction holds
+SELECT t.turn_id, t.thread_id, t.owner_id, t.seq, t.status, t.retry_of, t.error,
+       t.grounding, t.citations, t.retrieval_query, t.first_token_ms, t.started_at,
+       t.ended_at, i.interaction_id, i.query AS question, i.answer
+FROM ask_chat_turns AS t
+LEFT JOIN interactions AS i ON i.turn_id = t.turn_id
+WHERE t.thread_id = ? AND t.owner_id = ? ORDER BY t.seq
+```
+
+A `LEFT JOIN`, not an inner one: a turn that is still `running` has no interaction
+yet, and it must load with nulls rather than disappear from the thread. The
+one-to-one shape is guaranteed by FR-019's single-row rule, not by the query.
+
+`GET /ask/chat/threads/{thread_id}` also returns each turn's **stored passages**,
+read from that interaction's `interaction_hits`. This was not in the first draft
+and is required for FR-007: a reload has no `tool-output-available` part to read,
+so the stored hit snapshot is the only way to rebuild the sources panel without a
+request per answer.
 
 `interactions` gains two nullable columns, added with `ALTER TABLE … ADD COLUMN`
 the way `user_email` was: `thread_id` and `turn_id`. Nothing else about that
@@ -296,18 +386,38 @@ table changes — **in particular the `kind` CHECK stays
 split working without a migration or a second code path. A new kind would force
 a table rebuild and would hide member chat from the admin history screen.
 
-Titles are derived (first 60 characters of the first user message, as
-`admin_chat` does). Isolation is by `owner_id` on every read and write; another
+Those two columns have **one writer**: `interactions.link_interaction`, which
+carries the ownership check. The row is inserted before the first byte (so a
+cancelled turn can be read at all) and filled in afterwards by
+`interactions.replace_interaction`, which replaces its hits wholesale because a
+regenerate may have found different passages.
+
+Titles are derived (first 120 characters of the first user message, collapsed to
+one line). Isolation is by `owner_id` on every read and write; another
 member's thread id answers 404, exactly as `GET /interactions/{id}` does today.
+
+**Two current behaviours in this area are open decisions, not settled design.**
+They are documented in "Open questions" and were deliberately not changed in the
+documentation pass:
+
+- `DELETE /ask/chat/threads/{thread_id}` answers **404** when the thread is
+  already gone, where the admin chat answers an idempotent 204. A retried delete
+  therefore looks like a failure to a client that does not special-case it.
+- `ask_chat.rename_thread` trims the title and *then* measures it against the
+  120-character bound, while the route's Pydantic field caps the raw string. A
+  title of 120 characters plus trailing spaces is accepted by the store and
+  refused by the route, so the two disagree at the edge.
 
 **localStorage**: imported once per member, best effort. `deepfix.chat_sessions.v2:<ownerId>`
 holds sessions whose turns carry `interactionId` values that already exist in the
 database. The import creates one thread per session, one turn per stored turn,
 and links them by interaction id; a turn whose interaction no longer exists, or
-belongs to someone else, is skipped rather than invented. After a successful
-import the keys are deleted. If ASKCHAT-009 is cut, the fallback is the same
-deletion with a one-time notice — no member is left on a store the server cannot
-see, and nothing is silently duplicated.
+belongs to someone else, is skipped and counted rather than invented. The wire
+payload is **snake_case** (`interaction_id`, `created_at`), and the request model
+accepts the retired page's camelCase (`interactionId`, `createdAt`) as aliases, so
+an older browser's payload is still understood. After an import the keys are
+deleted whatever the outcome, with one notice if it failed — no member is left on a
+store the server cannot see, and nothing is silently duplicated.
 
 ### D-6: The served retrieval is the scored retrieval
 
@@ -624,7 +734,7 @@ may slip one release), or **Could** (nice, unplanned).
 | ID | Requirement | Priority | Rationale |
 | :--- | :--- | :--- | :--- |
 | FR-001 | The agent loop must run in deepfix-api. The browser must reach it only through the same-origin `/api/ask/chat/*` path on the existing BFF proxy, must receive no model key and no model id, and must receive the AI SDK UI message stream (`x-vercel-ai-ui-message-stream: v1`) as `src/deepfix_rag/api/chat_stream.py` already emits it. | Must | G7, D-1. One credential holder; the admin chat proves the protocol works through this proxy. |
-| FR-002 | The stream must carry `start`, `start-step`, `text-start`, `text-delta`, `text-end`, `tool-input-start`, `tool-input-available`, `tool-output-available`, `finish-step`, `finish`, `data-deepfix-grounding`, `data-deepfix-turn`, `error`, and `data: [DONE]`, in that grammar, and must not be buffered: the first delta reaches the browser when the model produced it. | Must | G1, D-1. The AI SDK's parser and Assistant UI's message parts are what render this; anything else needs a hand-written renderer. |
+| FR-002 | The stream must carry these parts, in **this** grammar: `start` once; then, **per model step**, `start-step`, a `text-start`/`text-delta`*/`text-end` group for whatever prose that step produced, and `finish-step`; a tool call's `tool-input-start`, `tool-input-available`, and `tool-output-available` are emitted between one step's `finish-step` and the next step's `start-step`, because they belong to the boundary between steps; then one `data-deepfix-grounding`, one `data-deepfix-turn`, `finish`, and `data: [DONE]`. `error` may appear in place of the per-step prose when a step fails. Nothing is buffered: the first delta reaches the browser when the model produced it. | Must | G1, D-1. The AI SDK's parser and Assistant UI's message parts are what render this; anything else needs a hand-written renderer. A two-step turn emits **two** `start-step`/`finish-step` pairs, so the sequence is a grammar rather than one fixed list — the first draft's single linear order was not emittable. |
 | FR-003 | `POST /ask/chat/completions` must accept `{thread_id, messages}` for a signed-in member, rebuild the conversation from the store, and answer 401 unsigned, 404 for another member's thread, 429 over a limit, and 503 while the index is preparing, each with a sentence the UI shows. | Must | G4, G7. Same contract the admin chat's route already has, with the member's role instead of admin. |
 | FR-004 | `search_documents` must be the only tool, must run on the serving index through `QueryService.retrieve` with the champion config, must return only what survives the landed `rerank.min_relevance_score` floor (which that path already applies — the tool reports, it does not re-filter), and must return the passage shape in D-2. Its depth must come from the existing `displayed_limit(config, MAX_DISPLAYED_HITS)` helper — `rerank.top_n` when rerank is on, `retrieval.top_k` otherwise, then the display cap — and a requested `top_k` must be clamped into `[1, displayed_limit(...)]`, never widening what the single-turn product would show. | Must | G3, D-2, G6. The floor is the grounding decision and it already lives in one place; the tool's window must be the product's window, not a second one. |
 | FR-005 | Every turn must retrieve. The first model step must be sent with `tool_choice: "required"`; if that step ends with no tool call, the server must execute `search_documents` itself with the user's message, append the result, and continue. A turn must make at most `ASK_CHAT_MAX_TOOL_CALLS` tool calls and the last permitted step must be sent with `tool_choice: "none"`. An unknown `toolName` must be rejected, not executed. | Must | G3, D-2. Otherwise "no retrieval happened" is representable, and the grounding verdict becomes a guess. |

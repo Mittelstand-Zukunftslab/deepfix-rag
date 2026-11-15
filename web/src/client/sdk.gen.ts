@@ -251,6 +251,13 @@ export const importAskChatSessions = <ThrowOnError extends boolean = false>(opti
  * Delete a conversation, keeping the votes it recorded
  *
  * Remove the thread and its turns. The interactions and votes behind them stay (D-9).
+ *
+ * A delete is idempotent for the member who owns the thread: the second call
+ * answers 204 exactly as the first did, because "it is gone" is the outcome the
+ * caller asked for. An id that was never this member's — another member's, or one
+ * that never existed — answers 404, so a delete is still not a way to probe for
+ * somebody else's ids. The two are told apart by a marker row written in the same
+ * transaction as the delete, not by the thread's absence.
  */
 export const deleteAskChatThread = <ThrowOnError extends boolean = false>(options: Options<DeleteAskChatThreadData, ThrowOnError>): RequestResult<DeleteAskChatThreadResponses, DeleteAskChatThreadErrors, ThrowOnError> => (options.client ?? client).delete<DeleteAskChatThreadResponses, DeleteAskChatThreadErrors, ThrowOnError>({ url: '/ask/chat/threads/{thread_id}', ...options });
 
@@ -269,7 +276,11 @@ export const getAskChatThread = <ThrowOnError extends boolean = false>(options: 
 /**
  * Rename a conversation
  *
- * Set a title of 1 to 120 characters. A title outside that is 400, stored unchanged.
+ * Rename a conversation.
+ *
+ * The title is trimmed first and measured after: one to 120 characters once
+ * surrounding whitespace is gone. A title that is empty after trimming, or
+ * longer than 120 then, is a 400 and the stored title is unchanged.
  */
 export const renameAskChatThread = <ThrowOnError extends boolean = false>(options: Options<RenameAskChatThreadData, ThrowOnError>): RequestResult<RenameAskChatThreadResponses, RenameAskChatThreadErrors, ThrowOnError> => (options.client ?? client).patch<RenameAskChatThreadResponses, RenameAskChatThreadErrors, ThrowOnError>({
     url: '/ask/chat/threads/{thread_id}',

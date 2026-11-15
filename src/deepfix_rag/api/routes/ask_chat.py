@@ -55,7 +55,12 @@ from deepfix_rag.config.settings import LOGGER, Settings
 from deepfix_rag.documents import document_filenames
 from deepfix_rag.grounding import Grounding
 from deepfix_rag.indexing import IndexCoordinator
-from deepfix_rag.interactions import get_interaction, replace_interaction, update_answer
+from deepfix_rag.interactions import (
+    get_interaction,
+    replace_interaction,
+    set_trace_id,
+    update_answer,
+)
 from deepfix_rag.service import INDEX_PREPARING
 from deepfix_rag.tracing import TurnTrace, turn_trace
 
@@ -208,7 +213,12 @@ def _stored_passages(
 def rename_ask_chat_thread(
     thread_id: str, payload: AskChatRenameRequest, request: Request
 ) -> AskChatThreadResponse:
-    """Set a title of 1 to 120 characters. A title outside that is 400, stored unchanged."""
+    """Rename a conversation.
+
+    The title is trimmed first and measured after: one to 120 characters once
+    surrounding whitespace is gone. A title that is empty after trimming, or
+    longer than 120 then, is a 400 and the stored title is unchanged.
+    """
     user = current_user(request)
     settings = get_settings(request)
     _owned_thread(settings, thread_id, user)
@@ -229,11 +239,21 @@ def rename_ask_chat_thread(
     summary="Delete a conversation, keeping the votes it recorded",
 )
 def delete_ask_chat_thread(thread_id: str, request: Request) -> Response:
-    """Remove the thread and its turns. The interactions and votes behind them stay (D-9)."""
+    """Remove the thread and its turns. The interactions and votes behind them stay (D-9).
+
+    A delete is idempotent for the member who owns the thread: the second call
+    answers 204 exactly as the first did, because "it is gone" is the outcome the
+    caller asked for. An id that was never this member's — another member's, or one
+    that never existed — answers 404, so a delete is still not a way to probe for
+    somebody else's ids. The two are told apart by a marker row written in the same
+    transaction as the delete, not by the thread's absence.
+    """
     user = current_user(request)
     settings = get_settings(request)
-    if not ask_chat.delete_thread(settings.product_db_path, thread_id, user.id):
-        raise HTTPException(status_code=NOT_FOUND, detail=NO_THREAD_MESSAGE)
+    try:
+        ask_chat.delete_thread(settings.product_db_path, thread_id, user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=NOT_FOUND, detail=NO_THREAD_MESSAGE) from exc
     return Response(status_code=204)
 
 
@@ -577,6 +597,9 @@ def _settle(
     else:
         # A turn with no outcome keeps the question and whatever text was read.
         update_answer(settings.product_db_path, interaction_id, partial)
+        # Its trace id is recorded too, so a failed or stopped turn can be found
+        # from its interaction rather than only from the MLflow experiment.
+        set_trace_id(settings.product_db_path, interaction_id, trace_id)
     # The trace's terminal half: what it produced and how it ended, so a cancelled
     # or failed turn is accounted for too (FR-020, AC 5).
     trace.outputs(
@@ -588,6 +611,10 @@ def _settle(
     )
     trace.tag("status", status)
     trace.tag("grounding", outcome.grounding if outcome else None)
+    if status == "failed":
+        # The trace's own state, not just a tag: a failed turn must not read as a
+        # healthy trace when a reviewer filters by state.
+        trace.failed(failure or "The turn failed.")
     return ask_chat.finish_turn(
         settings.product_db_path,
         turn.turn_id,
@@ -700,6 +727,7 @@ def resume_ask_chat_turn(turn_id: str, request: Request) -> StreamingResponse:
             registry=registry_for(request.app.state),
             db_path=storage,
             turn=turn,
+            displayed_floor=ask_chat.displayed_floor(request.app.state.index),
         ),
         media_type="text/event-stream",
         headers={

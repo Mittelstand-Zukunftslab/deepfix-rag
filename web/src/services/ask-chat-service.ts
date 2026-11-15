@@ -92,14 +92,18 @@ export const askChatService = {
   },
 
   /**
-   * Delete a conversation. A 404 means it is already gone, which is the outcome
-   * the member wanted, so it is not reported as a failure.
+   * Delete a conversation. A retried delete is a success.
+   *
+   * The server answers 204 for a thread the member owns that is already gone, so
+   * a second press does not surface as a failure. A 404 is still handled here as
+   * success: it means the id was never this member's, and a client must not turn
+   * that into an error the member cannot act on either.
    */
   async deleteThread(threadId: string): Promise<void> {
     const result = await deleteAskChatThread({ path: { thread_id: threadId } });
     if (result.error) {
       const status = (result.response as Response | undefined)?.status;
-      if (status === 404) return;
+      if (status === 404 || status === 204) return;
       throw new AskChatError(errorDetail(result.error, "Unable to delete that conversation."));
     }
   },

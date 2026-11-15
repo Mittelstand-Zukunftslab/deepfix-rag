@@ -141,11 +141,19 @@ def test_a_conversation_is_private_to_its_owner_and_a_delete_keeps_the_votes(
             renamed = client.patch(f"/ask/chat/threads/{thread_id}", json={"title": accepted})
             assert renamed.status_code == 200, renamed.text
             assert renamed.json()["title"] == accepted
-        for refused_title in ("", "x" * 121):
+        for refused_title in ("", "   ", "x" * 121):
             refused = client.patch(f"/ask/chat/threads/{thread_id}", json={"title": refused_title})
-            assert refused.status_code in {400, 422}, refused.text
+            assert refused.status_code == 400, refused.text
         unchanged = client.get(f"/ask/chat/threads/{thread_id}").json()["thread"]["title"]
         assert unchanged == "h" * 120
+
+        # The 120-character limit applies to the trimmed title, so the same name
+        # padded with whitespace is accepted and stored without the padding.
+        padded = client.patch(
+            f"/ask/chat/threads/{thread_id}", json={"title": f"  {'h' * 120}\n "}
+        )
+        assert padded.status_code == 200, padded.text
+        assert padded.json()["title"] == "h" * 120
 
         detail = client.get(f"/ask/chat/threads/{thread_id}")
         assert detail.status_code == 200, detail.text
@@ -210,6 +218,16 @@ def test_a_conversation_is_private_to_its_owner_and_a_delete_keeps_the_votes(
         deleted = client.delete(f"/ask/chat/threads/{thread_id}")
         assert deleted.status_code == 204, deleted.text
         assert client.get(f"/ask/chat/threads/{thread_id}").status_code == 404
+
+        # A retried delete is a success, not a 404: the member asked for the
+        # thread to be gone and it is gone. A member who never owned the id still
+        # gets 404, so the idempotence does not become a probe.
+        assert client.delete(f"/ask/chat/threads/{thread_id}").status_code == 204
+        assert client.delete("/ask/chat/threads/never-existed").status_code == 404
+        identity.sign_in(client, BEA)
+        assert client.delete(f"/ask/chat/threads/{thread_id}").status_code == 404
+        assert client.delete("/ask/chat/threads/never-existed").status_code == 404
+        identity.sign_in(client, ADA)
 
         # D-9: the conversation is gone and the evidence behind it is not.
         assert _count(db_path, "ask_chat_threads") == 1
@@ -379,3 +397,88 @@ def test_the_schema_is_idempotent_and_checks_its_statuses(settings: Settings) ->
             """,
             (thread.thread_id, datetime.now(timezone.utc).isoformat()),
         )
+
+
+def test_deleting_a_thread_twice_is_a_success_and_keeps_the_evidence(
+    settings: Settings, identity: IdentityIssuer
+) -> None:
+    """A retried delete answers 204, while another member's id still answers 404.
+
+    Idempotence is what a client that retries a dropped response needs: "it is
+    gone" is the outcome the member asked for, so answering 404 would report a
+    failure for a request that succeeded. The distinction from "never yours" is
+    held by a marker row written in the same transaction as the delete, so the
+    retry cannot become a way to probe for somebody else's thread ids.
+
+    The evidence the optimizer keeps is unchanged by either call: the
+    `interactions` rows, their hits, and the votes survive, because D-9 says a
+    member loses the conversation and not the record of their judgement.
+    """
+    owner = identity.user_id(ADA)
+    db_path = settings.product_db_path
+    with _client(settings, identity) as client:
+        client.app.state.feedback.stop()
+        identity.sign_in(client, ADA)
+        thread_id = client.post("/ask/chat/threads").json()["thread_id"]
+        _, voted = _turn(settings, identity, thread_id, question="harbor budget")
+        up = client.post(
+            "/feedback",
+            json={"interaction_id": voted, "target": "answer", "action": "up"},
+        )
+        assert up.status_code == 200, up.text
+
+        first = client.delete(f"/ask/chat/threads/{thread_id}")
+        second = client.delete(f"/ask/chat/threads/{thread_id}")
+        third = client.delete(f"/ask/chat/threads/{thread_id}")
+        assert (first.status_code, second.status_code, third.status_code) == (204, 204, 204)
+
+        # Another member's id and an id nobody ever had are the same 404, so the
+        # idempotence above does not leak whether a thread existed.
+        identity.sign_in(client, BEA)
+        assert client.delete(f"/ask/chat/threads/{thread_id}").status_code == 404
+        assert client.delete("/ask/chat/threads/never-existed").status_code == 404
+        # B's own list is still empty: neither delete created or revealed a thread.
+        assert client.get("/ask/chat/threads").json() == []
+
+    # D-9: every delete left the feedback record intact and still votable.
+    assert _count(db_path, "ask_chat_threads") == 0
+    assert _count(db_path, "ask_chat_turns") == 0
+    assert _count(db_path, "interactions") == 1
+    assert _count(db_path, "interaction_hits") == 2
+    assert current_votes(db_path, owner, voted)[0] == "up"
+
+
+def test_rename_measures_the_trimmed_title_not_the_raw_one(
+    settings: Settings, identity: IdentityIssuer
+) -> None:
+    """The 120-character bound applies after trimming, and empty-after-trim is 400.
+
+    A member who pastes a name with a stray newline or trailing spaces is not
+    asking for a longer title, so the padding must not count against the limit and
+    must not be stored. The refusal case is the mirror image: a title that is only
+    whitespace has no name in it, so it is a 400 and the stored title is unchanged.
+    """
+    with _client(settings, identity) as client:
+        identity.sign_in(client, ADA)
+        thread_id = client.post("/ask/chat/threads").json()["thread_id"]
+        path = f"/ask/chat/threads/{thread_id}"
+
+        exact = "T" * 120
+        padded = f"\n  {exact}  \t\n"
+        accepted = client.patch(path, json={"title": padded})
+        assert accepted.status_code == 200, accepted.text
+        # The padding is gone and the name is exactly at the limit.
+        assert accepted.json()["title"] == exact
+        assert len(accepted.json()["title"]) == 120
+
+        # One character over the limit, after trimming, is still refused.
+        too_long = client.patch(path, json={"title": f"  {'T' * 121}  "})
+        assert too_long.status_code == 400, too_long.text
+
+        # Whitespace-only has no name after trimming, so it is refused and the
+        # stored title keeps the last accepted value.
+        for blank in ("", " ", "\n\t  "):
+            refused = client.patch(path, json={"title": blank})
+            assert refused.status_code == 400, (blank, refused.text)
+        stored = client.get(path).json()["thread"]["title"]
+        assert stored == exact

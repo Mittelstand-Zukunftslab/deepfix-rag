@@ -206,6 +206,23 @@ def link_interaction(
             raise KeyError(interaction_id)
 
 
+def set_trace_id(db_path: Path, interaction_id: str, trace_id: str | None) -> None:
+    """Attach the turn's MLflow trace to its interaction.
+
+    A turn that produced no answer still has a trace — a failed or stopped turn is
+    accounted for — and this is what makes it reachable from the stored row rather
+    than only from the experiment.
+    """
+    if trace_id is None:
+        return
+    init_interactions(db_path)
+    with connect(db_path) as conn:
+        conn.execute(
+            "UPDATE interactions SET trace_id = ? WHERE interaction_id = ?",
+            (trace_id, interaction_id),
+        )
+
+
 def update_answer(db_path: Path, interaction_id: str, answer: str) -> None:
     """Replace a stored interaction's answer text as a reply streams or is replaced.
 

@@ -638,6 +638,12 @@ def _latest_events(
             JOIN interactions AS i ON i.interaction_id = e.interaction_id
             LEFT JOIN ask_chat_turns AS t ON t.turn_id = i.turn_id
             WHERE {where}
+              -- A turn that failed before producing an answer has nothing a vote
+              -- could be about, and its empty answer must not reach the dev set or
+              -- the downvote export. A single-turn ask always has either an answer
+              -- or a stored error and is unaffected; so is a chat turn that
+              -- produced text and then failed.
+              AND (i.kind != 'ask' OR i.answer IS NOT NULL OR t.turn_id IS NULL)
               AND e.rowid = (
                     SELECT e2.rowid FROM feedback_events AS e2
                     WHERE e2.user_id = e.user_id

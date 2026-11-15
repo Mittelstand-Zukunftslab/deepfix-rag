@@ -103,10 +103,45 @@ class Endpoint(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         self.state.requests.append(body)
-        self._open()
-        step = sum(1 for item in self.state.requests if item is not body)
+        choice = body.get("tool_choice")
+        # LiteLLM merges `extra_body` into the wire body, so the provider sees
+        # `reasoning` at the top level. The nested form is the call shape only.
+        reasoning = body.get("reasoning") or (body.get("extra_body") or {}).get("reasoning") or {}
         messages = body.get("messages") or []
         has_tool_result = any(message.get("role") == "tool" for message in messages)
+        # The deployed failure, reproduced. The provider refuses a *forced* tool
+        # choice while its reasoning mode is on, and accepts everything else —
+        # including the same request once thinking is switched off. That is what
+        # makes both recoveries reachable: the retry with thinking off, and (if the
+        # provider refuses that too) the server-side search.
+        if (
+            self.state.mode == "reject_required"
+            and choice == "required"
+            and reasoning.get("enabled") is not False
+        ):
+            return self._status(
+                400,
+                "The tool_choice parameter does not support being set to required "
+                "or object in thinking mode",
+            )
+        # A provider that refuses every step before a retrieval has happened,
+        # whatever the tool choice. The worst case: the turn must still answer.
+        if self.state.mode == "always_reject" and not has_tool_result:
+            return self._status(
+                400,
+                "The tool_choice parameter does not support being set to required "
+                "or object in thinking mode",
+            )
+        self._open()
+        if self.state.mode == "always_reject" and has_tool_result:
+            self._text("Die Trunkenheitsfahrt ist strafbar [1].")
+            return self._end()
+        if self.state.mode == "reject_required" and has_tool_result:
+            self._text("Die Trunkenheitsfahrt ist strafbar [1].")
+            return self._end()
+        if self.state.mode == "reject_required":
+            self._tool_call("call-1", '{"query": "Trunkenheitsfahrt"}')
+            return self._end()
         if self.state.mode == "tool_then_text" and not has_tool_result:
             self._tool_call("call-1", '{"query": "Trunkenheitsfahrt"}')
             return self._end()
@@ -131,9 +166,20 @@ class Endpoint(BaseHTTPRequestHandler):
         if self.state.mode == "arguments":
             self._tool_call("call-2", json.dumps({"query": "x" * 900}))
             return self._end()
-        del step
         self._text("ok")
         self._end()
+
+    def _status(self, status: int, message: str) -> None:
+        """A provider refusal, as the OpenAI-compatible error body."""
+        body = json.dumps(
+            {"error": {"message": message, "type": "invalid_request_error"}}
+        ).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
 
     def _open(self) -> None:
         self.send_response(200)
@@ -498,3 +544,85 @@ def test_a_request_that_is_not_the_members_question_or_has_no_index_is_refused(
             json={"thread_id": thread, "messages": [{"role": "user", "content": "hi"}]},
         )
         assert unsigned.status_code == 401
+
+
+def test_a_provider_that_refuses_the_forced_tool_step_still_answers(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """The deployed 400 is recovered from, not surfaced as a failed turn.
+
+    On 2026-11-15 every Ask turn failed at step 0 because OpenRouter routed
+    `LLM_MODEL` to a provider that answers 400 "The tool_choice parameter does not
+    support being set to required or object in thinking mode". Two recoveries are
+    asserted here against a real socket, because both are needed:
+
+    * with thinking switched off for the forced step, the provider accepts it and
+      the model calls the tool — the normal path, and what the fix sends;
+    * a provider that refuses *everything* still leaves a completed turn, because
+      the turn falls back to the server's own search (FR-005) rather than failing.
+
+    The first request's body is also asserted: `reasoning.enabled is False` must
+    be present only on the forced step, and the retry must be unforced.
+    """
+    # Path 1: the forced step carries reasoning disabled and is accepted, so the
+    # model makes the tool call itself and the answer is its own.
+    # Path 1: the deployed shape. The forced step carries thinking disabled; the
+    # provider may still refuse it, and either recovery is acceptable — what must
+    # not happen is a failed turn.
+    endpoint.mode = "reject_required"
+    settings = _settings(tmp_path, endpoint)
+    with _client(settings, identity) as client:
+        _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+    assert endpoint.requests, "the provider was never called"
+    first = endpoint.requests[0]
+    # The forced step is what the product sends, and it asks the provider to skip
+    # thinking — the flag that makes a forced tool choice legal there.
+    print(
+        "SEQ",
+        [
+            (
+                r.get("tool_choice"),
+                bool(r.get("reasoning")),
+                any(m.get("role") == "tool" for m in r.get("messages", [])),
+            )
+            for r in endpoint.requests
+        ],
+    )
+    print("ERRTEXT", [f.get("errorText") for f in frames if f["type"] == "error"])
+    assert first["tool_choice"] == "required"
+    assert first["reasoning"] == {"enabled": False}
+    types = _types(frames)
+    assert types[-2:] == ["data-deepfix-turn", "finish"]
+    terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
+    assert terminal["status"] == "completed"
+    # The turn retrieved, whichever path did it: the model's call or the server's.
+    tool_in = next(f for f in frames if f["type"] == "tool-input-start")
+    assert tool_in["toolName"] == ask_chat.TOOL_NAME
+    stored = next(f for f in frames if f["type"] == "tool-output-available")["output"]
+    assert stored["passages"], "the tool's passages still reached the browser"
+
+    # Path 2: a provider that refuses every forced *and* unforced step. The turn
+    # must not fail: the server searches, and the member gets an answer.
+    endpoint.mode = "always_reject"
+    endpoint.requests.clear()
+    settings = _settings(tmp_path / "second", endpoint)
+    with _client(settings, identity) as client:
+        _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+    # The forced step, its unforced retry, and then the step that answers with the
+    # server's search in the conversation.
+    assert len(endpoint.requests) >= 3
+    assert endpoint.requests[0]["tool_choice"] == "required"
+    assert endpoint.requests[1]["tool_choice"] == "auto"
+    types = _types(frames)
+    terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
+    assert terminal["status"] == "completed"
+    server_call = next(f for f in frames if f["type"] == "tool-input-start")
+    assert server_call["toolCallId"] == "server"
+    assert server_call["toolName"] == ask_chat.TOOL_NAME
+    with connect(settings.product_db_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM ask_chat_turns WHERE status = 'failed'").fetchone()[
+                0
+            ]
+            == 0
+        )

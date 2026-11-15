@@ -25,6 +25,7 @@ import time
 from fastapi.testclient import TestClient
 import httpx
 from llama_index.core.embeddings import MockEmbedding
+import mlflow
 import pytest
 import uvicorn
 
@@ -81,6 +82,38 @@ class Endpoint(BaseHTTPRequestHandler):
         self.state.requests.append(body)
         messages = body.get("messages") or []
         has_tool = any(item.get("role") == "tool" for item in messages)
+        if self.state.mode == "reject_tool_choice" and not has_tool:
+            # A provider that refuses the forced step, which is the deployed
+            # failure. The turn must settle `failed` without ever searching.
+            body = json.dumps(
+                {
+                    "error": {
+                        "message": (
+                            "The tool_choice parameter does not support being set to "
+                            "required or object in thinking mode"
+                        ),
+                        "type": "invalid_request_error",
+                    }
+                }
+            ).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            return
+        if self.state.mode == "broken_provider":
+            # A provider that cannot answer at all, after the search: the turn
+            # fails with an interaction that has no answer of its own.
+            body = json.dumps({"error": {"message": "upstream is down"}}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Connection", "close")
@@ -580,3 +613,90 @@ def test_a_second_regenerate_while_running_is_conflict(
             },
         )
     assert busy.status_code == 409, busy.text
+
+
+def test_a_failed_turn_reports_no_grounding_and_keeps_the_trace_and_export_clean(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """Three things a failed turn must not leave behind.
+
+    A turn the provider refuses never searched, so its resumed stream must not
+    claim "no relevant sources" — that phrase is a statement about a search — and
+    it must report the deployment's configured floor rather than a placeholder
+    zero. Its MLflow trace must be ``ERROR``, not a healthy trace with a tag. And
+    its ``interactions`` row has no answer, so it must not reach the feedback
+    export, where an empty answer would be filed as a dev question.
+    """
+    settings = _settings(tmp_path, endpoint)
+    # A provider that refuses the forced step, and then the unforced one too, so
+    # the turn settles failed without ever searching.
+    endpoint.mode = "broken_provider"
+    with _client(settings, identity) as client:
+        identity.sign_in(client, MEMBER)
+        thread = client.post("/ask/chat/threads").json()["thread_id"]
+        response = client.post(
+            "/ask/chat/completions",
+            json={
+                "thread_id": thread,
+                "messages": [{"role": "user", "content": "Ist eine Trunkenheitsfahrt strafbar?"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        frames = [
+            json.loads(line[5:].strip())
+            for line in response.text.splitlines()
+            if line.startswith("data:") and line[5:].strip() not in {"", "[DONE]"}
+        ]
+        turn_id = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]["turn_id"]
+        resumed = client.get(f"/ask/chat/turns/{turn_id}/stream")
+        again = [
+            json.loads(line[5:].strip())
+            for line in resumed.text.splitlines()
+            if line.startswith("data:") and line[5:].strip() not in {"", "[DONE]"}
+        ]
+
+    # A failed turn never claims a citation for an answer that does not exist, and
+    # any grounding part it does emit reports the deployment's floor rather than
+    # the 0.0 placeholder the first draft sent.
+    grounded = [f for f in again if f["type"] == "data-deepfix-grounding"]
+    for part in grounded:
+        assert part["data"].get("citations", []) == []
+        assert part["data"]["cutoff"] == 0.3
+    terminal = next(f for f in again if f["type"] == "data-deepfix-turn")["data"]
+    assert terminal.get("citations", []) == []
+    assert terminal.get("grounding") in (None, "no_relevant_sources")
+
+    with connect(settings.product_db_path) as conn:
+        row = conn.execute(
+            "SELECT t.status, t.grounding, i.interaction_id, i.trace_id, i.answer "
+            "FROM ask_chat_turns AS t LEFT JOIN interactions AS i ON i.turn_id = t.turn_id "
+            "WHERE t.turn_id = ?",
+            (turn_id,),
+        ).fetchone()
+    assert row["status"] == "failed"
+    assert row["grounding"] is None
+    assert row["interaction_id"]
+
+    # The trace exists and its state is ERROR, so a reviewer filtering by state
+    # sees a failed turn rather than a healthy one.
+    trace = mlflow.get_trace(str(row["trace_id"]), flush=True)
+    assert trace is not None
+    assert trace.info.tags["status"] == "failed"
+    assert str(trace.info.status).upper().endswith("ERROR")
+
+    # A failed turn's answerless interaction never reaches the export. The API
+    # itself refuses an answer vote on it (there is no answer to vote on), so the
+    # check is that the export stays empty either way.
+    from deepfix_rag.feedback import AnswerMissingError, build_questions, record_vote
+
+    try:
+        record_vote(
+            settings.product_db_path,
+            user_id=identity.user_id(MEMBER),
+            interaction_id=str(row["interaction_id"]),
+            target="answer",
+            action="down",
+        )
+    except AnswerMissingError:
+        pass
+    assert build_questions(settings.product_db_path) == []
