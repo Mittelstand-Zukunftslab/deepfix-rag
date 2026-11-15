@@ -1,0 +1,17 @@
+# DeepFix docs
+
+Operator-facing documents. Product planning lives in `tasks/`; the front door is `README.md`.
+
+| Document | Use it when |
+| :--- | :--- |
+| [`deployment.md`](deployment.md) | Deploying to Dokploy: memory caps, `--no-deps` rebuilds, auto-deploy off, domains, secrets. |
+| [`admin-hermes-chat-verification.md`](admin-hermes-chat-verification.md) | Verifying the admin Hermes chat on a deployed stack, with chat off and with chat on. |
+
+Reference material elsewhere:
+
+- `README.md` — what DeepFix is, installation, CLI, configuration, the optimizer, the chat, MLflow tracing, and the MLflow/RustFS lockdown.
+- `AGENTS.md` — how work is planned, committed, and tested.
+- `configs/README.md` — every shipped configuration file and when to use it.
+- `tasks/` — PRDs, stories, plans, and implementation notes.
+
+There is no generated API reference here. `GET /docs` on a running API serves the live OpenAPI schema, and `web/openapi.json` is the committed copy the web client is generated from.

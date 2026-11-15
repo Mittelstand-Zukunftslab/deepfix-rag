@@ -27,8 +27,9 @@ off, the MLflow trace, and the holdout boundary.
 | `MLFLOW_HERMES_CHAT_EXPERIMENT` | optional | Defaults to `deepfix_hermes_chat`. |
 | `ADMIN_CHAT_AUDIT_RETENTION_DAYS` | optional | Defaults to `14`; `0` keeps audit rows forever. |
 
-The eleven `ADMIN_CHAT_*` limits all have safe defaults in `docker-compose.yml`;
-set one only to change it.
+The eleven `ADMIN_CHAT_*` settings — ten request and step-log limits plus the
+audit retention window — all have safe defaults in `docker-compose.yml`; set one
+only to change it.
 
 ## 1. State A: chat off (the default)
 
