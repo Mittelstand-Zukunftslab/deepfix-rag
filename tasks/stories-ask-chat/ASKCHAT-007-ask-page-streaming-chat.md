@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `d10c656` on `feat/ask-chat-streaming`
 
 ## Summary
 The page reads like a conversation. Answers arrive as they are written, the send control becomes **Stop** while a turn runs, the thread list comes from the server and can be named and deleted, and a reply in flight stays in the thread that started it.
@@ -44,7 +44,7 @@ The page reads like a conversation. Answers arrive as they are written, the send
 
 **What must not change**
 
-13. Given the controlled mode the Search page uses (`askedQuery` / `answer` / `hits`), when the page renders in it, then it still shows that single result exactly as before.
+13. Given the controlled mode the Search page uses (`askedQuery` / `answer` / `hits`), when it renders, then it still shows that single result exactly as before — as **`web/src/features/chat/ask-result.tsx`**, a separate component. The conversation page runs on `useAISDKRuntime` and has no runtime in that mode, so keeping both in one file would have meant either a runtime with nothing behind it or a page that could not be a conversation. AC 1's "the page runs on `useAISDKRuntime`" and this AC are both satisfied by splitting them.
 14. Given `indexReady={false}`, when the page renders, then it still shows the existing "index is being prepared" state.
 15. Given the existing Ask tests in `web/src/test/pages.test.tsx`, when they run, then they pass, with changes only where they drove a control this story replaces (the send button's behaviour, the page-level pending state).
 

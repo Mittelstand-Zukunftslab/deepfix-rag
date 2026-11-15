@@ -12,14 +12,17 @@
 > was actually built rather than what was planned, and it fixes the fifteen places
 > the stories turned out to be wrong plus two behaviours inherited from ASKCHAT-001
 > (see "Corrections after implementation" below). Every correction is a change to
-> this document and to `tasks/stories-ask-chat/`; **no production code changed in
-> this pass**.
+> this document and to `tasks/stories-ask-chat/`.
 >
-> Two behaviours are documented as current and **left as open decisions** rather
-> than quietly fixed: a `DELETE` of an already-deleted thread answers 404 (not an
-> idempotent 204), and `rename_thread` trims before it measures the 120-character
-> bound, so the route's `max_length` and the store disagree at the edge. See
-> "Open questions".
+> **The two inherited behaviours are now settled and implemented rather than
+> documented as open.** A `DELETE` on a thread the member owns is idempotent: the
+> second call answers 204, because "it is gone" is the outcome the caller asked
+> for, while another member's id still answers 404 so existence does not leak. And
+> rename trims first and then measures, in both the route and the store, so the
+> 120-character limit applies to the trimmed name and a name that is empty after
+> trimming is a 400. Section "D-5" and "Open questions" record both as current
+> behaviour; the code that implements them is in the same commit series as this
+> revision.
 >
 > Validated with `validate-prd` — see
 > `tasks/prd-ask-streaming-multiturn-validation.md` and "Validation
@@ -128,8 +131,8 @@ deepfix-api  POST /ask/chat/completions      member auth, limits, thread store
   |  search_documents -> QueryService.retrieve (champion config, cutoff)
   v
 AI SDK UI message stream (x-vercel-ai-ui-message-stream: v1)
-  start / start-step / text-* / tool-input-* / tool-output-available /
-  finish-step / data-deepfix-grounding / data-deepfix-turn / finish / [DONE]
+  start, then per model step: start-step / text-* / (that step's tool-input-*, tool-output-available) / finish-step
+  then data-deepfix-grounding / data-deepfix-turn / finish / [DONE]
 ```
 
 **Chosen: the loop is Python, in the API.** The reasons, in the order they
@@ -333,6 +336,34 @@ Two rules the first draft left implicit and the implementation had to settle:
   before the first byte and rewritten in place, so a regenerate does not create a
   second row and the thread's join stays one-to-one (FR-019).
 
+### D-4a: A provider that refuses the forced tool step is recovered from
+
+Decided on 2026-11-15 after the deployed stack showed every Ask turn failing at
+step 0. OpenRouter routed `LLM_MODEL` (`qwen/qwen3.8-flash`) to a provider that
+answers `400` with "The tool_choice parameter does not support being set to
+required or object in thinking mode". Measured against the provider: `required`
+gives a 400; `required` with `reasoning` disabled calls the tool; `auto` works;
+`enable_thinking: false` still gives a 400.
+
+The rule, which is a capability statement rather than a preference:
+
+- **A forced step disables thinking.** `tool_choice: "required"` is sent with
+  `extra_body={"reasoning": {"enabled": False}}`. `auto` and `none` keep the
+  model's own default, because neither asks the provider for anything it cannot do
+  while thinking.
+- **A refusal is expected, not fatal.** A `400` whose message names `tool_choice`
+  is a fact about the provider, not about the member's question, so the step is
+  retried unforced and, if that is refused too, the turn falls back to the server's
+  own search. FR-005's "a turn always retrieves" therefore holds even on a provider
+  that cannot force a tool call, and the member gets an answer rather than a
+  failed turn.
+- **One attempt is one HTTP call.** The call sends `num_retries=0`: LiteLLM's
+  default would send a request it has already been told is invalid three times and
+  delay this module's own recovery by the backoff.
+
+This is the only place a provider's *shape* is worked around. The request is never
+downgraded to a non-tool answer, and no second model setting exists (D-7).
+
 ### D-5: Threads are server-side, per member; localStorage is imported once
 
 New tables in the same SQLite database the API already uses
@@ -396,17 +427,22 @@ Titles are derived (first 120 characters of the first user message, collapsed to
 one line). Isolation is by `owner_id` on every read and write; another
 member's thread id answers 404, exactly as `GET /interactions/{id}` does today.
 
-**Two current behaviours in this area are open decisions, not settled design.**
-They are documented in "Open questions" and were deliberately not changed in the
-documentation pass:
+**Two behaviours in this area are settled, and both are implemented.**
 
-- `DELETE /ask/chat/threads/{thread_id}` answers **404** when the thread is
-  already gone, where the admin chat answers an idempotent 204. A retried delete
-  therefore looks like a failure to a client that does not special-case it.
-- `ask_chat.rename_thread` trims the title and *then* measures it against the
-  120-character bound, while the route's Pydantic field caps the raw string. A
-  title of 120 characters plus trailing spaces is accepted by the store and
-  refused by the route, so the two disagree at the edge.
+- `DELETE /ask/chat/threads/{thread_id}` is **idempotent for the member who owns
+  the thread**: the first call answers 204 and the second does too, because "it is
+  gone" is the outcome the member asked for and a retried request must not report
+  failure. An id that was never this member's — another member's, or one that never
+  existed — still answers 404, so the idempotence is not a way to probe for another
+  member's ids. The two are told apart by a marker row
+  (`ask_chat_deleted_threads`) written in the same transaction as the delete, not by
+  the thread's absence; a failed delete leaves no marker, so the retry is a real
+  delete. The interactions and votes behind a deleted thread still survive (D-9).
+- `rename` measures the **trimmed** title. Whitespace is collapsed to one line and
+  stripped, and only then is the length checked against 120, in both the route and
+  the store, so the store is the single authority and the route's field is only a
+  guard against an absurd payload. A name that is empty after trimming is a 400,
+  the same status as one that is too long, and the stored title is unchanged.
 
 **localStorage**: imported once per member, best effort. `deepfix.chat_sessions.v2:<ownerId>`
 holds sessions whose turns carry `interactionId` values that already exist in the
@@ -737,22 +773,22 @@ may slip one release), or **Could** (nice, unplanned).
 | FR-002 | The stream must carry these parts, in **this** grammar: `start` once; then, **per model step**, `start-step`, a `text-start`/`text-delta`*/`text-end` group for whatever prose that step produced, and `finish-step`; a tool call's `tool-input-start`, `tool-input-available`, and `tool-output-available` are emitted between one step's `finish-step` and the next step's `start-step`, because they belong to the boundary between steps; then one `data-deepfix-grounding`, one `data-deepfix-turn`, `finish`, and `data: [DONE]`. `error` may appear in place of the per-step prose when a step fails. Nothing is buffered: the first delta reaches the browser when the model produced it. | Must | G1, D-1. The AI SDK's parser and Assistant UI's message parts are what render this; anything else needs a hand-written renderer. A two-step turn emits **two** `start-step`/`finish-step` pairs, so the sequence is a grammar rather than one fixed list — the first draft's single linear order was not emittable. |
 | FR-003 | `POST /ask/chat/completions` must accept `{thread_id, messages}` for a signed-in member, rebuild the conversation from the store, and answer 401 unsigned, 404 for another member's thread, 429 over a limit, and 503 while the index is preparing, each with a sentence the UI shows. | Must | G4, G7. Same contract the admin chat's route already has, with the member's role instead of admin. |
 | FR-004 | `search_documents` must be the only tool, must run on the serving index through `QueryService.retrieve` with the champion config, must return only what survives the landed `rerank.min_relevance_score` floor (which that path already applies — the tool reports, it does not re-filter), and must return the passage shape in D-2. Its depth must come from the existing `displayed_limit(config, MAX_DISPLAYED_HITS)` helper — `rerank.top_n` when rerank is on, `retrieval.top_k` otherwise, then the display cap — and a requested `top_k` must be clamped into `[1, displayed_limit(...)]`, never widening what the single-turn product would show. | Must | G3, D-2, G6. The floor is the grounding decision and it already lives in one place; the tool's window must be the product's window, not a second one. |
-| FR-005 | Every turn must retrieve. The first model step must be sent with `tool_choice: "required"`; if that step ends with no tool call, the server must execute `search_documents` itself with the user's message, append the result, and continue. A turn must make at most `ASK_CHAT_MAX_TOOL_CALLS` tool calls and the last permitted step must be sent with `tool_choice: "none"`. An unknown `toolName` must be rejected, not executed. | Must | G3, D-2. Otherwise "no retrieval happened" is representable, and the grounding verdict becomes a guess. |
+| FR-005 | Every turn must retrieve. The first model step must be sent with `tool_choice: "required"` and with the provider's thinking mode disabled for that step (`extra_body={"reasoning": {"enabled": False}}`), because a reasoning provider rejects a forced tool choice with a 400. If that step ends with no tool call, **or the provider refuses the forced step with a 400 whose message names `tool_choice`**, the step must be retried unforced and, if it is still refused, the server must execute `search_documents` itself with the user's message, append the result, and continue. A turn must make at most `ASK_CHAT_MAX_TOOL_CALLS` tool calls and the last permitted step must be sent with `tool_choice: "none"`. An unknown `toolName` must be rejected, not executed. One step attempt must be one HTTP call (`num_retries=0`), so a refusal costs one round trip rather than three. | Must | G3, D-2. Otherwise "no retrieval happened" is representable, and the grounding verdict becomes a guess. The recovery exists because on 2026-11-15 every deployed turn failed at step 0 for exactly this reason. |
 | FR-006 | The passages a turn's tool returned must be persisted as that turn's `interaction_hits`, ranked in tool order, so `POST /feedback` with `target: "passage"` and a rank keeps working with no new endpoint, and so reloading the thread restores the panel from the store. The **full** passage text must be stored even when the text sent to the model was truncated at `ASK_CHAT_MAX_PASSAGE_CHARS`, because `passage_key` is a hash of the text and `build_questions` groups on it: storing the truncated text would give a chat passage a different key from the same chunk's single-turn passage, and the two votes would never combine. | Must | G5, D-5. Votes are keyed on `(interaction_id, rank)`, so the ranks must be the ones the member sees, and the passage identity must be the one the optimizer already knows. |
 | FR-007 | The sources panel must be rendered from the `tool-output-available` parts of the message, never from parsing the answer's prose, and must survive a reload by being rebuilt from the stored message parts. | Must | G3. A prose parser breaks on the first table or footnote and would disagree with what the model saw. |
 | FR-008 | The system prompt must require `[n]` citation markers for every factual claim drawn from a passage; the server must validate each marker against the passages delivered in that turn, keep only markers that resolve to a passage at or above the cutoff, persist them in `ask_chat_turns.citations`, and emit them in `data-deepfix-grounding`. | Must | G3, D-3. A citation is only meaningful if it resolves to something the model was given. |
 | FR-009 | Each turn must persist `grounding` using the landed `Grounding` enum (`grounded`, `declined`, `no_relevant_sources`) and classify with the landed `grounding.grounding_for(answer)` — never a second phrase list. `grounded` requires at least one passage at or above `rerank.min_relevance_score` to have been delivered to the model; `no_relevant_sources` when the floor dropped everything. The badge must extend the landed `GROUNDING_BADGE` / `groundingNote` pair with exactly one new state: **Grounded** only when `grounding == "grounded"` **and** `citations` is non-empty; **Partly grounded** when grounded without a citation; the landed "Not found in the documents" badge with its landed note ("Answer declined" / "No matching passages") for the other two. | Must | G3, D-3, D-10. The enum, the classifier and the badge copy are ASK-001's, so this feature derives and labels grounding the same way `POST /ask` does. |
-| FR-010 | Threads must be server-side and per member: `GET /ask/chat/threads` (newest first, limit 50, no pagination beyond it), `POST /ask/chat/threads`, `GET /ask/chat/threads/{thread_id}` (thread, turns, and their grounding/citations), `PATCH /ask/chat/threads/{thread_id}` (rename, 1–120 characters), `DELETE /ask/chat/threads/{thread_id}` (hard delete of turns and thread in one transaction; the `interactions` rows and their votes are kept, because they are the member's feedback history and the optimizer's dataset). Any other member's thread id must answer 404. There must be no retention window and no prune job on these tables. | Must | G4, G5, D-5, D-9, D-11. Deleting a conversation must not delete evidence the optimizer already ingested, and 50 is a display cap rather than a lifecycle rule. |
+| FR-010 | Threads must be server-side and per member: `GET /ask/chat/threads` (newest first, limit 50, no pagination beyond it), `POST /ask/chat/threads`, `GET /ask/chat/threads/{thread_id}` (thread, turns with their grounding and citations, and each turn's stored passages), `PATCH /ask/chat/threads/{thread_id}` (rename; the **trimmed** title must be 1–120 characters, and a title empty after trimming is 400), `DELETE /ask/chat/threads/{thread_id}` (hard delete of turns and thread in one transaction; the `interactions` rows and their votes are kept, because they are the member's feedback history and the optimizer's dataset). `DELETE` is **idempotent for the owner**: a thread the member already deleted answers 204 again, while a thread that is not theirs — or never existed — answers 404, so the idempotence does not leak existence. Any other member's thread id must answer 404 on every route. There must be no retention window and no prune job on these tables. | Must | G4, G5, D-5, D-9, D-11. Deleting a conversation must not delete evidence the optimizer already ingested; 50 is a display cap rather than a lifecycle rule; and a client that retries a dropped delete must not be told a request that succeeded failed. |
 | FR-011 | The upstream conversation must be built from the store, never from the client's array: the system prompt, then the last `ASK_CHAT_MAX_HISTORY_MESSAGES` stored messages, then the new user message. A request whose last message is not a user message must be 400. | Must | G2, G7. The client cannot rewrite the policy or claim a history that never happened. |
 | FR-012 | A follow-up must be retrievable: the tool's own `query` argument is what is searched, and it must be stored as `ask_chat_turns.retrieval_query` while `interactions.query` keeps the member's literal message. No separate query-rewriting model call is added in this release. | Must | G2, G5, D-6. The model already has the history; a second rewrite call would add a model hop and a second thing to evaluate. |
 | FR-013 | Each passage delivered to the model must be wrapped in explicit delimiters and labelled as untrusted corpus text whose instructions must not be followed, and the system prompt must say so. | Must | G7. Members upload the corpus, so a document can contain an instruction. |
 | FR-014 | A browser abort must cancel the retrieval and the model stream (closing the async generator, not merely abandoning the wait), store the partial assistant text, keep the tool results already obtained, mark the turn `cancelled` with `ended_at`, and still emit a terminal `data-deepfix-turn`. | Must | G1, D-4. Stop must stop the work and the spend, and a stopped answer must be readable. |
 | FR-015 | A regenerate must replace the newest answered or cancelled turn in place, keeping its `turn_id`; the previous answer's text must not remain beside the new one; and votes on the replaced answer and its passages must be cleared by writing the existing `clear` action through `record_vote`, which deletes the mirrored MLflow assessment. No new vote action and no `CHECK` change. | Must | G3, D-4. The admin chat settled in-place replacement (CHAT-014); an orphaned assessment is worse than no assessment, and `feedback_events.action` already permits `clear`. |
-| FR-016 | `GET /ask/chat/turns/{turn_id}/stream` must replay the stored text and close with the stored status when the turn is not live in this process, and must replay then tail when it is. Another member's turn id must be 404. | Must | G4, D-4. A reload mid-answer must not lose it; `chat_turns.py` already implements this shape. |
+| FR-016 | `GET /ask/chat/turns/{turn_id}/stream` must replay the stored text and close with the stored status when the turn is not live in this process, and must replay then tail when it is. A resumed turn reports the deployment's configured `rerank.min_relevance_score` as its `cutoff`, never a placeholder zero, and reports a grounding verdict only when the turn actually reached one — a turn that never searched carries none rather than claiming "no relevant sources". Another member's turn id must be 404. | Must | G4, D-4. A reload mid-answer must not lose it; `chat_turns.py` already implements this shape. |
 | FR-017 | A turn interrupted by an API restart must be settled `failed` at startup with a readable reason, and no `ask_chat_turns` row may stay `running`. | Must | G4. Mirrors `fail_interrupted_chat_turns`; a stuck row is a lie about state. |
-| FR-018 | Errors must be distinct: a pre-stream failure is a JSON status with a sentence; a mid-stream failure is an `error` part followed by a terminal `data-deepfix-turn` with `status: "failed"`; the UI must offer regenerate for a failed turn and must not offer it for a `no_relevant_sources` answer. | Must | G1. A blank stream and a refused question must not look the same. |
+| FR-018 | Errors must be distinct: a pre-stream failure is a JSON status with a sentence; a mid-stream failure is an `error` part followed by a terminal `data-deepfix-turn` with `status: "failed"`; the UI must offer regenerate for a failed turn and must not offer it for a `no_relevant_sources` answer. A failed turn's `interactions` row has no answer, so it must be excluded from the feedback export (`build_questions` and the downvote rows) and its trace must be marked `ERROR` rather than left as a healthy trace. | Must | G1. A blank stream and a refused question must not look the same. |
 | FR-019 | Each assistant turn must write exactly one `interactions` row with `kind='ask'`, `thread_id`, `turn_id`, the answer, the grounding status, and its hits; `interaction_hits` must hold the tool's passages. The `kind` CHECK constraint must not be changed. | Must | G5, D-5. This is what keeps votes, history, the assessment mirror, and `export_feedback` working with no new path. |
-| FR-020 | Each turn must produce one MLflow trace in the `deepfix_product` experiment through `trace_request`, tagged `interaction_id`, `thread_id`, `turn_id`, and `grounding`, with one child span per tool call carrying the tool query, the passage count, the max score, and the latency. A tracing failure must never fail the turn. | Must | G5. The optimizer reads these traces; a tool call must be visible in them. |
+| FR-020 | Each turn must produce one MLflow trace in the `deepfix_product` experiment, tagged `interaction_id`, `thread_id`, `turn_id`, `grounding`, and its terminal `status`, with one child span per tool call carrying the tool query, the passage count, the max score, and the latency. The trace must be opened for the whole turn — MLflow nests a span through the ambient context, so a child span is only a child while its parent is open — and a failed turn's trace must be marked `ERROR` in its span status, not only tagged. The trace id is stored on the turn's interaction for every outcome, so a failed or stopped turn is reachable from its row. A tracing failure must never fail the turn, and must never swallow a failure raised by the turn itself. | Must | G5. The optimizer reads these traces; a tool call must be visible in them. |
 | FR-021 | `build_questions` must group on the turn's standalone query: `_latest_events` gains a `LEFT JOIN ask_chat_turns` and selects `COALESCE(t.retrieval_query, i.query)` as the question text, normalised by the existing `normalize_query`. `interactions.query` keeps the member's literal message, which is what the history screen and the answer-vote rows show. `is_holdout` keeps hashing that normalised text with the same 20% rule, and `_answer_downvotes` applies the same coalesce. | Must | G5, G6, D-6. "And who voted against it?" is not a usable dev question; its standalone tool query is, and the join is where the optimizer's read happens. |
 | FR-022 | `POST /ask`, `POST /retrieval`, `GET /interactions/{id}`, the Search page, the history screens, the admin Hermes chat, and their existing tests must be unchanged, except that the single-turn `POST /ask` route may write the new `thread_id`/`turn_id` columns as `NULL`. | Must | G6, G7. No regression to shipped surfaces. |
 | FR-023 | `promotion.apply_candidate` must remain the only writer of `configs/champion.yaml` and `indexes/current`; no ask-chat path may call it, write those paths, or read holdout. | Must | G6, G7. The gate is not negotiable. |
@@ -900,12 +936,14 @@ No FR is unlinked to a goal (see Traceability), and no FR contradicts a non-goal
   `src/deepfix_rag/grounding.py`, and `rerank.min_relevance_score` in
   `RAGConfig`. Verified in the tree at `223a122`; no rename is needed and
   ASKCHAT-002 consumes the setting as-is.
-- **(assumption)** `qwen/qwen3.8-flash` honours `tool_choice: "required"` and
-  `"none"` through OpenRouter. Its `supported_parameters` list both, but the
-  behaviour is not measured here; ASKCHAT-003 proves it against a local fake
-  endpoint and ASKCHAT-003 records one live smoke result. The FR-005 server-side
-  fallback means a provider that ignores the hint degrades to "the server
-  searched anyway", not to a wrong answer.
+- **(measured, 2026-11-15)** `qwen/qwen3.8-flash` advertises `tools` and
+  `tool_choice`, but through OpenRouter it routes to a **reasoning** provider that
+  refuses a forced tool choice with a 400 unless thinking is disabled. Measured on
+  the deployment: `required` gives 400; `required` with `reasoning` disabled calls
+  the tool; `auto` works; `enable_thinking: false` still gives 400. This is D-4a,
+  and it replaces the earlier assumption that the hint was honoured as sent. A
+  provider that refuses the unforced call too still degrades to "the server
+  searched anyway", not to a failed turn.
 - **(assumption)** `litellm.acompletion(stream=True)` closes the upstream
   connection when the async generator is closed, so Stop stops the spend. If it
   does not, the turn timeout bounds it and R-2 records the residual cost.
@@ -928,7 +966,7 @@ No FR is unlinked to a goal (see Traceability), and no FR contradicts a non-goal
 | # | Risk | Impact | Mitigation |
 | :--- | :--- | :--- | :--- |
 | R-1 | **Stop does not stop the spend.** The current `CustomLiteLLM.achat` runs the call in a thread, so cancelling the task abandons the wait, not the request; a stopped turn keeps billing to `max_tokens`. | Cost grows with how often members change their mind, invisible to them. | FR-014 requires the loop to use `litellm.acompletion(stream=True)` and close the generator on cancel; `ASK_CHAT_TURN_TIMEOUT_SECONDS` bounds the worst case; ASKCHAT-004's test closes a real local connection and asserts the fake server saw its stream closed, not merely that the client stopped reading. |
-| R-2 | **The provider ignores the abort.** Even with a closed generator, an upstream request may finish server-side. | Residual token cost per stopped turn. | Accepted and bounded: the loop's `max_tokens` comes from the champion's `generation.max_tokens` (4096), the turn timeout is 120 s, and ASKCHAT-004 records the measured residual against the fake endpoint and one live smoke. |
+| R-2 | **A provider refuses the forced tool step.** Measured on the deployed stack on 2026-11-15: OpenRouter routed `LLM_MODEL` to a provider that answers 400 "The tool_choice parameter does not support being set to required or object in thinking mode", which failed **every** Ask turn at step 0. | No answers at all — the worst failure mode, and it was silent until a turn was attempted. | **Occurred and fixed** (D-4a): a forced step sends `reasoning` disabled, which that provider accepts; a refusal is retried unforced and then falls back to the server's search, so a turn still answers. Covered by an integration test that reproduces the 400 over a real socket. Reopens if a provider refuses the unforced call too, in which case the answer is a different `LLM_MODEL`. |
 | R-3 | **Two generation paths drift.** Eval and generation metrics score `RAGWorkflow` + `SimpleSummarize`; members are served by the tool loop. A prompt or model change could improve one and hurt the other. | The optimizer reports a faithful number for a pipeline nobody sees. | D-6 keeps retrieval identical (FR-024's parity test) and the gate retrieval-only, so the *promoted* quantity is shared. The divergence is documented in the PRD and the story notes; a conversation-level eval is an explicit non-goal and a follow-up project. |
 | R-4 | **Multi-turn queries pollute the feedback dataset.** "And who voted against it?" is unusable as a dev question and would be scored as a retrieval miss. | The optimizer would chase a phantom regression, and the holdout would accumulate unanswerable rows. | FR-021 exports `retrieval_query` (the standalone tool query) as the question text, keeps the raw message as `query`, and leaves the holdout hash on normalized text unchanged. ASKCHAT-010 asserts a follow-up turn's exported question is standalone. |
 | R-5 | **A member's thread is another member's data.** A missing `owner_id` predicate in one of six routes leaks conversations. | Privacy breach, and the worst possible one for a product whose pitch is a private shared corpus. | FR-010 scopes every route; ASKCHAT-001 tests isolation across two members on **every** route, with a 404 rather than a 403; ASKCHAT-005 repeats it for the stream and resume routes, which are the two that a naive implementation forgets. |
@@ -1665,6 +1703,15 @@ judgement, and are recorded where they belong rather than here: the model does
 advertise tool calling (D-7, and OpenRouter's live catalogue), and the BFF already
 streams response bodies (`web/src/server.ts`, and "What the code does today").
 
+**Two behaviours inherited from ASKCHAT-001 were open during the
+documentation pass and are now settled by code**, in the same commit series as
+this revision:
+
+| Was open | Answer | Where it lives |
+| :--- | :--- | :--- |
+| Does deleting an already-deleted thread answer 404 or 204? | **204.** The member owns it and it is gone, which is what they asked for; another member's id or an id that never existed still answers 404, so the idempotence does not leak existence. A marker row written in the same transaction tells the two apart. | D-5, FR-010, ASKCHAT-001 |
+| Does rename measure the raw title or the trimmed one? | **The trimmed one**, in the route and the store: whitespace is collapsed and stripped first, then the 1–120 bound applies, and a title empty after trimming is 400. | D-5, FR-010, ASKCHAT-001 |
+
 Each decision names the condition that would reopen it, so a later reader does
 not have to guess whether it was examined or merely assumed:
 
@@ -1677,6 +1724,34 @@ not have to guess whether it was examined or merely assumed:
   a defect rather than an outlier.
 - **D-11** reopens if the thread tables become a measurable share of
   `product_db_path`.
+- **D-4a** reopens if the served model stops needing the workaround, or if a
+  provider refuses an unforced tool call too — in which case the answer is a
+  model or provider change via `LLM_MODEL`, not a second setting.
+
+## Corrections after implementation
+
+Written after ASKCHAT-001 … ASKCHAT-010 landed on `feat/ask-chat-streaming`,
+against the tree that carries them. Each row is a place the plan and the code
+disagreed, what the code does, and where this document now says so. The stories
+in `tasks/stories-ask-chat/` were corrected in the same pass.
+
+| # | The plan said | The code does | Where |
+| :--- | :--- | :--- | :--- |
+| 1 | D-5's turn table could serve `GET /ask/chat/threads/{id}` with its answer | The answer is in `interactions`, joined on `interactions.turn_id`; the detail response also carries each turn's stored `passages`, which a reload needs because it has no tool part | D-5, FR-007, FR-010 |
+| 2 | ASKCHAT-001's schema had six thread columns | It has `legacy_session_id` too, which is what makes the import idempotent per session | D-5, FR-033 |
+| 3 | The stream was one linear part list | `start-step`/`finish-step` bracket *model steps*, so a two-step turn emits two pairs with the tool parts between them | D-1, FR-002 |
+| 4 | History came from `ask_chat_turns` | Turns are read and joined to `interactions` for the question and answer | D-5, FR-011 |
+| 5 | `drop_params` was set per step through `litellm_additional_kwargs()` | It is set once at import by `llm.py`; a request does not mutate a process-wide flag | D-4 |
+| 6 | The browser abort could be tested through `TestClient` | It cannot abort mid-stream; the test runs a real `uvicorn` on a loopback port and closes a real socket | ASKCHAT-004 |
+| 7 | Regenerate's target rules were implicit | A `running` newest turn is 409; `failed` is a valid target; the turn's one `interactions` row is reused | D-4, FR-015 |
+| 8 | The admin boundary test's "one stream reader" assertion stood | It names both readers; the Ask reader's own test keeps its exemption narrow | ASKCHAT-006 |
+| 9 | A tool call produced separate input and output parts | The AI SDK folds one `toolCallId` into one `tool-<name>` part | ASKCHAT-006 |
+| 10 | The Search page's controlled mode used the same page | It is `ask-result.tsx`, because that view has no runtime | ASKCHAT-007 |
+| 11 | The badge could gain a fourth `GROUNDING_BADGE` key | `badgeState(grounding, citations)` returns one of four *rendered* states over three stored values | D-10, FR-009 |
+| 12 | The sources panel sat beside the column at every width | It stacks below `lg`, because hiding it made the evidence unreachable on a phone | FR-030, ASKCHAT-008 |
+| 13 | The import payload's casing was unspecified | snake_case is canonical; the request accepts the retired page's camelCase as aliases | D-5, FR-033 |
+| 14 | `trace_request` could carry per-call child spans | MLflow nests by ambient context, so `turn_trace` is a context manager held open for the turn | D-4a, FR-020 |
+| 15 | ASKCHAT-011 was a story like the others | It is an operator runbook, prepared and not run | ASKCHAT-011 |
 
 ## Handoff
 

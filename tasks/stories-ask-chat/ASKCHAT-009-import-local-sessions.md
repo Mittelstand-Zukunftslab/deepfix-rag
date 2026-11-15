@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `2fb98d5` on `feat/ask-chat-streaming`
 
 ## Summary
 A member who has been using Ask does not lose their history when conversations move to the server. Their existing browser sessions are imported once into server threads, each turn linked to the interaction it already has, and the browser keys are then removed so nothing is duplicated or kept in two places.
@@ -22,10 +22,10 @@ A member who has been using Ask does not lose their history when conversations m
 
 **The route**
 
-1. Given `POST /ask/chat/threads/import` with a member's legacy sessions — `[{id, title, createdAt, updatedAt, turns: [{interactionId, userQuery, answer}]}]` — when it is called, then it creates one thread per session and one turn per stored turn, and answers with the counts created and skipped.
+1. Given `POST /ask/chat/threads/import` with a member's legacy sessions — `{sessions: [{id, title, created_at, updated_at, turns: [{interaction_id, user_query, answer}]}]}` — when it is called, then it creates one thread per session and one turn per stored turn, and answers with the counts created and skipped. **snake_case is canonical**, like every other route; the request model accepts the retired page's camelCase (`interactionId`, `createdAt`, `updatedAt`, `userQuery`) as aliases, so an older browser's payload is still understood. The list is bounded at 200 sessions (a longer payload is a 400 naming the bound), and an empty list is accepted and creates nothing.
 2. Given a stored turn with an `interactionId`, when the import runs, then the turn is linked to that interaction only if the interaction exists and `interactions.user_id` is the caller. Otherwise the turn is skipped and counted, and no turn is invented for it.
 3. Given a stored turn with no `interactionId`, when the import runs, then it is skipped and counted. The import never fabricates an `interactions` row.
-4. Given the same import called twice with the same payload, when the second call runs, then no duplicate thread and no duplicate turn exists: the import is idempotent per session id and per interaction id.
+4. Given the same import called twice with the same payload, when the second call runs, then no duplicate thread and no duplicate turn exists: the import is idempotent per session id and per interaction id. Per session id, the thread records the id it came from in `ask_chat_threads.legacy_session_id`, so a second run finds it and creates nothing; per interaction id, a turn already linked to that interaction is not created again.
 5. Given two members importing payloads that name overlapping interaction ids, when both run, then each keeps only the interactions it owns and neither sees the other's thread.
 6. Given an unauthenticated caller, when the route is called, then 401. Given a session list larger than a sane bound, then 400 with a sentence naming the limit, rather than an unbounded write.
 

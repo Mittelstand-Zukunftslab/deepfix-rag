@@ -139,3 +139,59 @@ Next step: **`create-story`** for ASKCHAT-001, one file under
 `tasks/stories-ask-chat/` with a `*-validation.md` sibling. ASKCHAT-002 must not
 start until the ASK- minimum-relevance work is on the branch.
 
+
+## Fifth pass: after implementation (2026-11-15)
+
+Validated again after ASKCHAT-001 … ASKCHAT-010 were implemented and committed on
+`feat/ask-chat-streaming`, and after a defect found on the deployed stack was
+fixed (`3b5d24f`). This pass exists because the fourth validated a *plan*: it
+compared the PRD against the tree the plan was written for, not against the code
+the plan produced. Fifteen places had drifted, and two behaviours the fourth pass
+inherited as "current" were wrong for a product and are now settled.
+
+| Dimension | Status | Notes |
+|-----------|--------|-------|
+| Completeness | Green | D-4a added (a provider that refuses the forced tool step, with the measurement that settled it); "Corrections after implementation" added as the index of every plan/code divergence; "Open questions" now records the two inherited behaviours as settled rather than open. |
+| Consistency | Green | D-5's column list matches the schema including `legacy_session_id` and names the marker table the idempotent delete needs; FR-002's grammar matches what `ask_chat_turn.run_turn` emits; FR-010 states the delete and rename rules the code enforces. |
+| Testability | Green | FR-005 now names the exact wire shape (`reasoning` disabled on the forced step, `num_retries=0`) and the two recoveries; FR-016 names the cutoff and the absent verdict; FR-018 and FR-020 name the export exclusion and the `ERROR` trace state. Each is observed by a test that exists. |
+| Traceability | Green | D-4a is cited from FR-005, R-2 and ASKCHAT-003; FR-010's delete and rename rules are cited from ASKCHAT-001; no FR lost a goal link. |
+| Feasibility | Green | The Amber of the fourth pass is resolved by measurement rather than by argument: the provider's behaviour is now known and worked around, and the workaround is tested against a socket. The one remaining unmeasured item is whether a stopped turn's spend stops upstream, which ASKCHAT-011's runbook still asks an operator to record. |
+| Security & privacy | Green | FR-010's 404 for a thread that is not the member's is unchanged, so the idempotent delete does not become a probe; a failed turn's answerless interaction is excluded from the export, so a failure cannot create a dev question. |
+
+### Blockers
+
+None. The deployed defect this pass documents — every turn failing at step 0 —
+was a code defect, is fixed in `3b5d24f`, and is now a risk that **occurred** (R-2)
+with its mitigation stated as the code that shipped.
+
+### Should-fix (closed in this pass)
+
+1. **The PRD described a plan, and fifteen details had drifted from the code.**
+   The "Corrections after implementation" table lists all fifteen with where each
+   is now recorded; the story files were corrected in the same commit series.
+2. **Two inherited behaviours were documented as open decisions when both had a
+   clearly better answer.** A retried delete returning 404 reports a failure for a
+   request that succeeded; a rename bound measured on the raw string refuses a valid
+   120-character name that arrived with whitespace. Both are now settled, implemented,
+   and tested — a 204 for the owner's already-deleted thread with a marker row
+   distinguishing it from "never yours", and a bound measured after trimming in both
+   the route and the store.
+3. **R-2 asserted a provider behaviour that turned out to be false.** It now records
+   the measurement and the fix rather than the assumption.
+
+### Nice-to-have
+
+1. The delete-marker table (`ask_chat_deleted_threads`) is a small piece of state
+   the plan did not anticipate. It is the minimum that makes "already deleted by
+   this member" distinguishable from "never this member's" after the row is gone;
+   an alternative is an `owners` tombstone keyed differently, which would be the
+   same idea with a worse name.
+2. `docs/ask-chat-verification.md` is still `NOT RUN`. Its step 8 now also has a
+   reason to be run: it is where the provider's live `tool_choice` behaviour is
+   confirmed rather than assumed.
+
+## Verdict
+
+**Pass.** No blocker, no open question, and the three should-fix items are closed
+in this pass. Feasibility moves to Green because the one behaviour that was
+asserted from documentation is now measured and handled in code.

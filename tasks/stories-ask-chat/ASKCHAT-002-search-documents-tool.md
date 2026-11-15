@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `033e834` on `feat/ask-chat-streaming`
 
 ## Summary
 The model gets exactly one callable, `search_documents`, which returns the ranked passages an answer may be built from. It reads the same serving index and the same `rerank.min_relevance_score` floor that `POST /retrieval` and `POST /ask` already apply, so the evidence the chat shows is the evidence the optimizer scores. When nothing clears the floor the tool says so instead of handing back five unrelated chunks.
@@ -23,14 +23,14 @@ The model gets exactly one callable, `search_documents`, which returns the ranke
 **The declaration**
 
 1. Given `src/deepfix_rag/ask_chat.py`, when it is read, then `search_documents` is declared once, as a JSON schema with the D-2 shape — input `{query: string 1..500, top_k?: integer}` and output `{query, grounding, passages[], max_score}` — and the OpenAI-style function definition the loop sends is built from that same object, so there is one source and not two.
-2. Given a `query` longer than 500 characters or empty, when the tool validates its input, then it refuses before any retrieval runs.
+2. Given a `query` longer than 500 characters or empty, when the tool validates its input, then it refuses before any retrieval runs, by raising `ToolInputError`. The loop turns that into the model's own retryable error (ASKCHAT-003), so a bad argument costs one tool call, not the turn.
 
 **What it reads**
 
 3. Given a serving index, when `search_documents` runs, then it retrieves through `QueryService.retrieve` under an `IndexCoordinator.checkout()` lease, records the lease's `build_id` for the turn, and releases the lease in a `finally` so a raised error cannot pin a build that is being replaced.
 4. Given `rerank.enabled: true` and `rerank.min_relevance_score: 0.2`, when the tool returns, then every passage in `passages` scored at or above 0.2, and no passage below it can appear. This is not a second filter: `QueryService.retrieve` already applies the floor through `_search` → `_search_split` → `RAGWorkflow._ranker_split`, so the tool receives survivors only. The tool must **not** re-implement the comparison, and must not import `_ranker_split` to redo it on an already-filtered list.
 5. Given no passage clears the floor, when the tool returns, then `grounding` is `"no_relevant_sources"`, `passages` is `[]`, `max_score` is 0, and no passage text is returned at all. The empty list is what `QueryService.retrieve` hands back in that case; the tool reports it rather than treating an empty result as an error.
-6. Given `rerank.enabled: false`, when the tool returns, then the floor does not apply — `_ranker_split` returns the nodes unchanged when `min_relevance_score <= 0` or rerank did not run, because the floor is calibrated on the reranker's `relevance_score` and a fused score is a different scale, measured near 0.03 on the sample fixture. The result is therefore the `displayed_limit(config, MAX_DISPLAYED_HITS)` window, the same list the Search page shows, and the tool must never offer the model 50 passages.
+6. Given `rerank.enabled: false`, when the tool returns, then the floor does not apply — `_ranker_split` returns the nodes unchanged when `min_relevance_score <= 0` or rerank did not run, because the floor is calibrated on the reranker's `relevance_score` and a fused score is a different scale — measured at **0.033** on the test corpus when this story's parity test was first run against a deliberately re-filtered tool, which is why an applied floor of 0.3 would empty it. The result is therefore the `displayed_limit(config, MAX_DISPLAYED_HITS)` window, the same list the Search page shows, and the tool must never offer the model 50 passages.
 7. Given a requested `top_k`, when it is outside `[1, displayed_limit(config, MAX_DISPLAYED_HITS)]`, then it is clamped into that range rather than refused, and the response's `query` echoes what was actually searched.
 8. Given a passage whose text exceeds `ASK_CHAT_MAX_PASSAGE_CHARS`, when it is returned, then its text is truncated to that length and `truncated` is `true`. Given a shorter passage, `truncated` is `false`.
 9. Given each passage, when it is returned, then it carries `rank` (1-based, in returned order), `doc_id`, `filename` resolved through `documents.document_filenames`, `text`, `score`, and `truncated`.
@@ -52,7 +52,7 @@ The model gets exactly one callable, `search_documents`, which returns the ranke
 - Any model call. This story produces a tool; ASKCHAT-003 loops over it.
 
 ## Notes
-- The tool's depth must come from `displayed_limit` in `src/deepfix_rag/api/routes/retrieval.py` rather than from `rerank.top_n` directly, because that helper is what the product already uses to decide what a member is shown. Two definitions of "how many passages" would drift.
+- The tool's depth must come from `displayed_limit` — and that helper now lives in **`src/deepfix_rag/service.py`**, beside `INDEX_PREPARING`, because it moved there in this story. The route module it used to live in is the HTTP layer, and a domain module importing from it would be the layering violation the story exists to avoid. `POST /retrieval`, `POST /ask`, and the tool all read the one function; two definitions of "how many passages" would drift.
 - `QueryService.retrieve` already applies the floor through `_search_split`, so this story does not filter anything. Its job is to report what came back — including `no_relevant_sources` when nothing did — and to bound the depth, which `QueryService.retrieve` does not do because `POST /retrieval` truncates with `displayed_limit` at the route.
 - `max_score` is the highest surviving passage's score, or 0. It is what makes a low-confidence turn visible in the trace without re-reading every passage.
 - The `MockEmbedding` fixture scores deterministically, so the parity test is stable; it asserts ids and order, not an absolute score threshold, so it does not become a second calibration test.

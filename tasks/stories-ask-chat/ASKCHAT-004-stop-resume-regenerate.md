@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `98eddf0`, revised by `3b5d24f` on `feat/ask-chat-streaming`
 
 ## Summary
 Stop ends an answer without losing it. A reload mid-answer resumes the reply in place. Regenerate replaces an answer at the same position instead of stacking a second one under it. A failure says so, offers regenerate, and leaves nothing stuck.
@@ -40,8 +40,8 @@ Stop ends an answer without losing it. A reload mid-answer resumes the reply in 
 
 10. Given a thread whose newest turn is `completed` or `cancelled`, when a request arrives with `regenerate: true`, then that turn's answer is replaced in place and its `turn_id` is reused, so the thread does not grow a second answer beside the first.
 11. Given the same regenerate, when the thread is re-read, then it contains exactly one assistant turn for that position, not two, and the previous answer's text is nowhere in it.
-12. Given votes on the replaced answer or its passages, when the regenerate completes, then each is cleared through the existing `clear` action in `feedback.record_vote`, which also deletes the mirrored MLflow assessment. No new vote action and no `feedback_events.action` `CHECK` change.
-13. Given a regenerate request whose newest turn is `running`, when it arrives, then it is refused with 409 rather than replacing a reply that is still being written.
+12. Given votes on the replaced answer or its passages, when the regenerate completes, then each is cleared through the existing `clear` action in `feedback.record_vote`, which also deletes the mirrored MLflow assessment. No new vote action and no `feedback_events.action` `CHECK` change. The regenerate rewrites the turn's **existing** `interactions` row rather than inserting a second, so one assistant turn still has exactly one row and the thread's join stays one-to-one.
+13. Given a regenerate request whose newest turn is `running`, when it arrives, then it is refused with **409** rather than replacing a reply that is still being written. The check is on the newest turn in the store, because the AI SDK's reload cannot name a turn id. A `failed` turn is a **valid** target — FR-018 offers regenerate for it — so the replaceable set is `completed`, `failed`, `cancelled`, and only `running` is refused.
 14. Given a thread whose newest turn is `no_relevant_sources`, when the browser renders it, then it offers no regenerate control. The refusal is the product's answer, not a transient failure.
 
 **Failure**
@@ -52,7 +52,8 @@ Stop ends an answer without losing it. A reload mid-answer resumes the reply in 
 
 **The required test**
 
-18. Given the real fake OpenAI-compatible endpoint and the real app, when `tests/test_ask_chat_stream.py` runs, then it covers: a client that closes the socket mid-stream leaves a `cancelled` row with the partial text and the tool's hits, and the fake server records that its response stream was **closed** rather than merely abandoned; a resume of that turn returns the stored text once and then the terminal frame; a regenerate leaves one assistant message and one `clear` event per prior vote; a failure frame yields `failed` and a regenerate that follows succeeds. No mocks.
+18. Given the real fake OpenAI-compatible endpoint and the real app, when `tests/test_ask_chat_stop_resume.py` runs, then it covers: a client that closes the socket mid-stream leaves a `cancelled` row with the partial text and the tool's hits, and the fake server records that its response stream was **closed** rather than merely abandoned; a resume of that turn returns the stored text once and then the terminal frame; a regenerate leaves one assistant message and one `clear` event per prior vote; a failure frame yields `failed` and a regenerate that follows succeeds; and a failed turn reports the deployment's configured cutoff rather than a placeholder, claims no verdict it never reached, has an `ERROR` trace, and leaves no answerless interaction in the export. No mocks.
+18a. Given a `TestClient` cannot abort mid-stream, when the abort case runs, then it runs the real app under `uvicorn` on a loopback port and closes a real `httpx` connection part-way through the answer. That is the only way the `GeneratorExit` path — which is what Starlette does on disconnect — is exercised.
 
 ## Out of scope
 - Editing an earlier message and re-running from there. Replacing the newest turn is the whole of regenerate in this release.
@@ -61,6 +62,7 @@ Stop ends an answer without losing it. A reload mid-answer resumes the reply in 
 - Persisting an in-flight stream across an API restart. The resume route reports the stored status instead, as AC 7 says.
 
 ## Notes
+- **A disconnect is a `GeneratorExit`, not an exception.** Starlette closes the relay generator when the browser goes, so `except Exception` never sees it. The terminal state is therefore written in a `finally`, and the cancelled path is caught explicitly — the first implementation used `except Exception` alone and left the row `running`, which only a real socket could reveal.
 - The abort path is one function, not two. Closing the upstream generator and writing the `cancelled` row belong together in the module so a later edit cannot do one without the other.
 - `src/deepfix_rag/api/chat_turns.py` already implements the live-registry plus stored-text-fallback shape for the admin chat: a `dict[turn_id, LiveTurn]` with subscriber queues, published to from the relay and closed in the same `finally` that settles the row. Reuse that pattern rather than inventing a second registry; one uvicorn worker is the stated assumption, and the stored-text fallback is what makes a second worker degrade instead of break.
 - Regenerate's "newest turn" resolution belongs on the server, because the AI SDK's reload drops the message it replaces and the browser cannot reliably name it. Resolve it from the stored thread exactly as the admin chat's `_regenerate_target` does.

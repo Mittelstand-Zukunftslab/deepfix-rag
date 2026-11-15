@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `7368a7b`, revised by `3b5d24f` on `feat/ask-chat-streaming`
 
 ## Summary
 The optimizer can see what a chat turn did: one MLflow trace per turn, with a child span for each search and the numbers that made it useful or not. And a follow-up like "and who voted against it?" reaches the dev set as the standalone question the model actually searched for, not as a pronoun sentence that would be scored as a retrieval miss.
@@ -25,9 +25,9 @@ The optimizer can see what a chat turn did: one MLflow trace per turn, with a ch
 
 1. Given a completed turn, when MLflow is read, then there is one trace in the `deepfix_product` experiment tagged with `interaction_id`, `thread_id`, `turn_id`, and `grounding`, and the tag `interaction_id` equals the stored interaction's `trace_id`.
 2. Given a turn with two tool calls, when the trace is read, then it has two child spans, one per call, each carrying the tool's `query`, the passage count, `max_score`, and its duration.
-3. Given `src/deepfix_rag/tracing.py::trace_request`, when it is read, then nested spans are supported — a new helper or an optional parent — without changing the shape of the traces `ask` and `retrieval` already write, and a test asserts those two are unchanged.
+3. Given `src/deepfix_rag/tracing.py`, when it is read, then a turn's trace is a **context manager**, `turn_trace`, and the search spans are opened inside it. MLflow nests a span through the ambient context, not through a `trace_id` argument — `start_span` has no such parameter — so a child span is only a child while its parent is open, and `trace_request` (which opens and closes before the loop) cannot carry one. `ask` and `retrieval` keep calling `trace_request` unchanged.
 4. Given a tracing failure — MLflow unreachable, an exception inside a span — when a turn runs, then the turn still completes, the failure is logged once, and no error part reaches the member. This is how `trace_request` already behaves and it must not regress.
-5. Given a cancelled or failed turn, when the trace is read, then it exists and carries the terminal status, so a turn that produced nothing is still accounted for.
+5. Given a cancelled or failed turn, when the trace is read, then it exists, carries the terminal `status` tag, and its span status is **`ERROR`** for a failure — not merely tagged, so a reviewer filtering by state sees it. Its trace id is stored on the turn's interaction, so the trace is reachable from the row. A tracing failure is logged and never fails the turn, and `turn_trace` must not swallow an exception raised by the turn itself.
 
 **What the export asks**
 

@@ -35,3 +35,24 @@ None. The story is a developer-facing one — "one typed layer, no protocol know
 - **NFR-7** — AC 6: the transport is `AssistantChatTransport` from `@assistant-ui/react-ai-sdk`, so no second chat runtime is introduced.
 - **NFR-4** — AC 3: the reader names only `/api/ask/chat/...` paths, so the BFF remains the only way to the API and the browser holds no credential.
 - **Accessibility** — not implied: no UI ships in this story.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`206e36c`)
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 4 said `api-boundary.test.ts` changes and everything else stays put | AC 4 allows one further change: `admin-chat-boundary.test.ts`'s "only reader" assertion | That assertion is false the moment a second reader exists. Leaving it would have meant deleting the Ask reader or weakening the test silently |
+| 2 | AC 9 expected "two `tool-search_documents` parts each with its output" | AC 9 expects one part per tool call | The AI SDK folds a call's input and output into one `tool-<name>` part, keyed by `toolCallId` |
+| 3 | AC 10's "seeding a stored thread and then reloading draws the answer exactly once" was untestable as written | Kept, but implemented against the seeded assistant message id being the `turn_id` | That id is what makes a resumed stream replace the seeded answer rather than landing beside it |
+
+### Blockers
+
+None.
+
+### Should-fix (applied)
+
+1. The Ask reader's exemption needed its own narrow test, as the admin one has.
+   `ask-chat-boundary.test.ts` pins its targets to `/api/ask/chat/...` and asserts
+   it holds no model id, key, or upstream host.

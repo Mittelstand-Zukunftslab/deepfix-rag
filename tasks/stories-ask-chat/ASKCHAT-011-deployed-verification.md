@@ -1,10 +1,10 @@
 # ASKCHAT-011 — Prove it on the deployed stack
 
 ## Type
-Chore
+Chore — an **operator runbook**, not a code story. Its deliverable is a document an operator fills in, and no code change belongs to it.
 
 ## Status
-Draft
+Runbook prepared, not run — `ea90987`. `docs/ask-chat-verification.md` is written in full with every result reading `NOT RUN`; an operator executes it and records the observed values.
 
 ## Summary
 A local test cannot prove that the BFF streams a body unchanged, that the provider honours `tool_choice` on the pinned model, or that four concurrent turns leave the 7.6 GB host where it was. This story is one operator session on the real stack, recorded as a runbook with its result.

@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `206e36c` on `feat/ask-chat-streaming`
 
 ## Summary
 The Ask page gets the same thin data layer the admin Hermes chat already has: Zod contracts for the frames, one module that reads the event stream, a service over the generated client, and a transport that builds one `Chat` per thread. The page above it holds no protocol knowledge and no stream parser.
@@ -28,7 +28,7 @@ The Ask page gets the same thin data layer the admin Hermes chat already has: Zo
 **The one stream reader**
 
 3. Given `web/src/services/ask-chat-sse.ts`, when it is read, then it is the only module in `web/src` that reads an event stream, and the only paths it names are `/api/ask/chat/...`.
-4. Given `web/src/test/api-boundary.test.ts`, when it runs, then its `EXEMPT` set contains `join("services", "ask-chat-sse.ts")` — the relative-path form that test matches on — and the test is otherwise unchanged. A bare filename would silently miss.
+4. Given `web/src/test/api-boundary.test.ts`, when it runs, then its `EXEMPT` set contains `join("services", "ask-chat-sse.ts")` — the relative-path form that test matches on. A bare filename would silently miss. **One further change is required and allowed:** `web/src/test/admin-chat-boundary.test.ts` asserts the admin reader is the *only* stream reader under `src/services/`, which a second reader falsifies. That assertion is updated to name both readers, and `web/src/test/ask-chat-boundary.test.ts` is added to keep the Ask exemption narrow — same-origin `/api/ask/chat/...` targets only, no model id, no key, no upstream host.
 5. Given `web/src/services/ask-chat-service.ts`, when it is read, then it wraps the generated client for the five thread routes and delegates the two streaming calls to the reader, so no component calls `fetch` directly.
 
 **The transport**
@@ -39,7 +39,7 @@ The Ask page gets the same thin data layer the admin Hermes chat already has: Zo
 
 **The required test**
 
-9. Given `web/src/test/ask-chat-stream.test.ts`, when it runs, then frames copied from a real streamed response, driven through the real transport, produce one assistant message with a text part, two `tool-search_documents` parts each with its output, and the grounding data part.
+9. Given `web/src/test/ask-chat-stream.test.ts`, when it runs, then frames copied from a real streamed response, driven through the real transport, produce one assistant message with a text part, a `tool-search_documents` part carrying the D-2 output, and the grounding data part. **One part per tool call, not two:** the AI SDK folds a call's `tool-input-available` and `tool-output-available` into a single `tool-<name>` part keyed by `toolCallId`, so a story that expected two parts per call would be asserting the SDK's internals rather than the wire.
 10. Given the same test file, when it runs, then a second `Chat` for another thread does not inherit the first thread's messages, and seeding a stored thread and then reloading draws the answer exactly once.
 
 ## Out of scope

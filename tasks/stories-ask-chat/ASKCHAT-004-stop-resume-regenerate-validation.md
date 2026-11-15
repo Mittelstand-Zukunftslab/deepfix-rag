@@ -37,3 +37,35 @@ Two were found and fixed.
 - **NFR-2** — AC 1, AC 5, AC 16: the disconnect is a normal end, logged once, no traceback; no row stays `running`.
 - **NFR-4** — AC 8: another member's turn id is 404 on the resume route, which is the route a naive implementation forgets to scope.
 - **NFR-1** — AC 6: the replayed text appears exactly once, which is the correctness property that makes resume usable rather than merely present.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`98eddf0`) and after the deployed defect
+  was fixed (`3b5d24f`)
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 13/14 left the target set implicit | AC 13 states 409 for a running newest turn, and that `failed` is replaceable | FR-018 offers regenerate for a failed answer, so "only answered turns" would have contradicted it; and a running turn must not be replaced under itself |
+| 2 | The abort was tested through `TestClient` | AC 18a requires a real `uvicorn` on a loopback port with a real closed connection | `TestClient` cannot abort mid-stream, so the `GeneratorExit` path — the one that actually runs — was untested. This is where the shipped bug lived |
+| 3 | Nothing said what a regenerate did to the interaction row | AC 12 says it rewrites the existing row | Inserting a second row breaks the one-row-per-turn rule the thread's join depends on |
+| 4 | A failed turn's reporting was unspecified | AC 18 adds the cutoff, the absent verdict, the `ERROR` trace, and the empty export | A resumed failure claimed `no_relevant_sources` and `cutoff: 0.0`, and its answerless interaction would have been filed as a dev question |
+
+### Blockers
+
+One, found on the deployment rather than in review: the cancelled path left the
+row `running`, because the relay caught `Exception` and a disconnect raises
+`GeneratorExit`. Fixed in the story's own implementation once the real-socket test
+existed; that test is now AC 18a.
+
+### Should-fix (applied)
+
+1. **The `finally` is the only writer of the terminal state.** Stated in the
+   Notes so a later edit cannot reintroduce a second settle path.
+
+### Nice-to-have
+
+1. A stopped turn's partial text is stored per delta, which is one `UPDATE` per
+   token. On the deployment that is a few hundred small writes per answer; it is
+   acceptable at this scale and is what makes a resume exact. Batching would trade
+   that exactness for write volume, and is not worth it until a measurement says so.

@@ -35,3 +35,24 @@ None. One outcome — the page behaves like a conversation — with every AC nam
 - **NFR-6** — AC 4, AC 12, and the required test: Stop is a named control, the thread list is keyboard reachable, and the streaming state does not trap focus.
 - **NFR-7** — AC 1, AC 3: `useAISDKRuntime`, `ChatMarkdown`, `ChatComposerBar`; no second renderer, composer, or runtime.
 - **NFR-4** — the page calls only the service; it names no upstream origin.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`d10c656`)
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 1 and AC 13 both described `chat-page.tsx` | AC 13 is `ask-result.tsx`, a separate component | The conversation page runs on `useAISDKRuntime`; the Search hand-off has no runtime and never sends anything. One file could not be both without a runtime with nothing behind it |
+| 2 | The page tests in `pages.test.tsx` drove the retired localStorage page | Those describes were removed; `ask-chat-page.test.tsx` covers the conversation, and the controlled-result cases moved with `AskResultView` | The localStorage session model no longer exists |
+| 3 | AC 14's index-preparing copy was unspecified beyond "the existing state" | The page renders `IndexPreparing`, the shared component, so the sentence is the same as the Search page's | A second copy of that sentence is the drift FR-031 forbids |
+
+### Blockers
+
+None.
+
+### Should-fix (applied)
+
+1. **The page had to keep the result view's votes working.** `AskResultView` owns
+   its own vote state and submits through `feedbackService`, so the Search hand-off
+   did not regress when the conversation page took over `chat-page.tsx`.

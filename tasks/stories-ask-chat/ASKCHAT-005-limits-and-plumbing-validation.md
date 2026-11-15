@@ -35,3 +35,23 @@ None. Every AC names a setting and its default, a file the name must appear in, 
 - **NFR-3** — AC 12: no new container, no `mem_limit` change, `backend-api` still uncapped.
 - **NFR-4** — AC 7: a refusal writes no row, so it cannot ratchet itself into a longer ban.
 - **NFR-8** — the sentence a refusal carries is what a member and an operator both read; AC 6 and AC 8 require it to name the wait or say the server is busy, which are different facts.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`289974a`)
+- Verdict: **Pass**
+
+No acceptance criterion needed correcting: the eight settings, their defaults, the
+Compose and `example.env` lines, the model guard, and the two limits all shipped as
+written. Two facts worth recording because they are evidence rather than opinion:
+
+- The plumbing test was mutation-checked by deleting one `ASK_CHAT_*` line from
+  `docker-compose.yml`; it failed naming the missing setting, which is the failure
+  mode CHAT-001 introduced the test for.
+- AC 11's history bound is now read from `ask_chat_turns` joined to `interactions`
+  for the message text, which the story's own AC 1 did not have to say but AC 11
+  does.
+
+### Blockers
+
+None.

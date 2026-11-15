@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `289974a` on `feat/ask-chat-streaming`
 
 ## Summary
 One member cannot hold the API, one deployment cannot be overrun, and every bound is visible in the three places an operator looks: `Settings`, the Compose environment, and `example.env`. There is no Ask-chat model setting: the chat resolves `LLM_MODEL`, the same value eval and `POST /ask` use.
@@ -38,7 +38,7 @@ One member cannot hold the API, one deployment cannot be overrun, and every boun
 8. Given `ASK_CHAT_MAX_CONCURRENT_TURNS` turns already running across the deployment, when another member asks, then 429 with a `Retry-After`, and the sentence says the server is busy rather than blaming the member's own usage.
 9. Given a turn that runs past `ASK_CHAT_TURN_TIMEOUT_SECONDS`, when it is ended, then the stream emits an `error` part and a terminal `data-deepfix-turn` with `status: "failed"`, and the row is `failed` with an `ended_at` — never `running`.
 10. Given a message longer than `ASK_CHAT_MAX_MESSAGE_CHARS`, when it is sent, then 400 with a sentence naming the limit.
-11. Given a stored history longer than `ASK_CHAT_MAX_HISTORY_MESSAGES`, when a turn is built, then the oldest messages are trimmed rather than the request refused, and the newest `ASK_CHAT_MAX_HISTORY_MESSAGES` messages are used.
+11. Given a stored history longer than `ASK_CHAT_MAX_HISTORY_MESSAGES`, when a turn is built, then the oldest messages are trimmed rather than the request refused, and the newest `ASK_CHAT_MAX_HISTORY_MESSAGES` messages are used. The history is read from `ask_chat_turns` joined to `interactions`, because the turn table holds state and the interaction holds the text.
 
 **No new footprint**
 

@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `838fdbf` on `feat/ask-chat-streaming`
 
 ## Summary
 The passages behind an answer come from what the tool actually returned, not from parsing the prose. Each one is readable and votable, each `[n]` marker in the answer jumps to the passage it names, and the badge tells the member whether the answer was grounded — with a distinct **Partly grounded** state for a grounded answer that cites nothing (D-10).
@@ -25,7 +25,7 @@ The passages behind an answer come from what the tool actually returned, not fro
 
 1. Given a message with `tool-search_documents` output parts, when the sources panel renders, then it lists one card per returned passage with `filename`, rank, score, and text, and shows a truncation note where `truncated` is true. It never parses the answer's prose to find passages.
 2. Given a message with two tool calls, when the panel renders, then both results' passages appear, in call order then rank order, and each card is labelled with the query that produced it, so a follow-up turn's second search is not presented as a duplicate of its first.
-3. Given a reloaded thread, when the panel renders, then it is rebuilt from the stored message parts and shows the same cards in the same order, with no second request per answer.
+3. Given a reloaded thread, when the panel renders, then it is rebuilt from the store and shows the same cards in the same order, with no second request per answer. A reloaded thread has no `tool-output-available` part to read, so `GET /ask/chat/threads/{thread_id}` returns each turn's stored `passages` (its `interaction_hits` snapshot) and the page falls back to it when the message carries no tool part.
 
 **Votes still work**
 
@@ -37,7 +37,7 @@ The passages behind an answer come from what the tool actually returned, not fro
 **Citations**
 
 8. Given an answer containing a validated `[n]` marker, when it renders, then the marker is a focusable control whose accessible name identifies the passage, and activating it selects and scrolls to that card in the panel.
-9. Given a marker that resolved to nothing, when it renders, then it is plain text and is not a link. The server already dropped it from `citations` (ASKCHAT-003 AC 16).
+9. Given a marker that resolved to nothing, when it renders, then it is plain text and is not a link. The server already dropped it from `citations` (ASKCHAT-003 AC 16). The substitution happens on the markdown *source*, inside the shared `ChatMarkdown`, via a private token a `p` override resolves into a control; walking the rendered tree does not work, because `ChatMarkdown` returns a `<div>` around an unrendered component and there are no string children to find.
 10. Given the panel is open and a card is selected, when the member moves focus with the keyboard, then the selection follows and the selected card is visibly distinct.
 
 **The badge (D-10)**
@@ -45,12 +45,12 @@ The passages behind an answer come from what the tool actually returned, not fro
 11. Given a turn with `grounding == "grounded"` and a non-empty `citations`, when the answer renders, then the badge is **Grounded** using the landed `GROUNDING_BADGE` copy and the note is `N passages used` from the landed `groundingNote`.
 12. Given a turn with `grounding == "grounded"` and an empty `citations`, when the answer renders, then the badge is **Partly grounded** in the warning style and the note is still `N passages used`. It is a warning, not an error: it does not block the answer, the sources panel, or a vote.
 13. Given a turn with `grounding == "declined"` or `"no_relevant_sources"`, when the answer renders, then the badge is the landed **Not found in the documents** copy and the note is the landed `Answer declined` or `No matching passages` respectively.
-14. Given the badge implementation, when it is read, then it extends `GROUNDING_BADGE` / `groundingNote` in `web/src/features/chat/grounding-copy.ts` — one new entry and one new note — rather than adding a second badge component or a second copy map.
+14. Given the badge implementation, when it is read, then it extends `web/src/features/chat/grounding-copy.ts` in one place rather than adding a second badge component or a second copy map. `GROUNDING_BADGE` is a `Record<Grounding, …>`, so the fourth *rendered* state cannot be a fourth key without widening the enum D-3 forbids; it is `badgeState(grounding, citations)`, beside `groundingNote`, returning one of four states over three stored values. `GroundingBadge` takes `citations` and renders that state.
 15. Given a `no_relevant_sources` turn, when it renders, then there are no passage cards, the badge and note are present, and there is no Regenerate control. The four rendered states are distinguishable without reading the answer's prose (FR-034).
 
 **Accessibility**
 
-16. Given a turn streaming, when it renders, then the streaming region is `aria-live="polite"`, Stop and Regenerate are named buttons, the panel is reachable by keyboard, and focus returns to the composer when the turn ends.
+16. Given a turn streaming, when it renders, then the streaming region is `aria-live="polite"`, Stop and Regenerate are named buttons, the panel is reachable by keyboard, and focus returns to the composer when the turn ends. The panel is reachable at every width: it sits beside the column and **stacks below `lg`**, because hiding it on a narrow viewport makes the evidence unreachable on a phone.
 17. Given the badge, when it is read by a screen reader, then its state is text, not colour alone.
 
 **The required test**

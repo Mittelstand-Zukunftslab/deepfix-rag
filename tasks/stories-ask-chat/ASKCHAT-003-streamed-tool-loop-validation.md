@@ -41,3 +41,43 @@ This story is large: twenty acceptance criteria spanning the route, the loop, th
 - **NFR-7** — the story adds no runtime and no protocol; it speaks the one the admin chat already speaks.
 - **NFR-8** — the Notes require one structured line per turn start and terminal state, with no passage text.
 - **Accessibility** — not implied: this story ships no UI. ASKCHAT-007 and -008 carry it.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`09cd26f`) and after the deployed defect
+  was fixed (`3b5d24f`)
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 2 listed one linear part sequence | AC 2 states the per-step grammar, with two `start-step`/`finish-step` pairs for a two-step turn | `start-step`/`finish-step` bracket *model steps*. The drafted list described a turn with one step and put the tool parts outside any step |
+| 2 | AC 5 said `drop_params` came from `litellm_additional_kwargs()` per call | AC 5 says it is set once at import and the loop does not re-set it | That helper assigns the process-wide `litellm.drop_params`; calling it inside a request is a global side effect racing every other request |
+| 3 | AC 10 read history from `ask_chat_turns` | AC 10 reads turns joined to `interactions`, because the text lives there | The turn table has no question and no answer (FR-019) |
+| 4 | AC 14 implied the interaction row was written at the end | AC 14 says it is opened before the first byte and filled in afterwards | A cancelled or failed turn must be readable, and a regenerate must rewrite the same row |
+| 5 | Nothing said a provider could refuse the forced step | AC 6 disables thinking on it and AC 6a recovers from a refusal | The deployed stack failed **every** turn this way; the drafted story assumed the hint was honoured |
+| 6 | The test plan named a "local fake endpoint" without a recovery case | AC 19 names both recoveries and the exact wire body assertion | The failure was invisible to every local test because none refused the forced shape |
+
+### Blockers
+
+None outstanding. The defect itself (every turn failing at step 0) was a
+**blocker in the shipped code**, found on the deployment and fixed in `3b5d24f`
+with an integration test that reproduces the exact 400 over a socket.
+
+### Should-fix (applied)
+
+1. **The trace could not carry child spans.** D-4's "one child span per tool
+   call" is impossible with `trace_request`, which opens and closes its span
+   before the loop runs. The story now points at `tracing.turn_trace`, a context
+   manager held open for the turn.
+2. **A failed turn's trace was reported as healthy.** `turn_trace` initially
+   swallowed an exception raised by its own body, so a failed turn left a
+   `TRACESTATUS.OK` trace. It now re-raises, and FR-020 has the route mark the
+   span `ERROR`.
+
+### Nice-to-have
+
+1. A provider that refuses the *unforced* retry too is recovered by the
+   server-side search, which means the model's first real step is answering with
+   a tool result already in the conversation. That is the correct behaviour and is
+   tested, but it is worth watching in the trace: a high rate of it would mean the
+   served provider needs replacing via `LLM_MODEL`, not another workaround.

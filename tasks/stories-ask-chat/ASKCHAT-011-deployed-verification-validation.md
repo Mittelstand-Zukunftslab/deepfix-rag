@@ -40,3 +40,25 @@ None. The outcome is single — one recorded operator session that settles what 
 ## Note for `check-story-size`, not a finding here
 
 Thirteen acceptance criteria, all observations to record rather than code to write. As an operator session it is a single sitting with a laptop and a deployment.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the runbook was written (`ea90987`)
+- Verdict: **Pass as a prepared runbook; not executed**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | The story was listed among the build stories, as if it ended in code | Its Type says **operator runbook** and its Status says prepared, not run | A cloud agent has no deployment, no browser against it, and no provider account. Pretending otherwise would produce a document full of claims nobody made |
+| 2 | AC 10 asked whether the model honours `tool_choice: "required"` | Kept, and partly answered ahead of the session: on 2026-11-15 it did **not**, which is D-4a | The measurement that fixed the deployed defect also closed half of this AC; the runbook still records it on the real stack |
+| 3 | Nothing linked the runbook to the fix | Step 8 now names the provider behaviour as the thing to confirm live | The workaround shipped on a measurement taken outside a browser; a second, operator-run confirmation is cheap |
+
+### Blockers
+
+None. Every step in `docs/ask-chat-verification.md` records a command or action
+and a result field reading `NOT RUN`, so nothing in it can be mistaken for a
+passing result.
+
+### Should-fix (applied)
+
+1. `docs/README.md` lists the runbook, so it is discoverable from the docs index
+   rather than only from the story folder.
