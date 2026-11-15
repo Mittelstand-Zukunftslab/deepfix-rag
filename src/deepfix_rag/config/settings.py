@@ -116,6 +116,16 @@ class Settings(BaseSettings):
     AUTH_ISSUER: str | None = None
     AUTH_AUDIENCE: str | None = None
     MAX_DISPLAYED_HITS: int = 10
+    # The Ask chat's bounds (D-8). ASKCHAT-005 plumbs these into the Compose
+    # environment and example.env; the loop reads them here.
+    ASK_CHAT_MAX_TURNS_PER_WINDOW: int = 20
+    ASK_CHAT_TURN_WINDOW_SECONDS: int = 300
+    ASK_CHAT_MAX_CONCURRENT_TURNS: int = 4
+    ASK_CHAT_MAX_TOOL_CALLS: int = 3
+    ASK_CHAT_MAX_HISTORY_MESSAGES: int = 12
+    ASK_CHAT_MAX_MESSAGE_CHARS: int = 4000
+    ASK_CHAT_MAX_PASSAGE_CHARS: int = 1200
+    ASK_CHAT_TURN_TIMEOUT_SECONDS: int = 120
     # Omit sampling params the provider rejects. Claude Haiku 5.5 allows only
     # temperature=1. Read by llm.py for every LiteLLM completion, not only the
     # optimization agent, so it stays after OpenHands was removed.

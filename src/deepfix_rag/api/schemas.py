@@ -524,3 +524,17 @@ class AskChatThreadDetailResponse(ApiModel):
 
     thread: AskChatThreadResponse
     turns: list[AskChatTurnResponse]
+
+
+class AskChatCompletionRequest(ApiModel):
+    """One Ask chat turn.
+
+    ``messages`` carries the browser's view for the AI SDK's own bookkeeping; the
+    prompt is rebuilt from the store, so the array is not trusted and only its
+    last entry's role is checked (FR-011). ``regenerate`` marks the AI SDK's
+    reload trigger, which replaces the newest answered turn in place (FR-015).
+    """
+
+    thread_id: str = Field(min_length=1)
+    messages: list[ChatMessageModel] = Field(min_length=1)
+    regenerate: bool = False

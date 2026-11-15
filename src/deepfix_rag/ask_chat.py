@@ -263,6 +263,22 @@ class IndexNotReadyError(RuntimeError):
     """No serving index, so the tool cannot search. The route maps this to 503."""
 
 
+def displayed_floor(coordinator: IndexCoordinator) -> float:
+    """The ``rerank.min_relevance_score`` the serving service is applying right now.
+
+    Reported to the client so a turn's evidence can be read against the floor that
+    produced it (D-3). This is a report, not a filter: the comparison happens once,
+    inside the retrieval path the tool calls.
+    """
+    lease = coordinator.checkout()
+    if lease is None:
+        return 0.0
+    try:
+        return float(lease.service.config.rerank.min_relevance_score)
+    finally:
+        coordinator.release(lease)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -566,6 +582,46 @@ def thread_turns(db_path: Path, thread_id: str, owner_id: str) -> list[Turn]:
     with connect(db_path) as conn:
         rows = conn.execute(TURNS_BY_THREAD_SQL, (thread_id, owner_id)).fetchall()
     return [_turn_from_row(row) for row in rows]
+
+
+def record_turn_answer(
+    db_path: Path,
+    turn: Turn,
+    *,
+    question: str,
+    answer: str,
+    results: list[RetrievalResult],
+    retrieval_query: str | None,
+    grounding: Grounding | str,
+    citations: list[dict[str, object]],
+    build_id: str | None,
+    config_path: str,
+    user_email: str = "",
+    trace_id: str | None = None,
+) -> str:
+    """Store one assistant turn's single ``interactions`` row and its hits (FR-019).
+
+    ``kind`` is ``'ask'`` and the table's ``CHECK`` is untouched, so votes, the
+    admin history, the MLflow assessment mirror, and the optimizer's export keep
+    working with no second path. The row is written through
+    ``interactions.record_interaction`` and then linked to the thread and the turn
+    by the caller, so the two nullable columns have one writer.
+    """
+    from deepfix_rag.interactions import record_interaction
+
+    stored = record_interaction(
+        db_path,
+        kind="ask",
+        user_id=turn.owner_id,
+        user_email=user_email,
+        query=question,
+        build_id=build_id or "",
+        config_path=config_path,
+        results=results,
+        answer=answer,
+        trace_id=trace_id,
+    )
+    return stored.interaction_id
 
 
 def link_interaction(

@@ -29,6 +29,31 @@ export type AskChatCitationResponse = {
 };
 
 /**
+ * AskChatCompletionRequest
+ *
+ * One Ask chat turn.
+ *
+ * ``messages`` carries the browser's view for the AI SDK's own bookkeeping; the
+ * prompt is rebuilt from the store, so the array is not trusted and only its
+ * last entry's role is checked (FR-011). ``regenerate`` marks the AI SDK's
+ * reload trigger, which replaces the newest answered turn in place (FR-015).
+ */
+export type AskChatCompletionRequest = {
+    /**
+     * Messages
+     */
+    messages: Array<ChatMessageModel>;
+    /**
+     * Regenerate
+     */
+    regenerate?: boolean;
+    /**
+     * Thread Id
+     */
+    thread_id: string;
+};
+
+/**
  * AskChatRenameRequest
  *
  * A new thread title. The store trims it, so the length is measured after trimming.
@@ -2176,6 +2201,47 @@ export type AskQuestionResponses = {
 };
 
 export type AskQuestionResponse = AskQuestionResponses[keyof AskQuestionResponses];
+
+export type AskChatCompletionData = {
+    body: AskChatCompletionRequest;
+    path?: never;
+    query?: never;
+    url: '/ask/chat/completions';
+};
+
+export type AskChatCompletionErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * An upstream dependency answered with an error.
+     */
+    502: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type AskChatCompletionError = AskChatCompletionErrors[keyof AskChatCompletionErrors];
+
+export type AskChatCompletionResponses = {
+    /**
+     * The AI SDK UI message stream for one turn.
+     */
+    200: string;
+};
+
+export type AskChatCompletionResponse = AskChatCompletionResponses[keyof AskChatCompletionResponses];
 
 export type ListAskChatThreadsData = {
     body?: never;

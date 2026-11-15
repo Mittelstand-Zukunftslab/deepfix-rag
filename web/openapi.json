@@ -27,6 +27,35 @@
         "title": "AskChatCitationResponse",
         "type": "object"
       },
+      "AskChatCompletionRequest": {
+        "description": "One Ask chat turn.\n\n``messages`` carries the browser's view for the AI SDK's own bookkeeping; the\nprompt is rebuilt from the store, so the array is not trusted and only its\nlast entry's role is checked (FR-011). ``regenerate`` marks the AI SDK's\nreload trigger, which replaces the newest answered turn in place (FR-015).",
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageModel"
+            },
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "regenerate": {
+            "default": false,
+            "title": "Regenerate",
+            "type": "boolean"
+          },
+          "thread_id": {
+            "minLength": 1,
+            "title": "Thread Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "messages"
+        ],
+        "title": "AskChatCompletionRequest",
+        "type": "object"
+      },
       "AskChatRenameRequest": {
         "description": "A new thread title. The store trims it, so the length is measured after trimming.",
         "properties": {
@@ -3757,6 +3786,88 @@
         "summary": "Ask a question",
         "tags": [
           "retrieval"
+        ]
+      }
+    },
+    "/ask/chat/completions": {
+      "post": {
+        "description": "Open a turn, then stream the model's answer as AI SDK UI message parts.\n\nA failure discovered before the first byte is a JSON status with a sentence:\nanother member's thread is 404, a last message that is not the member's is\n400, and no serving index is 503 with the sentence the Search page shows.\nOnce the stream has started, the only honest failure is an ``error`` part.",
+        "operationId": "ask_chat_completion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskChatCompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The AI SDK UI message stream for one turn."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "An upstream dependency answered with an error."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Ask one question and stream the answer",
+        "tags": [
+          "ask-chat"
         ]
       }
     },

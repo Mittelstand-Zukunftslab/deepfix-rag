@@ -34,6 +34,7 @@ KEEPALIVE_FRAME = ": keepalive\n\n"
 # The parts the AI SDK's ``uiMessageChunkSchema`` accepts, by ``type``.
 TOOL_PART = "data-deepfix-tool"
 TURN_PART = "data-deepfix-turn"
+GROUNDING_PART = "data-deepfix-grounding"
 
 # Hermes' progress event can arrive at the top level of a chunk or inside the
 # first choice's delta. Both are read, so a change of nesting on the image does
@@ -68,16 +69,75 @@ def tool_part(progress: dict[str, Any]) -> dict[str, Any]:
     return {"type": TOOL_PART, "data": progress}
 
 
+def step_start_part() -> dict[str, Any]:
+    """Open one model step. A tool call and the prose after it are separate steps."""
+    return {"type": "start-step"}
+
+
+def step_finish_part() -> dict[str, Any]:
+    """Close one model step, before the next one's tool call or the final prose."""
+    return {"type": "finish-step"}
+
+
+def tool_input_start(tool_call_id: str, tool_name: str) -> dict[str, Any]:
+    """Announce one tool call before its arguments are known."""
+    return {"type": "tool-input-start", "toolCallId": tool_call_id, "toolName": tool_name}
+
+
+def tool_input_available(
+    tool_call_id: str, tool_name: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """The call's arguments, once the model has finished writing them."""
+    return {
+        "type": "tool-input-available",
+        "toolCallId": tool_call_id,
+        "toolName": tool_name,
+        "input": arguments,
+    }
+
+
+def tool_output_available(tool_call_id: str, output: Any) -> dict[str, Any]:
+    """The tool's result. The object is the tool's own output verbatim (D-2)."""
+    return {"type": "tool-output-available", "toolCallId": tool_call_id, "output": output}
+
+
+def grounding_part(
+    grounding: str,
+    citations: list[dict[str, Any]],
+    *,
+    max_score: float,
+    cutoff: float,
+) -> dict[str, Any]:
+    """The turn's grounding verdict, its validated citations, and the floor it used (D-3)."""
+    return {
+        "type": GROUNDING_PART,
+        "data": {
+            "grounding": grounding,
+            "citations": list(citations),
+            "max_score": max_score,
+            "cutoff": cutoff,
+        },
+    }
+
+
 def turn_part(
     turn_id: str,
     status: str,
     actions: list[dict[str, Any]] | None = None,
+    *,
+    grounding: str | None = None,
+    citations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The turn's terminal information, as a ``data-*`` part."""
-    return {
-        "type": TURN_PART,
-        "data": {"turn_id": turn_id, "status": status, "actions": list(actions or [])},
+    data: dict[str, Any] = {
+        "turn_id": turn_id,
+        "status": status,
+        "actions": list(actions or []),
     }
+    if grounding is not None:
+        data["grounding"] = grounding
+        data["citations"] = list(citations or [])
+    return {"type": TURN_PART, "data": data}
 
 
 def error_part(message: str) -> dict[str, Any]:
