@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AskResponse": {
-        "description": "One single-turn answer and the passages it used.",
+        "description": "One single-turn answer and the passages it used.\n\n``grounding`` is how the corpus supports the answer: ``grounded`` when the\nanswer came from the retrieved passages, ``declined`` when the model refused\nbecause the corpus does not answer the question, and ``no_relevant_sources``\nwhen no passage passed the relevance floor and no answer was attempted. The\nUI branches on it, so it is never absent.",
         "properties": {
           "answer": {
             "anyOf": [
@@ -25,6 +25,9 @@
               }
             ],
             "title": "Error"
+          },
+          "grounding": {
+            "$ref": "#/components/schemas/Grounding"
           },
           "hits": {
             "items": {
@@ -58,6 +61,7 @@
           "answer",
           "error",
           "vote",
+          "grounding",
           "hits"
         ],
         "title": "AskResponse",
@@ -1188,6 +1192,16 @@
         "title": "FeedbackSummaryResponse",
         "type": "object"
       },
+      "Grounding": {
+        "description": "How much the corpus supports the answer that was returned.",
+        "enum": [
+          "grounded",
+          "declined",
+          "no_relevant_sources"
+        ],
+        "title": "Grounding",
+        "type": "string"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1488,6 +1502,9 @@
             ],
             "title": "Error"
           },
+          "grounding": {
+            "$ref": "#/components/schemas/Grounding"
+          },
           "hits": {
             "items": {
               "$ref": "#/components/schemas/HitResponse"
@@ -1534,6 +1551,7 @@
           "answer",
           "error",
           "vote",
+          "grounding",
           "hits"
         ],
         "title": "InteractionResponse",

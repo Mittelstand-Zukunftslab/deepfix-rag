@@ -24,6 +24,7 @@ from deepfix_rag.api.schemas import (
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.documents import document_filenames
 from deepfix_rag.feedback import current_votes
+from deepfix_rag.grounding import grounding_for
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.interactions import Interaction, get_interaction, record_interaction
 from deepfix_rag.pipeline import RetrievalResult
@@ -127,6 +128,7 @@ async def ask_question(payload: QueryRequest, request: Request) -> AskResponse:
         answer=stored.answer,
         error=stored.error,
         vote=_answer_vote(settings.product_db_path, user.id, stored.interaction_id),
+        grounding=grounding_for(stored.answer),
         hits=_hit_responses(settings.product_db_path, stored, user.id),
     )
 
@@ -251,5 +253,6 @@ def read_interaction(interaction_id: str, request: Request) -> InteractionRespon
         answer=stored.answer,
         error=stored.error,
         vote=_answer_vote(settings.product_db_path, user.id, stored.interaction_id),
+        grounding=grounding_for(stored.answer),
         hits=_hit_responses(settings.product_db_path, stored, user.id),
     )

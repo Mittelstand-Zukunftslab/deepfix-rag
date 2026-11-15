@@ -50,6 +50,7 @@ from deepfix_rag.evaluation.labels import (
     question_metrics,
 )
 from deepfix_rag.evaluation.llm import ProxyJudgeLLM
+from deepfix_rag.grounding import is_deflection
 from deepfix_rag.pipeline import RAGResult, RAGWorkflow, RetrievalResult
 
 _enc = tiktoken.get_encoding("cl100k_base")
@@ -57,24 +58,6 @@ _enc = tiktoken.get_encoding("cl100k_base")
 
 def count_tokens(text: str) -> int:
     return len(_enc.encode(text or ""))
-
-
-DEFLECTION_PHRASES = (
-    "i do not have enough information",
-    "i don't have enough information",
-    "not enough information",
-    "i cannot answer",
-    "the context does not provide",
-    "the provided text does not",
-    "not mentioned in the context",
-    "i am unable to answer",
-    "does not contain the answer to this question",
-)
-
-
-def is_deflection(answer: str) -> bool:
-    lowered = (answer or "").lower()
-    return any(phrase in lowered for phrase in DEFLECTION_PHRASES)
 
 
 def _apply_judged_only_metrics(

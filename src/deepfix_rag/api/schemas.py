@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from deepfix_rag.feedback import COMMENT_MAX_LENGTH, CommentReason
+from deepfix_rag.grounding import Grounding
 
 
 class ApiModel(BaseModel):
@@ -99,12 +100,20 @@ class RetrievalResponse(ApiModel):
 
 
 class AskResponse(ApiModel):
-    """One single-turn answer and the passages it used."""
+    """One single-turn answer and the passages it used.
+
+    ``grounding`` is how the corpus supports the answer: ``grounded`` when the
+    answer came from the retrieved passages, ``declined`` when the model refused
+    because the corpus does not answer the question, and ``no_relevant_sources``
+    when no passage passed the relevance floor and no answer was attempted. The
+    UI branches on it, so it is never absent.
+    """
 
     interaction_id: str
     answer: str | None = None
     error: str | None = None
     vote: Literal["up", "down"] | None = None
+    grounding: Grounding
     hits: list[HitResponse]
 
 
@@ -117,6 +126,7 @@ class InteractionResponse(ApiModel):
     answer: str | None = None
     error: str | None = None
     vote: Literal["up", "down"] | None = None
+    grounding: Grounding
     hits: list[HitResponse]
 
 

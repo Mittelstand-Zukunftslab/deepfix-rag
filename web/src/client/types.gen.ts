@@ -8,6 +8,12 @@ export type ClientOptions = {
  * AskResponse
  *
  * One single-turn answer and the passages it used.
+ *
+ * ``grounding`` is how the corpus supports the answer: ``grounded`` when the
+ * answer came from the retrieved passages, ``declined`` when the model refused
+ * because the corpus does not answer the question, and ``no_relevant_sources``
+ * when no passage passed the relevance floor and no answer was attempted. The
+ * UI branches on it, so it is never absent.
  */
 export type AskResponse = {
     /**
@@ -18,6 +24,7 @@ export type AskResponse = {
      * Error
      */
     error: string | null;
+    grounding: Grounding;
     /**
      * Hits
      */
@@ -683,6 +690,13 @@ export type FeedbackSummaryResponse = {
 };
 
 /**
+ * Grounding
+ *
+ * How much the corpus supports the answer that was returned.
+ */
+export type Grounding = 'grounded' | 'declined' | 'no_relevant_sources';
+
+/**
  * HTTPValidationError
  */
 export type HttpValidationError = {
@@ -866,6 +880,7 @@ export type InteractionResponse = {
      * Error
      */
     error: string | null;
+    grounding: Grounding;
     /**
      * Hits
      */

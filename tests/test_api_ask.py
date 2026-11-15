@@ -42,6 +42,19 @@ class FailingLLM(MockLLM):
         raise RuntimeError("generation failed")
 
 
+DECLINED = 'No explanation of "rerank off" is available.'
+
+
+class RefusingLLM(MockLLM):
+    """Local model that answers with a refusal instead of using the passages."""
+
+    def complete(self, prompt: str, formatted: bool = False, **kwargs) -> CompletionResponse:
+        return CompletionResponse(text=DECLINED)
+
+    def chat(self, messages, **kwargs) -> ChatResponse:
+        return ChatResponse(message=ChatMessage(role="assistant", content=DECLINED))
+
+
 @pytest.fixture
 def ask_settings(tmp_path) -> Settings:
     return Settings(
@@ -86,6 +99,7 @@ def test_ask_stores_the_answer_and_a_single_turn(
         assert body["answer"] == "The harbor budget was approved."
         assert body["error"] is None
         assert body["vote"] is None
+        assert body["grounding"] == "grounded"
         assert body["hits"]
         assert body["hits"][0]["document_filename"] == "harbor.txt"
         assert body["hits"][0]["vote"] is None
@@ -126,6 +140,7 @@ def test_generation_failure_keeps_the_passages(
         body = failed.json()
         assert body["answer"] is None
         assert body["error"] == "The answer could not be generated."
+        assert body["grounding"] == "no_relevant_sources"
         assert body["hits"]
         stored = get_interaction(ask_settings.product_db_path, body["interaction_id"])
         assert stored is not None
@@ -133,3 +148,28 @@ def test_generation_failure_keeps_the_passages(
         assert stored.answer is None
         assert stored.error == body["error"]
         assert stored.hits
+
+
+def test_a_refusal_is_declined_and_a_stored_ask_keeps_its_grounding(
+    ask_settings: Settings, identity: IdentityIssuer
+) -> None:
+    """A model refusal is text, but it is not grounded in the corpus."""
+    with _client(ask_settings, RefusingLLM(), identity) as client:
+        identity.sign_in(client, "ada@example.com")
+        _index_note(client)
+        asked = client.post("/ask", json={"query": "what does the harbor budget say"})
+        assert asked.status_code == 200, asked.text
+        body = asked.json()
+        assert body["answer"] == DECLINED
+        assert body["error"] is None
+        assert body["grounding"] == "declined"
+
+        reopened = client.get(f"/interactions/{body['interaction_id']}")
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["grounding"] == "declined"
+
+        searched = client.post("/retrieval", json={"query": "harbor budget"})
+        assert searched.status_code == 200, searched.text
+        stored_search = client.get(f"/interactions/{searched.json()['interaction_id']}")
+        assert stored_search.status_code == 200
+        assert stored_search.json()["grounding"] == "no_relevant_sources"

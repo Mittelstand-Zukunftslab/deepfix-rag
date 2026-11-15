@@ -33,16 +33,18 @@ import {
 import { ChatComposerBar, ChatComposerHint } from "@/components/chat/composer";
 import { ChatMarkdown } from "@/components/chat/markdown";
 import { TopBar } from "@/components/layout/app-shell";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { GroundingBadge } from "@/features/chat/answer-grounding";
+import { groundingNote } from "@/features/chat/grounding-copy";
 import { commentKey, useFeedbackComments } from "@/features/feedback/use-feedback-comments";
 import { VoteButtons, type Vote } from "@/features/feedback/vote-buttons";
 import { VoteComment } from "@/features/feedback/vote-comment";
 import { IndexPreparing } from "@/features/index/index-preparing";
 import { askService, type AskHit } from "@/services/ask-service";
 import { feedbackService } from "@/services/feedback-service";
+import type { Grounding } from "@/client";
 
 const SESSIONS_STORAGE_KEY = "deepfix.chat_sessions.v2";
 const ACTIVE_SESSION_STORAGE_KEY = "deepfix.active_session_id.v2";
@@ -71,6 +73,7 @@ export interface ChatTurn {
   timestamp: number;
   answer: string | null;
   error: string | null;
+  grounding: Grounding;
   hits: AskHit[];
   answerVote: Vote;
   interactionId: string | null;
@@ -102,6 +105,7 @@ export function AskPage({
   hits,
   askedQuery = null,
   ownerId = null,
+  grounding = "grounded",
 }: {
   indexReady?: boolean;
   answer?: string | null;
@@ -109,6 +113,7 @@ export function AskPage({
   hits?: AskHit[];
   askedQuery?: string | null;
   ownerId?: string | null;
+  grounding?: Grounding;
 }) {
   const isControlledMode =
     askedQuery !== null || answer !== undefined || hits !== undefined || initialError !== null;
@@ -122,6 +127,7 @@ export function AskPage({
         timestamp: Date.now(),
         answer: hits ? (answer ?? null) : null,
         error: initialError,
+        grounding,
         hits: hits ?? [],
         answerVote: null,
         interactionId: null,
@@ -273,6 +279,7 @@ export function AskPage({
         timestamp: Date.now(),
         answer: response.answer,
         error: response.error,
+        grounding: response.grounding,
         hits: response.hits ?? [],
         answerVote: response.vote ?? null,
         interactionId: response.interaction_id,
@@ -309,6 +316,7 @@ export function AskPage({
         timestamp: Date.now(),
         answer: null,
         error: errorMsg,
+        grounding: "no_relevant_sources",
         hits: [],
         answerVote: null,
         interactionId: null,
@@ -737,7 +745,7 @@ export function AskPage({
                           </div>
                         )}
 
-                        {/* Assistant Grounded Answer Card */}
+                        {/* Assistant Answer Card: the badge says what grounding it actually has */}
                         {turn.answer && (
                           <div className="flex items-start gap-3.5">
                             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xs ring-4 ring-primary/10">
@@ -750,17 +758,12 @@ export function AskPage({
                                   <span className="text-label-lg font-semibold text-foreground">
                                     Answer
                                   </span>
-                                  <Badge
-                                    variant="outline"
-                                    className="border-primary/25 bg-primary/10 text-[11px] font-medium text-primary"
-                                  >
-                                    Grounded
-                                  </Badge>
+                                  <GroundingBadge grounding={turn.grounding} />
                                 </div>
 
                                 <div className="flex items-center gap-2">
                                   <span className="text-xs text-muted-foreground">
-                                    Generated from corpus
+                                    {groundingNote(turn.grounding, turn.hits.length)}
                                   </span>
                                   {turn.hits.length > 0 && (
                                     <Button
@@ -808,7 +811,7 @@ export function AskPage({
                                 </div>
 
                                 <span className="text-[11px] text-muted-foreground">
-                                  Evaluated with DeepFix RAG Engine
+                                  DeepFix RAG Engine
                                 </span>
                               </div>
                               {turn.interactionId ? (

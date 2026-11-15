@@ -86,6 +86,45 @@ describe("Dashboard pages", () => {
     expect(screen.getByRole("button", { name: "Mark passage as not relevant" })).toBeTruthy();
   });
 
+  it("ask badges a grounded answer and leaves a refusal ungrounded", () => {
+    const hit = {
+      rank: 1,
+      doc_id: "ws_harbor",
+      document_filename: "harbor.txt",
+      text: "The harbor budget was approved.",
+      score: 0.82,
+      vote: null,
+    };
+
+    const grounded = renderWithQuery(
+      <AskPage
+        indexReady
+        askedQuery="harbor"
+        answer="The harbor budget was approved."
+        grounding="grounded"
+        hits={[hit]}
+      />,
+    );
+    expect(screen.getByText("Grounded")).toBeTruthy();
+    expect(screen.getByText("1 passage used")).toBeTruthy();
+    expect(screen.queryByText(/Evaluated/)).toBeNull();
+    grounded.unmount();
+
+    renderWithQuery(
+      <AskPage
+        indexReady
+        askedQuery='explain "rerank off"'
+        answer='No explanation of "rerank off" is available.'
+        grounding="declined"
+        hits={[hit]}
+      />,
+    );
+    expect(screen.queryByText("Grounded")).toBeNull();
+    expect(screen.getAllByText("Not found in the documents").length).toBeGreaterThan(0);
+    expect(screen.getByText("Answer declined")).toBeTruthy();
+    expect(screen.queryByText(/Evaluated/)).toBeNull();
+  });
+
   it("pressing the filled thumb clears and the other thumb switches", () => {
     expect(nextVoteAction("up", "up")).toBe("clear");
     expect(nextVoteAction("up", "down")).toBe("down");
