@@ -184,6 +184,9 @@ services:
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://openrouter.ai/api/v1}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
+      # The key the rerank call actually authorizes with. The client reads this
+      # first and falls back to COHERE_API_KEY only when it is empty.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       COHERE_BASE_URL: ${COHERE_BASE_URL:-https://openrouter.ai/api/v1}
       COHERE_MODEL: ${COHERE_MODEL:-}
       DEEPFIX_LLM_API_KEY: ${DEEPFIX_LLM_API_KEY:-}

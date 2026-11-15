@@ -56,7 +56,7 @@ Run one optimization round after a release that touched the sandbox: it is the o
 
 Every key in the "Environment variables" table of `README.md` is set as a Dokploy environment variable on the project. They are never committed and never copied into a document, a ticket, or a log. `.env` in the repository is for local development only.
 
-Two keys are required for the stack to boot at all: `API_SERVER_KEY` and `HERMES_MODEL` (`compose.hermes.yml` fails on a missing value), and `HERMES_S3_ACCESS_KEY_ID` / `HERMES_S3_SECRET_ACCESS_KEY` for the run bundle. `OPENROUTER_API_KEY` is required for the sandbox's model calls and for reranking.
+Two keys are required for the stack to boot at all: `API_SERVER_KEY` and `HERMES_MODEL` (`compose.hermes.yml` fails on a missing value), and `HERMES_S3_ACCESS_KEY_ID` / `HERMES_S3_SECRET_ACCESS_KEY` for the run bundle. `OPENROUTER_API_KEY` is required for the sandbox's model calls and for reranking: `backend-api` receives it so the rerank call authorizes with it, and `COHERE_API_KEY` is only the fallback the client reads when it is empty. A deployment that has been reranking with `COHERE_API_KEY` alone can set `OPENROUTER_API_KEY` and rebuild `backend-api` and `hermes`; both take it from the same variable.
 
 ## Domains
 

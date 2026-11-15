@@ -286,7 +286,8 @@ class RAGWorkflow(Workflow):
         if not api_key:
             raise ModelNotConfigured(
                 "OPENROUTER_API_KEY is not set. Rerank calls OpenRouter's /rerank endpoint "
-                "with that key; COHERE_API_KEY is not used."
+                "with that key, and COHERE_API_KEY is only read as a fallback when it is "
+                "empty."
             )
         return OpenRouterReranker(
             model=require_model("COHERE_MODEL"),

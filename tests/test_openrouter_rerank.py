@@ -12,12 +12,14 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import re
 import threading
 from typing import Any
 
 from llama_index.core.embeddings import MockEmbedding
 from llama_index.core.schema import NodeWithScore, TextNode
 import pytest
+import yaml
 
 from deepfix_rag.config.schema import DataLoaderConfig, RAGConfig
 from deepfix_rag.config.settings import ModelNotConfigured, require_model, settings
@@ -30,8 +32,11 @@ from deepfix_rag.rerank import (
 
 pytestmark = [pytest.mark.unit]
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 MODEL = "cohere/rerank-4-fast"
 KEY = "sk-or-test-rerank-key"
+LEGACY_KEY = "legacy-cohere-test-key"
 
 
 class _Recorder:
@@ -256,3 +261,28 @@ def test_require_model_still_names_cohere_model() -> None:
         settings.COHERE_MODEL = ""
         with pytest.raises(ModelNotConfigured, match="COHERE_MODEL"):
             require_model("COHERE_MODEL")
+
+
+def test_the_workflow_reranker_falls_back_to_the_legacy_cohere_key() -> None:
+    """A deployment that only ever set COHERE_API_KEY keeps reranking."""
+    recorder = _Recorder()
+    with _server(recorder) as base, _rerank_settings(f"{base}/v1"):
+        settings.OPENROUTER_API_KEY = ""
+        settings.COHERE_API_KEY = LEGACY_KEY
+        config = RAGConfig(rerank={"enabled": True, "top_n": 2}, eval={"cutoff_k": 2})
+        reranker = RAGWorkflow(config=config)._get_reranker()
+        assert isinstance(reranker, OpenRouterReranker)
+        reranker.postprocess_nodes(_nodes(), query_str="q")
+
+    assert recorder.requests[0]["path"] == "/v1/rerank"
+    assert recorder.requests[0]["headers"]["authorization"] == f"Bearer {LEGACY_KEY}"
+
+
+def test_backend_api_receives_the_openrouter_key_for_rerank() -> None:
+    """The API container must not depend on the legacy fallback to rerank."""
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    environment = compose["services"]["backend-api"]["environment"]
+    assert environment["OPENROUTER_API_KEY"] == "${OPENROUTER_API_KEY:-}"
+    assert environment["COHERE_API_KEY"] == "${COHERE_API_KEY:-}"
+    example = (REPO_ROOT / "example.env").read_text(encoding="utf-8")
+    assert re.search(r"^OPENROUTER_API_KEY=", example, re.MULTILINE)
