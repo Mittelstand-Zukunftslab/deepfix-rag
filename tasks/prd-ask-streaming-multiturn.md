@@ -217,7 +217,7 @@ ASK-001 and ASK-002 **landed** on `feat/hermes-optimizer` at `97aef60` and
   `no_relevant_sources`), the shared `DEFLECTION_PHRASES` list, and
   `grounding_for(answer)`. `AskResponse` and `InteractionResponse` both carry a
   required `grounding` field, so a reload draws the same badge.
-- `RAGConfig.rerank.min_relevance_score` (0..1, default `0.2`, set explicitly in
+- `RAGConfig.rerank.min_relevance_score` (0..1, default `0.3`, set explicitly in
   `configs/champion.yaml`) is the floor. `RAGWorkflow._ranker_split` is its one
   implementation, called by the rerank step and by `QueryService._search_split`,
   so eval and the live routes agree.
@@ -474,7 +474,7 @@ tick, exactly as `admin_chat.prune_audit` does — one story, no schema change.
   returns ranked passages.
 - **Passage** — one retrieved chunk: `doc_id`, filename, text, score, rank. The
   same object the Ask page's passages drawer already shows as a hit.
-- **Cutoff** — `rerank.min_relevance_score` in `RAGConfig` (ASK-002, default 0.2).
+- **Cutoff** — `rerank.min_relevance_score` in `RAGConfig` (ASK-002, default 0.3).
   Passages below it are dropped inside the retrieval path, before the model sees
   them. Used interchangeably with "relevance floor"; both mean this one setting.
 - **Grounding status** — one of `grounded`, `no_relevant_sources`, `declined`
@@ -1368,7 +1368,7 @@ Each fact below is cited by file, because the stories assume them.
   `src/deepfix_rag/grounding.py` (`Grounding` with `grounded` / `declined` /
   `no_relevant_sources`, `DEFLECTION_PHRASES`, `DEFLECTION_PATTERNS`,
   `grounding_for`), a required `grounding` field on `AskResponse` and
-  `InteractionResponse`, `rerank.min_relevance_score` (0.2) in `RAGConfig` and
+  `InteractionResponse`, `rerank.min_relevance_score` (0.3) in `RAGConfig` and
   `configs/champion.yaml`, `RAGWorkflow._ranker_split` /
   `split_by_relevance_floor`, `RAGResult.dropped_results`, and
   `pendingBySession: Record<sessionId, query>` in `chat-page.tsx`. The stories
