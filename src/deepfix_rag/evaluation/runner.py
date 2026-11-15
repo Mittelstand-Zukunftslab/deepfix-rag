@@ -197,6 +197,10 @@ class EvaluationSummary:
     effective_backend: str | None = None
     configured_backend: str | None = None
     judge_failures: int = 0
+    # Expansion completions this run sent upstream and how many it replayed from
+    # the shared cache. Not gate metrics: they measure cost, not ranking.
+    expansion_llm_calls: int = 0
+    expansion_cache_hits: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         res: dict[str, Any] = {
@@ -211,6 +215,8 @@ class EvaluationSummary:
             "effective_backend": self.effective_backend,
             "configured_backend": self.configured_backend,
             "judge_failures": self.judge_failures,
+            "expansion_llm_calls": self.expansion_llm_calls,
+            "expansion_cache_hits": self.expansion_cache_hits,
         }
         res.update(self.metrics)
         res["rows"] = self.rows
@@ -599,12 +605,16 @@ class EvaluationRunner:
         llm: Any = None,
         persist: bool = True,
         index: Any = None,
+        expansion_cache: Any = None,
     ) -> None:
         self.config = config
         self.cutoff_k = config.eval.cutoff_k
         self.embed_model = embed_model
         self.llm = llm
         self.persist = persist
+        # One cache shared by every config a caller scores. A study or a compare
+        # sets it once, so a question is expanded once per requested count.
+        self.expansion_cache = expansion_cache
         # A caller that scores several configs against one index (HPO) passes it
         # in, so each run does not re-open LanceDB and rebuild the docstore. The
         # runner never closes it: ownership stays with the caller.
@@ -653,6 +663,16 @@ class EvaluationRunner:
         if not expansion_backend or self.config.retrieval.query_expansion_num <= 1:
             return
         require_model("LLM_MODEL")
+
+    def _expansion_stats(self) -> dict[str, int]:
+        """Current expansion counters, or zeros when this run expands nothing."""
+        if self.expansion_cache is None:
+            return {"expansion_calls_delta": 0, "expansion_hits_delta": 0}
+        stats = self.expansion_cache.stats()
+        return {
+            "expansion_calls_delta": stats["expansion_llm_calls"],
+            "expansion_hits_delta": stats["expansion_cache_hits"],
+        }
 
     async def _execute_case(
         self,
@@ -760,6 +780,10 @@ class EvaluationRunner:
         self._ensure_generation_evaluator()
         self._require_query_expansion_llm()
 
+        # Snapshot the shared counters before scoring, so this run reports the
+        # completions it paid for rather than the whole study's total.
+        stats_before = self._expansion_stats()
+
         qa_pairs = resolve_eval_records(
             dataset_path,
             records,
@@ -778,11 +802,11 @@ class EvaluationRunner:
         LOGGER.info(
             f"Running evaluation with concurrency={concurrency_limit}, retrieval_only={self.config.retrieval_only}"
         )
-
         workflow = RAGWorkflow(
             config=self.config,
             embed_model=self.embed_model,
             llm=self.llm,
+            expansion_cache=self.expansion_cache,
         )
         if self._preloaded_index is not None:
             # Reuse the caller's index instead of re-opening LanceDB and
@@ -790,6 +814,10 @@ class EvaluationRunner:
             workflow._index = self._preloaded_index
         else:
             await workflow.run(ingest=True)
+        # A caller that passed no cache still gets the one this workflow used,
+        # so the summary reports the completions this run actually paid for.
+        if self.expansion_cache is None:
+            self.expansion_cache = workflow.expansion_cache
 
         async def _run(qa: QARecord, i: int) -> CaseResult:
             async with semaphore:
@@ -885,6 +913,15 @@ class EvaluationRunner:
             else 0.0
         )
 
+        stats_after = self._expansion_stats()
+        cache_stats = {
+            "expansion_calls_delta": (
+                stats_after["expansion_calls_delta"] - stats_before["expansion_calls_delta"]
+            ),
+            "expansion_hits_delta": (
+                stats_after["expansion_hits_delta"] - stats_before["expansion_hits_delta"]
+            ),
+        }
         summary = EvaluationSummary(
             total=len(qa_pairs),
             scored=len(rows),
@@ -901,6 +938,8 @@ class EvaluationRunner:
             judge_failures=(
                 self.generation_evaluator.failures if self.generation_evaluator is not None else 0
             ),
+            expansion_llm_calls=cache_stats["expansion_calls_delta"],
+            expansion_cache_hits=cache_stats["expansion_hits_delta"],
         )
 
         run_params = {
@@ -947,6 +986,7 @@ async def run_evaluation(
     seed: int | None = None,
     tags: dict[str, str] | None = None,
     nested: bool = False,
+    expansion_cache: Any = None,
 ) -> EvaluationSummary:
     """Module-level façade orchestrating EvaluationRunner."""
     if config is None:
@@ -956,6 +996,7 @@ async def run_evaluation(
         embed_model=embed_model,
         llm=llm,
         persist=persist,
+        expansion_cache=expansion_cache,
     )
     return await runner.run(
         dataset_path=dataset_path,

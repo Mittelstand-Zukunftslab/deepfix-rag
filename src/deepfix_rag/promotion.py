@@ -29,6 +29,7 @@ from deepfix_rag.indexing import (
     bind_locations,
     index_time_signature,
 )
+from deepfix_rag.query_expansion import ExpansionCache
 
 _ALLOWED_BACKENDS = frozenset(
     {RetrievalBackend.DENSE, RetrievalBackend.HYBRID, RetrievalBackend.BM25}
@@ -294,10 +295,18 @@ async def _score_pair(
 ) -> dict[str, Any]:
     champion_config = _scoring_config(champion, workspace, champion_index)
     candidate_config = _scoring_config(candidate, workspace, candidate_index)
-    dev_champion = await _score(champion_config, dev_records, embed_model, llm)
-    dev_candidate = await _score(candidate_config, dev_records, embed_model, llm)
-    holdout_champion = await _score(champion_config, holdout_records, embed_model, llm)
-    holdout_candidate = await _score(candidate_config, holdout_records, embed_model, llm)
+    # One cache for all four scorings. A candidate with query expansion above 1
+    # must be judged on the same paraphrases as the champion, or the paired
+    # delta mixes two different rewrites and the gate compares noise.
+    expansion_cache = ExpansionCache()
+    dev_champion = await _score(champion_config, dev_records, embed_model, llm, expansion_cache)
+    dev_candidate = await _score(candidate_config, dev_records, embed_model, llm, expansion_cache)
+    holdout_champion = await _score(
+        champion_config, holdout_records, embed_model, llm, expansion_cache
+    )
+    holdout_candidate = await _score(
+        candidate_config, holdout_records, embed_model, llm, expansion_cache
+    )
     return {
         "dev_delta": metric_delta(dev_candidate.to_dict(), dev_champion.to_dict()),
         "holdout_delta": metric_delta(holdout_candidate.to_dict(), holdout_champion.to_dict()),
@@ -317,6 +326,7 @@ async def _score(
     records: list[QARecord],
     embed_model: Any,
     llm: Any,
+    expansion_cache: ExpansionCache | None = None,
 ) -> EvaluationSummary:
     return await run_evaluation(
         config=config,
@@ -326,6 +336,7 @@ async def _score(
         llm=llm,
         persist=False,
         run_name="optimization-gate",
+        expansion_cache=expansion_cache,
     )
 
 

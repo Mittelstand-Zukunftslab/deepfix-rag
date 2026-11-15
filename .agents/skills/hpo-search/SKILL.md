@@ -37,9 +37,19 @@ This skill replaces a single hand-written `mutate-config` hypothesis with **one*
 - `retrieval.top_k`: 10, 20, 50.
 - `retrieval.fusion_mode`: `reciprocal_rerank`, `relative_score`, `dist_based_score`. `simple` is excluded.
 - `retrieval.dense_weight` (and the complementary `bm25_weight`): 0.3, 0.5, 0.7, **only** under `relative_score` or `dist_based_score`. The default `reciprocal_rerank` ignores them.
-- Never sampled: `retrieval.bm25_k1`, `retrieval.bm25_b`, `retrieval.query_expansion_num` above 1, and every `chunking.*` key.
+- `retrieval.query_expansion_num`: sampled 1 to 3, written as `1`, `2` or `3`. Above 1 the question is rewritten and the paraphrase is also retrieved; see `query-rewriting` for when that pays.
+- Never sampled: `retrieval.bm25_k1`, `retrieval.bm25_b`, and every `chunking.*` key.
 
 `12` trials on `20` seeded questions is the shipped budget. Do not raise `--n-trials` and do not point HPO at the full dev set.
+
+### What expansion costs
+
+Expansion is the only lever here that calls an LLM, so know the bill before you read a trial as a ranking result.
+
+- Per trial: a trial with `retrieval.query_expansion_num = k` above 1 issues one completion per question it scores, i.e. `20` completions on the shipped `--limit 20`, and roughly `20 x ~60` tokens. Expansion 1 costs nothing; 2 and 3 cost one completion each per question.
+- Per sweep: the pipeline caches the paraphrase keyed by the question and the requested count, and the cache lives for the whole study. A question is therefore expanded **once per distinct count the sweep draws**, not once per trial. Count 1 never calls the model, so across the 12 trials the sweep pays at most `2 x 20 = 40` completions, whatever the mix of counts, because counts 2 and 3 each expand every question at most once.
+- The confirmation is a separate process, and the candidate's side expands every dev question once: `dev_questions` completions when the candidate's count is 2 or 3. Inside that single `eval --compare` the champion's side reuses the same cache, so if the champion expands at the same count it pays nothing extra, and both sides are scored on the same paraphrases.
+- `expansion_llm_calls` and `expansion_cache_hits` in the HPO JSON and in each trial row's `user_attrs` are how you check the estimate against the run. A large `expansion_cache_hits` beside a small `expansion_llm_calls` means the cache is doing its job.
 
 ## Procedure
 
@@ -102,6 +112,7 @@ Notes:
 
 - `--timeout 2400` is 40 minutes: headroom under the run limit and inside `terminal.timeout`. Stopping early is fine as long as one trial completed.
 - The `deepfix` shim keeps `output/heartbeat.json` fresh for the whole call. A long silent HPO run is not a stall. Do **not** start a second copy.
+- A sweep that can sample `retrieval.query_expansion_num` above 1 calls the generation model. `LLM_MODEL` reaches the CLI through the sandbox's eval-env file and the shim, so nothing has to be set or exported. If the model is missing the command exits 1 with `error_type` `missing_model` before the first trial instead of failing trials one at a time; report that as a blocked run, not as a hypothesis that lost.
 - `--json` prints one payload at the end. Logs go to stderr.
 - Artifacts appear as trials finish: `<run_dir>/hpo_trials.json` and, once there is a best trial, `<run_dir>/candidate.yaml`.
 - The study lives in `<run_dir>/hpo.db`, so a re-run resumes instead of starting over.
@@ -142,6 +153,7 @@ Fill in `mlflow_run_id` from the compare JSON's candidate side, restate baseline
 - `failed_trials` counts trials Optuna recorded `FAIL`. Each one errored on every case, so it measured nothing and can never be the best trial. The error text is on the trial row's `user_attrs.error` in `hpo_trials.json`.
 - `pruned_trials` counts duplicate parameter sets Optuna redrew. They are skipped without an eval — `user_attrs.duplicate_of` names the trial they repeat — so `n_trials` completed evaluations and `pruned_trials` is overhead, not lost budget.
 - The exported `<run_dir>/candidate.yaml` holds the champion config plus the **tuned** parameters only: no `data.limit`, no `data.path_or_repo`, no `retrieval.lancedb_index_dir`. Do not expect the subsample or the cache path in it.
+- `expansion_llm_calls` / `expansion_cache_hits` are the sweep's expansion cost: completions sent upstream and paraphrases replayed from the study-wide cache. A trial row carries its own `user_attrs.expansion_llm_calls`. They are cost, not score, so never quote them as a reason to keep a candidate.
 - `trials_path` points at `<run_dir>/hpo_trials.json`. `index_dir` / `index_cache_source` show the local index the trials used.
 - `completed_trials` / `total_trials` describe the study, not your turn budget.
 
@@ -153,6 +165,8 @@ Fill in `mlflow_run_id` from the compare JSON's candidate side, restate baseline
 - Comparing the HPO subsample score with the baseline smoke (30 questions, different seed). Only the full-dev compare counts.
 - Passing `--limit` to the confirmation. The gate needs every dev question.
 - Editing `<run_dir>/input/hpo_retrieval_small.yaml`. The space is fixed for this release; a wider one needs a code change.
+- Reading an expanded candidate as a pure ranking win without checking the cost. Expansion changes which passages are retrieved, and it is billed per question per count. The cache bounds it to one expansion per question per count, but it is still the only lever here that spends money.
+- Treating a `missing_model` exit as a failed hypothesis. Expansion above 1 needs `LLM_MODEL`; that path exits 1 before any trial scores.
 - Reaching for `configs/...` inside the container. The sandbox has no repository checkout: the search space and the champion both come from `input/` in the run bundle.
 - Expecting `retrieval.dense_weight` to matter under `reciprocal_rerank`. The space does not sample it there for that reason.
 - Treating an HPO trial error as a retrieval miss. Read `hpo_trials.json`: a failed trial state means the pipeline, not the ranking.

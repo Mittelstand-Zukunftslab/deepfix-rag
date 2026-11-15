@@ -38,6 +38,7 @@ from deepfix_rag.index_manifest import (
     index_time_signature,
     signature_hash,
 )
+from deepfix_rag.query_expansion import ExpansionCache
 
 DELTA_KEYS = [
     "faithfulness",
@@ -454,6 +455,10 @@ def eval_cmd(
     parent_tags = (
         lineage_tags(rag_config, target_dataset, role="compare", run_id=run_id) if persist else {}
     )
+    # Both sides of a compare expand through the same model and the same cache,
+    # so the paraphrases a candidate is scored on are the ones the baseline saw.
+    # Without this a paired delta would mix two different rewrites of a question.
+    expansion_cache = ExpansionCache()
     try:
         with redirect:
             with _compare_parent(persist and compare is not None, parent_tags) as parent_id:
@@ -472,6 +477,7 @@ def eval_cmd(
                     persist=persist,
                     seed=seed,
                     nested=nested,
+                    expansion_cache=expansion_cache,
                     run_name="candidate" if compare is not None else "eval_run",
                     tags=lineage_tags(
                         rag_config,
@@ -498,6 +504,7 @@ def eval_cmd(
                         persist=persist,
                         seed=seed,
                         nested=nested,
+                        expansion_cache=expansion_cache,
                         run_name="baseline",
                         tags=lineage_tags(
                             baseline_config,

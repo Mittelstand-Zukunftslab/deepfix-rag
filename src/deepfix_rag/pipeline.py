@@ -71,6 +71,7 @@ from deepfix_rag.config.settings import LOGGER, ModelNotConfigured, require_mode
 from deepfix_rag.data import DataLoader, build_node_parser
 from deepfix_rag.index_manifest import write_index_manifest
 from deepfix_rag.llm import litellm_additional_kwargs, resolve_litellm_model
+from deepfix_rag.query_expansion import CachingExpansionLLM, ExpansionCache
 from deepfix_rag.rerank import OpenRouterReranker, rerank_api_key
 
 
@@ -137,9 +138,10 @@ class _QueryExpansionUnavailableLLM(LLM):
     """Stand-in LLM for fusion retrieval that never expands a query.
 
     ``QueryFusionRetriever`` only needs an LLM when ``num_queries > 1``. Passing
-    ``None`` makes it fall back to ``Settings.llm``, which builds an OpenAI
-    client. This object keeps that fallback away from a retrieval-only run
-    while still failing by name if anything ever asks it for a completion.
+    a bare ``None`` makes it fall back to ``Settings.llm``, which builds an
+    OpenAI client and would silently call the wrong endpoint. This object keeps
+    that fallback away from a retrieval-only run while still failing by name if
+    anything ever asks it for a completion.
     """
 
     @property
@@ -244,6 +246,7 @@ class RAGWorkflow(Workflow):
         llm: BaseLLM | None = None,
         embed_model: BaseEmbedding | None = None,
         timeout: float | None = 600.0,
+        expansion_cache: ExpansionCache | None = None,
         **kwargs: Any,
     ):
         super().__init__(timeout=timeout, **kwargs)
@@ -251,6 +254,9 @@ class RAGWorkflow(Workflow):
         self.llm = llm
         self.embed_model = embed_model
         self._index: BaseIndex | None = None
+        # One expansion cache shared across a study's trials and a compare's two
+        # sides, so a paraphrase is paid for once. None keeps this workflow's own.
+        self.expansion_cache = expansion_cache or ExpansionCache()
         self.last_build_metadata: IndexBuildMetadata | None = None
         backend = self.config.retrieval.backend
         self.configured_backend = backend.value if hasattr(backend, "value") else str(backend)
@@ -604,10 +610,15 @@ class RAGWorkflow(Workflow):
         At ``retrieval.query_expansion_num <= 1`` the fusion retriever never
         calls an LLM, so ``LLM_MODEL`` is not required. Above one it does, and
         ``_get_llm`` keeps failing by naming ``LLM_MODEL``.
+
+        The completion is wrapped in ``CachingExpansionLLM``: the rewrite of a
+        question is a function of that question and the requested count, so a
+        sweep that samples expansion, and a compare that scores the champion
+        beside the candidate, reuse one completion instead of paying per pass.
         """
         if self.config.retrieval.query_expansion_num <= 1:
             return _QueryExpansionUnavailableLLM()
-        return self._get_llm()
+        return CachingExpansionLLM(self._get_llm(), self.expansion_cache)
 
     def _build_retriever(
         self,
