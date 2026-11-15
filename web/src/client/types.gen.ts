@@ -2223,6 +2223,14 @@ export type AskChatCompletionErrors = {
      */
     404: ErrorResponse;
     /**
+     * The request conflicts with the current state.
+     */
+    409: ErrorResponse;
+    /**
+     * Too many requests; wait and try again.
+     */
+    429: ErrorResponse;
+    /**
      * An upstream dependency answered with an error.
      */
     502: ErrorResponse;

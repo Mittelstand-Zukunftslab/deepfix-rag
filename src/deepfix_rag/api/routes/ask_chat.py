@@ -35,6 +35,7 @@ from deepfix_rag.api.errors import (
     CONFLICT,
     NOT_FOUND,
     SERVICE_UNAVAILABLE,
+    TOO_MANY_REQUESTS,
     UNAUTHORIZED,
     error_responses,
 )
@@ -162,7 +163,15 @@ def delete_ask_chat_thread(thread_id: str, request: Request) -> Response:
     operation_id="ask_chat_completion",
     response_class=StreamingResponse,
     responses={
-        **error_responses(BAD_REQUEST, UNAUTHORIZED, NOT_FOUND, SERVICE_UNAVAILABLE, BAD_GATEWAY),
+        **error_responses(
+            BAD_REQUEST,
+            UNAUTHORIZED,
+            NOT_FOUND,
+            CONFLICT,
+            TOO_MANY_REQUESTS,
+            SERVICE_UNAVAILABLE,
+            BAD_GATEWAY,
+        ),
         200: {
             "description": "The AI SDK UI message stream for one turn.",
             "content": {"text/event-stream": {"schema": {"type": "string"}}},
@@ -188,8 +197,28 @@ async def ask_chat_completion(
     regenerate_of = _regenerate_target(history, payload.regenerate)
 
     coordinator: IndexCoordinator = request.app.state.index
+    # A malformed or over-long request is refused before anything about the
+    # deployment is checked: it is the member's message that is wrong, and a
+    # missing index must not mask a 400.
+    _check_message_length(settings, question)
     if not _index_ready(coordinator):
         raise HTTPException(status_code=SERVICE_UNAVAILABLE, detail=INDEX_PREPARING)
+
+    # The limiter runs before any row is written, so a refusal is not itself a
+    # turn and cannot ratchet itself into a longer ban (D-8, AC 7).
+    refusal = ask_chat.check_rate_limit(
+        settings.product_db_path,
+        user.id,
+        max_turns=settings.ASK_CHAT_MAX_TURNS_PER_WINDOW,
+        window_seconds=settings.ASK_CHAT_TURN_WINDOW_SECONDS,
+        max_concurrent=settings.ASK_CHAT_MAX_CONCURRENT_TURNS,
+    )
+    if refusal is not None:
+        raise HTTPException(
+            status_code=TOO_MANY_REQUESTS,
+            detail=refusal.message,
+            headers={"Retry-After": str(refusal.retry_after)},
+        )
 
     registry = registry_for(request.app.state)
     previous: ask_chat.Turn | None = None
@@ -473,6 +502,17 @@ def _question(payload: AskChatCompletionRequest) -> str:
     if not question:
         raise HTTPException(status_code=BAD_REQUEST, detail="Enter a question.")
     return question
+
+
+def _check_message_length(settings: Settings, question: str) -> None:
+    """A question longer than the bound is a 400 naming it, not a truncated prompt."""
+    if len(question) > settings.ASK_CHAT_MAX_MESSAGE_CHARS:
+        raise HTTPException(
+            status_code=BAD_REQUEST,
+            detail=(
+                f"A question must be at most {settings.ASK_CHAT_MAX_MESSAGE_CHARS} characters."
+            ),
+        )
 
 
 def _regenerate_target(history: list[ask_chat.Turn], regenerate: bool) -> str | None:

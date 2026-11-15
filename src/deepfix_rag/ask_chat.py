@@ -435,6 +435,71 @@ def clear_turn_votes(db_path: Path, turn: Turn) -> int:
     return cleared
 
 
+class RateRefusal:
+    """The limiter's refusal: what to tell the member, and how long to wait."""
+
+    def __init__(self, message: str, retry_after: int) -> None:
+        self.message = message
+        self.retry_after = retry_after
+
+
+BUSY_MESSAGE = "The assistant is busy on this server. Try again in a moment."
+
+
+def check_rate_limit(
+    db_path: Path,
+    owner_id: str,
+    *,
+    max_turns: int,
+    window_seconds: float,
+    max_concurrent: int,
+    now: datetime | None = None,
+) -> RateRefusal | None:
+    """A member's turn budget, then the deployment's concurrent-turn cap (D-8).
+
+    The count reads ``ask_chat_turns`` only, so a refusal is not itself a turn and
+    cannot ratchet into a longer ban: refusing writes nothing. ``now`` is
+    injectable so a test never sleeps out a window, and this mirrors
+    ``admin_chat.check_rate_limit`` rather than inventing a second limiter.
+    """
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    since = (moment - timedelta(seconds=window_seconds)).isoformat()
+    init_ask_chat(db_path)
+    with connect(db_path) as conn:
+        recent = conn.execute(
+            """
+            SELECT started_at FROM ask_chat_turns
+            WHERE owner_id = ? AND started_at >= ? ORDER BY started_at
+            """,
+            (owner_id, since),
+        ).fetchall()
+        if len(recent) >= max_turns:
+            oldest = _parse_time(str(recent[0]["started_at"]))
+            wait = max(
+                1, int((oldest + timedelta(seconds=window_seconds) - moment).total_seconds())
+            )
+            return RateRefusal(
+                message=(
+                    f"You have used {len(recent)} of {max_turns} questions in this window. "
+                    f"Try again in {wait} seconds."
+                ),
+                retry_after=wait,
+            )
+        concurrent = conn.execute(
+            "SELECT COUNT(*) FROM ask_chat_turns WHERE status = 'running'"
+        ).fetchone()[0]
+    if concurrent >= max_concurrent:
+        return RateRefusal(message=BUSY_MESSAGE, retry_after=5)
+    return None
+
+
+def _parse_time(value: str) -> datetime:
+    moment = datetime.fromisoformat(value)
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
 class TurnBusy(RuntimeError):
     """The turn is still being written, so a regenerate must not replace it (FR-015)."""
 
