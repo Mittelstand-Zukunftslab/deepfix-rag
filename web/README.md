@@ -16,7 +16,10 @@ use. Roles are `member` (every registration) and `admin`.
   checks it against `/api/auth/jwks` and keeps its own admin check as a backstop.
 - The optimization loop is reached only through server functions in
   `src/services/optimization.functions.ts`, guarded by `requireRole("admin")` from
-  `src/lib/auth-middleware.ts`.
+  `src/lib/auth-middleware.ts`. The admin Hermes chat uses the same guard, in
+  `src/services/admin-chat.functions.ts`, and its stream goes through
+  `src/services/admin-chat-sse.ts` — the only module in `src/` that parses an
+  event stream.
 - Documents are shared by the whole team; searches and chats are private to the user who ran them.
 
 Create the first admin (or promote an existing account) from `web/`. The password is read from
