@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type ServerSentEventsResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AdminChatCompletionData, AdminChatCompletionErrors, AdminChatCompletionResponse, AdminChatCompletionResponses, AskQuestionData, AskQuestionErrors, AskQuestionResponses, CancelOptimizationRunData, CancelOptimizationRunErrors, CancelOptimizationRunResponses, ConfirmAdminChatActionData, ConfirmAdminChatActionErrors, ConfirmAdminChatActionResponses, CreateAdminChatThreadData, CreateAdminChatThreadErrors, CreateAdminChatThreadResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteAdminChatThreadData, DeleteAdminChatThreadErrors, DeleteAdminChatThreadResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetAdminChatThreadData, GetAdminChatThreadErrors, GetAdminChatThreadResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, LinkAdminChatThreadRunData, LinkAdminChatThreadRunErrors, LinkAdminChatThreadRunResponses, ListAdminChatAuditData, ListAdminChatAuditErrors, ListAdminChatAuditResponses, ListAdminChatThreadRunsData, ListAdminChatThreadRunsErrors, ListAdminChatThreadRunsResponses, ListAdminChatThreadsData, ListAdminChatThreadsErrors, ListAdminChatThreadsResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RejectAdminChatActionData, RejectAdminChatActionErrors, RejectAdminChatActionResponses, ResumeAdminChatTurnData, ResumeAdminChatTurnErrors, ResumeAdminChatTurnResponse, ResumeAdminChatTurnResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
+import type { AdminChatCompletionData, AdminChatCompletionErrors, AdminChatCompletionResponse, AdminChatCompletionResponses, AskQuestionData, AskQuestionErrors, AskQuestionResponses, CancelOptimizationRunData, CancelOptimizationRunErrors, CancelOptimizationRunResponses, ConfirmAdminChatActionData, ConfirmAdminChatActionErrors, ConfirmAdminChatActionResponses, CreateAdminChatThreadData, CreateAdminChatThreadErrors, CreateAdminChatThreadResponses, CreateAskChatThreadData, CreateAskChatThreadErrors, CreateAskChatThreadResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteAdminChatThreadData, DeleteAdminChatThreadErrors, DeleteAdminChatThreadResponses, DeleteAskChatThreadData, DeleteAskChatThreadErrors, DeleteAskChatThreadResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetAdminChatThreadData, GetAdminChatThreadErrors, GetAdminChatThreadResponses, GetAskChatThreadData, GetAskChatThreadErrors, GetAskChatThreadResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, LinkAdminChatThreadRunData, LinkAdminChatThreadRunErrors, LinkAdminChatThreadRunResponses, ListAdminChatAuditData, ListAdminChatAuditErrors, ListAdminChatAuditResponses, ListAdminChatThreadRunsData, ListAdminChatThreadRunsErrors, ListAdminChatThreadRunsResponses, ListAdminChatThreadsData, ListAdminChatThreadsErrors, ListAdminChatThreadsResponses, ListAskChatThreadsData, ListAskChatThreadsErrors, ListAskChatThreadsResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RejectAdminChatActionData, RejectAdminChatActionErrors, RejectAdminChatActionResponses, RenameAskChatThreadData, RenameAskChatThreadErrors, RenameAskChatThreadResponses, ResumeAdminChatTurnData, ResumeAdminChatTurnErrors, ResumeAdminChatTurnResponse, ResumeAdminChatTurnResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -185,6 +185,51 @@ export const cancelOptimizationRun = <ThrowOnError extends boolean = false>(opti
  */
 export const askQuestion = <ThrowOnError extends boolean = false>(options: Options<AskQuestionData, ThrowOnError>): RequestResult<AskQuestionResponses, AskQuestionErrors, ThrowOnError> => (options.client ?? client).post<AskQuestionResponses, AskQuestionErrors, ThrowOnError>({
     url: '/ask',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * List this member's conversations
+ *
+ * The member's threads, newest first, capped at 50 with no pagination (D-11).
+ *
+ * The cap is display-only: a thread past it is not hidden, expired, or deleted,
+ * and ``GET /ask/chat/threads/{thread_id}`` still loads it.
+ */
+export const listAskChatThreads = <ThrowOnError extends boolean = false>(options?: Options<ListAskChatThreadsData, ThrowOnError>): RequestResult<ListAskChatThreadsResponses, ListAskChatThreadsErrors, ThrowOnError> => (options?.client ?? client).get<ListAskChatThreadsResponses, ListAskChatThreadsErrors, ThrowOnError>({ url: '/ask/chat/threads', ...options });
+
+/**
+ * Start a new conversation
+ *
+ * Open one empty thread. Its title is derived from the first question later.
+ */
+export const createAskChatThread = <ThrowOnError extends boolean = false>(options?: Options<CreateAskChatThreadData, ThrowOnError>): RequestResult<CreateAskChatThreadResponses, CreateAskChatThreadErrors, ThrowOnError> => (options?.client ?? client).post<CreateAskChatThreadResponses, CreateAskChatThreadErrors, ThrowOnError>({ url: '/ask/chat/threads', ...options });
+
+/**
+ * Delete a conversation, keeping the votes it recorded
+ *
+ * Remove the thread and its turns. The interactions and votes behind them stay (D-9).
+ */
+export const deleteAskChatThread = <ThrowOnError extends boolean = false>(options: Options<DeleteAskChatThreadData, ThrowOnError>): RequestResult<DeleteAskChatThreadResponses, DeleteAskChatThreadErrors, ThrowOnError> => (options.client ?? client).delete<DeleteAskChatThreadResponses, DeleteAskChatThreadErrors, ThrowOnError>({ url: '/ask/chat/threads/{thread_id}', ...options });
+
+/**
+ * Show one conversation with its turns
+ *
+ * The thread and its turns in order, each with its grounding and citations.
+ */
+export const getAskChatThread = <ThrowOnError extends boolean = false>(options: Options<GetAskChatThreadData, ThrowOnError>): RequestResult<GetAskChatThreadResponses, GetAskChatThreadErrors, ThrowOnError> => (options.client ?? client).get<GetAskChatThreadResponses, GetAskChatThreadErrors, ThrowOnError>({ url: '/ask/chat/threads/{thread_id}', ...options });
+
+/**
+ * Rename a conversation
+ *
+ * Set a title of 1 to 120 characters. A title outside that is 400, stored unchanged.
+ */
+export const renameAskChatThread = <ThrowOnError extends boolean = false>(options: Options<RenameAskChatThreadData, ThrowOnError>): RequestResult<RenameAskChatThreadResponses, RenameAskChatThreadErrors, ThrowOnError> => (options.client ?? client).patch<RenameAskChatThreadResponses, RenameAskChatThreadErrors, ThrowOnError>({
+    url: '/ask/chat/threads/{thread_id}',
     ...options,
     headers: {
         'Content-Type': 'application/json',

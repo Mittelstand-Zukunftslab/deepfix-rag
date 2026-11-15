@@ -463,3 +463,64 @@ class ChatThreadRunResponse(ApiModel):
     mlflow_run_id: str | None = None
     mlflow_url: str | None = None
     steps: list[str] = Field(default_factory=list)
+
+
+class AskChatCitationResponse(ApiModel):
+    """One ``[n]`` marker in an answer and the passage it resolved to."""
+
+    marker: int = Field(description="The number inside the marker, as the member sees it.")
+    rank: int = Field(description="The passage's rank in that turn's tool output.")
+    doc_id: str
+
+
+class AskChatThreadResponse(ApiModel):
+    """One of the member's conversations."""
+
+    thread_id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class AskChatRenameRequest(ApiModel):
+    """A new thread title. The store trims it, so the length is measured after trimming."""
+
+    title: str = Field(min_length=1, max_length=120)
+
+
+class AskChatTurnResponse(ApiModel):
+    """One question and the answer stored for it.
+
+    ``interaction_id``, ``question`` and ``answer`` are null until the turn's
+    ``interactions`` row exists, which is how a turn still ``running`` reports.
+    ASKCHAT-003 writes that row and the streamed answer.
+    """
+
+    turn_id: str
+    seq: int
+    status: Literal["running", "completed", "failed", "cancelled"]
+    retry_of: str | None = None
+    error: str | None = None
+    grounding: Grounding | None = None
+    citations: list[AskChatCitationResponse] = Field(default_factory=list)
+    retrieval_query: str | None = None
+    first_token_ms: int | None = None
+    started_at: str
+    ended_at: str | None = None
+    interaction_id: str | None = Field(
+        default=None,
+        description="The interactions row that holds this turn's question and answer.",
+    )
+    question: str | None = None
+    answer: str | None = None
+
+
+class AskChatThreadDetailResponse(ApiModel):
+    """A thread and its turns in order, with each turn's grounding and citations.
+
+    One load is enough to draw the whole conversation, including the badges, so
+    a reload does not issue a request per turn (FR-010).
+    """
+
+    thread: AskChatThreadResponse
+    turns: list[AskChatTurnResponse]

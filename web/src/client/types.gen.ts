@@ -5,6 +5,149 @@ export type ClientOptions = {
 };
 
 /**
+ * AskChatCitationResponse
+ *
+ * One ``[n]`` marker in an answer and the passage it resolved to.
+ */
+export type AskChatCitationResponse = {
+    /**
+     * Doc Id
+     */
+    doc_id: string;
+    /**
+     * Marker
+     *
+     * The number inside the marker, as the member sees it.
+     */
+    marker: number;
+    /**
+     * Rank
+     *
+     * The passage's rank in that turn's tool output.
+     */
+    rank: number;
+};
+
+/**
+ * AskChatRenameRequest
+ *
+ * A new thread title. The store trims it, so the length is measured after trimming.
+ */
+export type AskChatRenameRequest = {
+    /**
+     * Title
+     */
+    title: string;
+};
+
+/**
+ * AskChatThreadDetailResponse
+ *
+ * A thread and its turns in order, with each turn's grounding and citations.
+ *
+ * One load is enough to draw the whole conversation, including the badges, so
+ * a reload does not issue a request per turn (FR-010).
+ */
+export type AskChatThreadDetailResponse = {
+    thread: AskChatThreadResponse;
+    /**
+     * Turns
+     */
+    turns: Array<AskChatTurnResponse>;
+};
+
+/**
+ * AskChatThreadResponse
+ *
+ * One of the member's conversations.
+ */
+export type AskChatThreadResponse = {
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Thread Id
+     */
+    thread_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
+ * AskChatTurnResponse
+ *
+ * One question and the answer stored for it.
+ *
+ * ``interaction_id``, ``question`` and ``answer`` are null until the turn's
+ * ``interactions`` row exists, which is how a turn still ``running`` reports.
+ * ASKCHAT-003 writes that row and the streamed answer.
+ */
+export type AskChatTurnResponse = {
+    /**
+     * Answer
+     */
+    answer: string | null;
+    /**
+     * Citations
+     */
+    citations: Array<AskChatCitationResponse>;
+    /**
+     * Ended At
+     */
+    ended_at: string | null;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * First Token Ms
+     */
+    first_token_ms: number | null;
+    grounding: Grounding | null;
+    /**
+     * Interaction Id
+     *
+     * The interactions row that holds this turn's question and answer.
+     */
+    interaction_id: string | null;
+    /**
+     * Question
+     */
+    question: string | null;
+    /**
+     * Retrieval Query
+     */
+    retrieval_query: string | null;
+    /**
+     * Retry Of
+     */
+    retry_of: string | null;
+    /**
+     * Seq
+     */
+    seq: number;
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Status
+     */
+    status: 'running' | 'completed' | 'failed' | 'cancelled';
+    /**
+     * Turn Id
+     */
+    turn_id: string;
+};
+
+/**
  * AskResponse
  *
  * One single-turn answer and the passages it used.
@@ -2033,6 +2176,164 @@ export type AskQuestionResponses = {
 };
 
 export type AskQuestionResponse = AskQuestionResponses[keyof AskQuestionResponses];
+
+export type ListAskChatThreadsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/ask/chat/threads';
+};
+
+export type ListAskChatThreadsErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type ListAskChatThreadsError = ListAskChatThreadsErrors[keyof ListAskChatThreadsErrors];
+
+export type ListAskChatThreadsResponses = {
+    /**
+     * Response List Ask Chat Threads
+     *
+     * Successful Response
+     */
+    200: Array<AskChatThreadResponse>;
+};
+
+export type ListAskChatThreadsResponse = ListAskChatThreadsResponses[keyof ListAskChatThreadsResponses];
+
+export type CreateAskChatThreadData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/ask/chat/threads';
+};
+
+export type CreateAskChatThreadErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type CreateAskChatThreadError = CreateAskChatThreadErrors[keyof CreateAskChatThreadErrors];
+
+export type CreateAskChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    201: AskChatThreadResponse;
+};
+
+export type CreateAskChatThreadResponse = CreateAskChatThreadResponses[keyof CreateAskChatThreadResponses];
+
+export type DeleteAskChatThreadData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/threads/{thread_id}';
+};
+
+export type DeleteAskChatThreadErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type DeleteAskChatThreadError = DeleteAskChatThreadErrors[keyof DeleteAskChatThreadErrors];
+
+export type DeleteAskChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type DeleteAskChatThreadResponse = DeleteAskChatThreadResponses[keyof DeleteAskChatThreadResponses];
+
+export type GetAskChatThreadData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/threads/{thread_id}';
+};
+
+export type GetAskChatThreadErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type GetAskChatThreadError = GetAskChatThreadErrors[keyof GetAskChatThreadErrors];
+
+export type GetAskChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    200: AskChatThreadDetailResponse;
+};
+
+export type GetAskChatThreadResponse = GetAskChatThreadResponses[keyof GetAskChatThreadResponses];
+
+export type RenameAskChatThreadData = {
+    body: AskChatRenameRequest;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/threads/{thread_id}';
+};
+
+export type RenameAskChatThreadErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type RenameAskChatThreadError = RenameAskChatThreadErrors[keyof RenameAskChatThreadErrors];
+
+export type RenameAskChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    200: AskChatThreadResponse;
+};
+
+export type RenameAskChatThreadResponse = RenameAskChatThreadResponses[keyof RenameAskChatThreadResponses];
 
 export type ListDocumentsData = {
     body?: never;
