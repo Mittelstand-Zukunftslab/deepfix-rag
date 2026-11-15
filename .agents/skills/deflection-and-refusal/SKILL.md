@@ -30,7 +30,7 @@ Everything below is manual guidance for a developer with a generation LLM. `<run
 
 ## Procedure
 
-The harness marks a refusal only when the answer contains one of: `i do not have enough information`, `i don't have enough information`, `not enough information`, `i cannot answer`, `the context does not provide`, `the provided text does not`, `not mentioned in the context`, `i am unable to answer`, `does not contain the answer to this question`.
+The harness marks a refusal when the normalized answer contains one of the phrases in `DEFLECTION_PHRASES` (`src/deepfix_rag/grounding.py`): the `i do not have enough information` / `i don't have enough information` family, `not enough information`, `i cannot answer`, `the context does not provide`, `the provided text does not`, `not mentioned in the context`, `i am unable to answer`, `does not contain the answer to this question`, and the rest of that list. Read the module for the current list rather than treating this sentence as closed. Matching folds case, whitespace, and typographic apostrophes and quotes, so a curly `’` matches the ASCII spelling of a phrase.
 
 1. Set a system prompt that uses one of those phrases for unanswerable questions, and tell the model to answer when the context is sufficient. Quote the whole `system_prompt` value: it contains spaces and a colon, and an unquoted value makes the command fail with exit 2. Confirm `diffs` is non-empty. Default `generation.temperature` is already `0.0`; do not set it to `0.2`.
 
