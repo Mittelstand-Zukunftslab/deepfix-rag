@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { AssistantChatTransport, useChatRuntime } from "@assistant-ui/react-ai-sdk";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { UIMessage } from "ai";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/layout/app-shell";
-import { ChatComposer } from "@/features/admin-chat/chat-composer";
 import { ActionCard } from "@/features/admin-chat/action-card";
-import { ChatMessageView } from "@/features/admin-chat/chat-message";
+import { ChatComposer } from "@/features/admin-chat/chat-composer";
+import { ChatThread, useChatHooks, useChatSessions } from "@/features/admin-chat/chat-session";
+import { seedMessages, type ChatHooks } from "@/features/admin-chat/chat-transport";
 import { RunPanel } from "@/features/admin-chat/run-panel";
 import type { ChatActionCard, ChatRun, ChatThreadSummary } from "@/schemas/admin-chat";
 import { adminChatService } from "@/services/admin-chat-service";
@@ -16,13 +16,10 @@ import { adminChatService } from "@/services/admin-chat-service";
 /**
  * The admin chat page.
  *
- * The assistant half is Assistant UI on the Vercel AI SDK's runtime: one
- * `useChatRuntime()` from `@assistant-ui/react-ai-sdk`, with a transport aimed
- * at the same-origin `/api/admin/chat/completions` route the web server already
- * proxies to FastAPI. There is no `useExternalStoreRuntime` and no hand-rolled
- * stream parser in this component (PRD D-7); the JSON-free parts the runtime
- * does not type (a tool-progress row, the terminal turn and its action cards)
- * are read by the transport in `admin-chat-sse.ts`.
+ * The assistant half is Assistant UI on the Vercel AI SDK's runtime, one runtime
+ * per thread (`chat-session.tsx`), with a transport aimed at the same-origin
+ * `/api/admin/chat/completions` route the web server already proxies to FastAPI.
+ * The JSON half here is the thread list, the action cards, and the run panels.
  */
 export function AdminChatPage({ chatEnabled }: { chatEnabled: boolean }) {
   if (!chatEnabled) return <AdminChatDisabled />;
@@ -63,29 +60,33 @@ export function AdminChatMisconfigured({ message }: { message: string }) {
   );
 }
 
-interface TurnState {
-  /** The assistant text streamed for the active turn, in order. */
-  text: string;
-  /** Tool-progress rows, newest last. */
-  tools: string[];
-  /** The terminal frame, once the turn ends. */
-  turn: { turn_id: string; status: string } | null;
-  error: string | null;
+interface ThreadState {
+  /** The thread this state belongs to, so a seed is never used for another one. */
+  threadId: string | null;
+  /** The stored history the thread's runtime was seeded from, or null while loading. */
+  seed: UIMessage[] | null;
+  /** A stored turn still running when the page loaded, resumed on mount (CHAT-005). */
+  runningTurnId: string | null;
+  actions: ChatActionCard[];
+  runs: ChatRun[];
 }
 
-const EMPTY_TURN: TurnState = { text: "", tools: [], turn: null, error: null };
+const LOADING: ThreadState = {
+  threadId: null,
+  seed: null,
+  runningTurnId: null,
+  actions: [],
+  runs: [],
+};
 
 function AdminChat() {
   const [threads, setThreads] = useState<ChatThreadSummary[]>([]);
   const [activeThread, setActiveThread] = useState<string | null>(null);
-  const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
-  const [actions, setActions] = useState<ChatActionCard[]>([]);
-  const [runs, setRuns] = useState<ChatRun[]>([]);
-  const [turn, setTurn] = useState<TurnState>(EMPTY_TURN);
-  const [busy, setBusy] = useState(false);
+  const [state, setState] = useState<ThreadState>(LOADING);
   const [failure, setFailure] = useState<string | null>(null);
-  const abort = useRef<AbortController | null>(null);
-  const composer = useRef<HTMLTextAreaElement | null>(null);
+  const sessions = useChatSessions();
+  const loaded = useRef(new Map<string, ThreadState>());
+  const emptyComposer = useRef<HTMLTextAreaElement | null>(null);
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -109,93 +110,65 @@ function AdminChat() {
     };
   }, [refreshThreads]);
 
+  // Each thread's history is fetched once per page load. The runtime keeps the
+  // messages after that, so re-seeding on every switch would be the duplicate
+  // this page used to show.
   useEffect(() => {
     if (!activeThread) {
-      setMessages([]);
-      setActions([]);
-      setRuns([]);
+      setState(LOADING);
+      return;
+    }
+    const cached = loaded.current.get(activeThread);
+    if (cached) {
+      setState(cached);
       return;
     }
     let cancelled = false;
-    void adminChatService
-      .thread(activeThread)
-      .then((detail) => {
+    setState(LOADING);
+    void loadThread(activeThread)
+      .then((next) => {
         if (cancelled) return;
-        setMessages(detail.messages.map((m) => ({ role: m.role, content: m.content })));
-        setActions(
-          detail.actions.map(toCard).filter((card): card is ChatActionCard => card !== null),
-        );
+        loaded.current.set(activeThread, next);
+        setState(next);
       })
-      .catch((error: unknown) => setFailure(message(error)));
-    void adminChatService
-      .runs(activeThread)
-      .then((items) => {
-        if (!cancelled) setRuns(items);
-      })
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        if (!cancelled) setFailure(message(error));
+      });
     return () => {
       cancelled = true;
     };
   }, [activeThread]);
 
-  const send = useCallback(
-    (content: string) => {
-      if (!activeThread) return;
-      const next = [...messages, { role: "user" as const, content }];
-      setMessages(next);
-      setTurn({ ...EMPTY_TURN, text: "" });
-      setBusy(true);
-      abort.current = new AbortController();
-      void adminChatService
-        .streamTurn(
-          { threadId: activeThread, messages: next, signal: abort.current.signal },
-          {
-            onText: (delta) => setTurn((state) => ({ ...state, text: state.text + delta })),
-            onTool: (progress) =>
-              setTurn((state) => ({
-                ...state,
-                tools: [...state.tools, progress.label ?? progress.tool ?? "Working\u2026"],
-              })),
-            onTurn: (frame) => {
-              setTurn((state) => ({
-                ...state,
-                turn: { turn_id: frame.turn_id, status: frame.status },
-              }));
-              setActions((current) => [...current, ...frame.actions]);
-            },
-            onError: (text) => setTurn((state) => ({ ...state, error: text })),
-            onDone: () => {
-              setBusy(false);
-              void refreshThreads();
-              void adminChatService
-                .thread(activeThread)
-                .then((detail) =>
-                  setMessages(detail.messages.map((m) => ({ role: m.role, content: m.content }))),
-                );
-            },
-          },
-        )
-        .finally(() => {
-          setBusy(false);
-          composer.current?.focus();
-        });
+  const hooks = useChatHooks({
+    onTool: () => undefined,
+    onTurn: (frame) => {
+      setState((current) => ({
+        ...current,
+        actions: mergeActions(current.actions, frame.actions),
+      }));
     },
-    [activeThread, messages, refreshThreads],
-  );
+    onError: (text) => setFailure(text),
+    onFinished: () => {
+      void refreshThreads();
+    },
+  } satisfies ChatHooks);
 
-  const stop = useCallback(() => {
-    abort.current?.abort();
-    setBusy(false);
-  }, []);
+  const threadId = activeThread;
+  // The session is only built from a seed that belongs to this thread: a seed
+  // still in state from the previous one must never create the next thread's
+  // chat, which is what made one conversation's messages appear in another.
+  const session =
+    threadId && state.threadId === threadId && state.seed
+      ? sessions.ensure(threadId, state.seed, hooks)
+      : null;
 
   const newThread = useCallback(async () => {
     try {
       const created = await adminChatService.createThread();
+      const fresh: ThreadState = { ...LOADING, threadId: created.thread_id, seed: [] };
+      loaded.current.set(created.thread_id, fresh);
       setActiveThread(created.thread_id);
-      setMessages([]);
-      setActions([]);
-      setRuns([]);
-      setTurn(EMPTY_TURN);
+      setState(fresh);
       await refreshThreads();
     } catch (error) {
       setFailure(message(error));
@@ -203,30 +176,34 @@ function AdminChat() {
   }, [refreshThreads]);
 
   const deleteThread = useCallback(
-    async (threadId: string) => {
+    async (threadIdToDelete: string) => {
       try {
-        await adminChatService.deleteThread(threadId);
+        await adminChatService.deleteThread(threadIdToDelete);
+        sessions.drop(threadIdToDelete);
+        loaded.current.delete(threadIdToDelete);
         const items = await refreshThreads();
         setActiveThread(items[0]?.thread_id ?? null);
       } catch (error) {
         setFailure(message(error));
       }
     },
-    [refreshThreads],
+    [refreshThreads, sessions],
   );
 
   const confirm = useCallback(
     async (card: ChatActionCard) => {
       try {
         const run = await adminChatService.confirmAction(card.action_id);
-        setActions((current) =>
-          current.map((item) =>
-            item.action_id === card.action_id ? { ...item, status: "confirmed" } : item,
+        setState((current) => ({
+          ...current,
+          actions: current.actions.map((item) =>
+            item.action_id === card.action_id ? { ...item, status: "confirmed" as const } : item,
           ),
-        );
+        }));
         if (activeThread) {
           await adminChatService.linkRun(activeThread, run.run_id);
-          setRuns(await adminChatService.runs(activeThread));
+          const runs = await adminChatService.runs(activeThread);
+          setState((current) => ({ ...current, runs }));
         }
       } catch (error) {
         setFailure(message(error));
@@ -238,107 +215,107 @@ function AdminChat() {
   const dismiss = useCallback(async (card: ChatActionCard) => {
     try {
       await adminChatService.rejectAction(card.action_id);
-      setActions((current) =>
-        current.map((item) =>
-          item.action_id === card.action_id ? { ...item, status: "rejected" } : item,
+      setState((current) => ({
+        ...current,
+        actions: current.actions.map((item) =>
+          item.action_id === card.action_id ? { ...item, status: "rejected" as const } : item,
         ),
-      );
+      }));
     } catch (error) {
       setFailure(message(error));
     }
   }, []);
-
-  const runtime = useChatRuntime({
-    transport: useMemo(
-      () =>
-        new AssistantChatTransport({
-          api: "/api/admin/chat/completions",
-          credentials: "include",
-          prepareSendMessagesRequest: ({ id }) => ({
-            body: { thread_id: activeThread ?? id, messages: [] },
-          }),
-        }),
-      [activeThread],
-    ),
-  });
 
   if (failure?.includes("not configured")) {
     return <AdminChatMisconfigured message={failure} />;
   }
 
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 py-10">
-        <PageHeader
-          title="Hermes chat"
-          description="Ask about this server's runs and champion, or ask the assistant to propose a run."
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 py-10">
+      <PageHeader
+        title="Hermes chat"
+        description="Ask about this server's runs and champion, or ask the assistant to propose a run."
+      />
+      <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
+        <ThreadList
+          threads={threads}
+          active={activeThread}
+          onSelect={setActiveThread}
+          onNew={newThread}
+          onDelete={deleteThread}
         />
-        <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
-          <ThreadList
-            threads={threads}
-            active={activeThread}
-            onSelect={setActiveThread}
-            onNew={newThread}
-            onDelete={deleteThread}
-          />
-          <div className="flex min-h-[32rem] flex-col gap-4">
-            <div aria-live="polite" className="flex flex-col gap-3" data-testid="admin-chat-stream">
-              {messages.map((item, index) => (
-                <ChatMessageView
-                  key={`${index}-${item.role}`}
-                  role={item.role}
-                  content={item.content}
+        <div className="flex flex-col gap-4">
+          {session && threadId ? (
+            <ChatThread
+              // Keying by thread is what isolates the two runtimes: switching
+              // threads unmounts one view and mounts the other, while each
+              // session's `Chat` keeps its own messages and its own stream.
+              key={threadId}
+              session={session}
+              runningTurnId={state.runningTurnId}
+              disabled={false}
+            />
+          ) : (
+            <div className="flex min-h-[32rem] flex-col gap-4">
+              <p className="text-body-md text-muted-foreground">
+                {activeThread
+                  ? "Loading this thread…"
+                  : "No messages yet. Ask a question to start."}
+              </p>
+              <ChatComposer
+                busy={false}
+                inputRef={emptyComposer}
+                onSend={() => undefined}
+                onStop={() => undefined}
+                disabled
+              />
+            </div>
+          )}
+          {state.actions.length ? (
+            <div className="flex flex-col gap-3">
+              {state.actions.map((card) => (
+                <ActionCard
+                  key={card.action_id}
+                  card={card}
+                  onConfirm={confirm}
+                  onDismiss={dismiss}
                 />
               ))}
-              {turn.text ? <ChatMessageView role="assistant" content={turn.text} /> : null}
-              {turn.tools.map((label, index) => (
-                <p key={`${label}-${index}`} className="text-label-sm text-muted-foreground">
-                  {label}
-                </p>
-              ))}
-              {turn.error ? (
-                <p role="alert" className="text-label-sm text-destructive">
-                  {turn.error}
-                </p>
-              ) : null}
-              {messages.length === 0 && !turn.text ? (
-                <p className="text-body-md text-muted-foreground">
-                  No messages yet. Ask a question to start.
-                </p>
-              ) : null}
             </div>
-            {actions.length ? (
-              <div className="flex flex-col gap-3">
-                {actions.map((card) => (
-                  <ActionCard
-                    key={card.action_id}
-                    card={card}
-                    onConfirm={confirm}
-                    onDismiss={dismiss}
-                  />
-                ))}
-              </div>
-            ) : null}
-            {runs.map((run) => (
-              <RunPanel key={run.run_id} run={run} />
-            ))}
-            <ChatComposer
-              busy={busy}
-              inputRef={composer}
-              onSend={send}
-              onStop={stop}
-              disabled={!activeThread}
-            />
-            {failure ? (
-              <p role="alert" className="text-label-sm text-destructive">
-                {failure}
-              </p>
-            ) : null}
-          </div>
+          ) : null}
+          {state.runs.map((run) => (
+            <RunPanel key={run.run_id} run={run} />
+          ))}
+          {failure ? (
+            <p role="alert" className="text-label-sm text-destructive">
+              {failure}
+            </p>
+          ) : null}
         </div>
       </div>
-    </AssistantRuntimeProvider>
+    </div>
   );
+}
+
+async function loadThread(threadId: string): Promise<ThreadState> {
+  const [detail, runs] = await Promise.all([
+    adminChatService.thread(threadId),
+    adminChatService.runs(threadId).catch(() => [] as ChatRun[]),
+  ]);
+  const running = [...detail.turns].reverse().find((turn) => turn.status === "running");
+  return {
+    threadId,
+    seed: seedMessages(detail.messages),
+    runningTurnId: running?.turn_id ?? null,
+    actions: detail.actions.map(toCard).filter((card): card is ChatActionCard => card !== null),
+    runs,
+  };
+}
+
+function mergeActions(current: ChatActionCard[], next: ChatActionCard[]): ChatActionCard[] {
+  const byId = new Map(current.map((card) => [card.action_id, card]));
+  for (const card of next) byId.set(card.action_id, card);
+  return [...byId.values()];
 }
 
 function ThreadList({
