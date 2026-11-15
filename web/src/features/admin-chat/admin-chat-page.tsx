@@ -340,7 +340,24 @@ function AdminChat({ email }: { email: string }) {
                   pendingPrompt?.threadId === threadId ? pendingPrompt.prompt : undefined
                 }
                 disabled={false}
-              />
+              >
+                {state.actions.length ? (
+                  <div className="flex flex-col gap-3">
+                    {state.actions.map((card) => (
+                      <ActionCard
+                        key={card.action_id}
+                        card={card}
+                        error={cardErrors[card.action_id]}
+                        onConfirm={confirm}
+                        onDismiss={dismiss}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {state.runs.map((run) => (
+                  <RunPanel key={run.run_id} run={run} />
+                ))}
+              </ChatThread>
             ) : (
               <div className="flex min-h-0 flex-1 flex-col justify-end gap-4">
                 {activeThread ? (
@@ -351,22 +368,6 @@ function AdminChat({ email }: { email: string }) {
                 <DraftComposer onCreate={() => void newThread()} />
               </div>
             )}
-            {state.actions.length ? (
-              <div className="flex flex-col gap-3">
-                {state.actions.map((card) => (
-                  <ActionCard
-                    key={card.action_id}
-                    card={card}
-                    error={cardErrors[card.action_id]}
-                    onConfirm={confirm}
-                    onDismiss={dismiss}
-                  />
-                ))}
-              </div>
-            ) : null}
-            {state.runs.map((run) => (
-              <RunPanel key={run.run_id} run={run} />
-            ))}
             {failure ? (
               <p role="alert" className="text-label-sm text-destructive">
                 {failure}

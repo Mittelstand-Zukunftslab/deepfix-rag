@@ -18,6 +18,7 @@ import {
 import { useAISDKRuntime, useAISDKError } from "@assistant-ui/react-ai-sdk";
 import { useChat, type UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
+import type { ReactNode } from "react";
 import { ArrowDown, Copy, RefreshCw, Wrench } from "lucide-react";
 
 import { ChatComposer } from "@/features/admin-chat/chat-composer";
@@ -79,6 +80,7 @@ export function ChatThread({
   runningTurnId,
   initialPrompt,
   disabled,
+  children,
 }: {
   session: ThreadChat;
   /** The stored turn a page load found still running, resumed once on mount. */
@@ -86,6 +88,8 @@ export function ChatThread({
   /** A welcome chip's prompt, placed in the composer rather than sent (CHAT-019). */
   initialPrompt?: string | undefined;
   disabled: boolean;
+  /** The action cards and run panels, drawn in stream order above the composer. */
+  children?: ReactNode;
 }) {
   const helpers = useChat<UIMessage>({ chat: session.chat });
   const runtime = useAISDKRuntime(helpers);
@@ -103,7 +107,7 @@ export function ChatThread({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ComposerSeed prompt={initialPrompt} />
-      <ThreadBody disabled={disabled} />
+      <ThreadBody disabled={disabled}>{children}</ThreadBody>
     </AssistantRuntimeProvider>
   );
 }
@@ -125,7 +129,7 @@ function ComposerSeed({ prompt }: { prompt: string | undefined }) {
   return null;
 }
 
-function ThreadBody({ disabled }: { disabled: boolean }) {
+function ThreadBody({ disabled, children }: { disabled: boolean; children?: ReactNode }) {
   return (
     // `ThreadPrimitive.Root` is the scope a suggestion writes its prompt into.
     <ThreadPrimitive.Root className="relative flex min-h-0 flex-1 flex-col gap-6">
@@ -133,8 +137,9 @@ function ThreadBody({ disabled }: { disabled: boolean }) {
       <div aria-live="polite" className="flex flex-col gap-6" data-testid="admin-chat-stream">
         <ThreadPrimitive.Messages>{() => <MessageRow />}</ThreadPrimitive.Messages>
         <ThreadError />
+        {children}
       </div>
-      <div className="sticky bottom-0 mt-auto bg-background pb-2">
+      <div className="relative sticky bottom-0 mt-auto bg-background pb-2">
         <ThreadPrimitive.ScrollToBottom asChild>
           <button
             type="button"

@@ -179,7 +179,8 @@ function ThreadRow({
         className={cn(
           "absolute end-1 top-1/2 size-7 -translate-y-1/2 text-muted-foreground",
           "opacity-0 transition-opacity group-hover/thread:opacity-100 group-focus-within/thread:opacity-100",
-          active && "opacity-100",
+          // Visible while its own dialog is open, so the row still shows what it belongs to.
+          confirming && "opacity-100",
         )}
       >
         <Trash2 className="size-3.5" aria-hidden />
