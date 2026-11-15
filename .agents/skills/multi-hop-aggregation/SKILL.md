@@ -59,7 +59,7 @@ deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx-mixed -
 
 `retrieval.graph_weight`, `dense_weight`, and `bm25_weight`: each 0.0–1.0. Their sum must be positive; they are normalized to sum 1 (see Procedure).
 
-`retrieval.query_expansion_num` also applies to `mixed` fusion and calls an LLM above 1. See `hybrid-fusion-tuning`.
+`retrieval.query_expansion_num` also applies to `mixed` fusion and calls the generation model above 1, one completion per question per requested count. See `query-rewriting`. (This skill is manual/benchmark only, so it never runs inside a round, and a round never reaches `mixed`.)
 
 ## Index-time vs query-time
 

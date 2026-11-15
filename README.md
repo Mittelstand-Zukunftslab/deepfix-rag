@@ -83,7 +83,8 @@ deepfix-rag/
 │   ├── retrieval-backend-selection/ <- dense vs bm25 vs hybrid
 │   ├── rerank-calibration/          <- Rerank on/off and top_k (reference)
 │   ├── hybrid-fusion-tuning/        <- Fusion mode and weights (reference)
-│   ├── embedding-selection/, query-rewriting/   <- Aliases of the two above
+│   ├── query-rewriting/             <- Query expansion 1-3 (reference)
+│   ├── embedding-selection/         <- Alias of retrieval-backend-selection
 │   └── deflection-and-refusal/, legal-retrieval-grounding/,
 │       multi-hop-aggregation/, diagnostic-server/  <- Manual/benchmark only
 ├── configs/                        <- RAG and HPO configuration (see configs/README.md)
@@ -332,7 +333,7 @@ Names and purpose only; `example.env` carries the values and one comment per gro
 
 | Variable | Purpose |
 | :--- | :--- |
-| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | Answer generation and query expansion. |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | Answer generation and query expansion. Inside Hermes these also reach `deepfix`, through the eval-env file and the shim. |
 | `LLM_JUDGE_MODEL` | DeepEval judge. May differ from `LLM_MODEL` on the same endpoint. |
 | `DEEPFIX_LLM_DROP_PARAMS` | Omits sampling parameters a provider rejects (some models allow only `temperature=1`). Applies to generation, the judge, and eval. Default on. |
 | `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | Embeddings for indexing and retrieval. |
@@ -426,7 +427,8 @@ Every subcommand accepts `--json`: the JSON payload goes to stdout and logs go t
 - `--index-dir` moves only the candidate. `--baseline-index-dir` moves the `--compare` baseline, so one round can score both sides from one local copy of a remote index.
 - `--seed` with `--limit` draws a deterministic sample instead of taking the first rows.
 - `--max-error-rate` fails the run when the share of errored cases exceeds it.
-- `--retrieval-only` scores nDCG, recall, and precision and calls neither the generation model nor the judge, so `LLM_MODEL` and `LLM_JUDGE_MODEL` are optional in that mode. `LLM_MODEL` is still required when `retrieval.query_expansion_num` is above 1 on a hybrid or mixed backend.
+- `--retrieval-only` scores nDCG, recall, and precision and calls neither the generation model nor the judge, so `LLM_MODEL` and `LLM_JUDGE_MODEL` are optional in that mode. `LLM_MODEL` is still required when `retrieval.query_expansion_num` is above 1 on a hybrid or mixed backend; each expanded question is one completion, cached per question and requested count for the whole run so a candidate and a `--compare` baseline share it.
+- `expansion_llm_calls` and `expansion_cache_hits` report that cost: completions sent upstream, and prompts answered from the cache. They are not gate metrics.
 - `--no-mlflow` scores locally and reports `mlflow_run_id: null`.
 - Metric keys are unsuffixed: `faithfulness`, `context_precision`, `context_recall`, `answer_relevancy`, `contextual_relevancy`, `ndcg`, `recall`, `precision`, plus `deflection_rate`, `failure_distribution`, `errors`, `scored`, `effective_backend`, `configured_backend`, and `judge_failures`.
 
@@ -440,7 +442,9 @@ Every subcommand accepts `--json`: the JSON payload goes to stdout and logs go t
 - A trial where every case errored is recorded `FAIL` rather than scored `0.0`. If no trial completes, the command exits 2 with the first trial's error.
 - `--tune-chunking` samples chunking keys and re-indexes per trial. Never use it in an API-driven round.
 
-`configs/hpo_retrieval_small.yaml` is the shipped query-time space: rerank on/off with `top_n` 5 or 10, `top_k` 10/20/50, and the three fusion modes that read their weights. It excludes `bm25_k1`, `bm25_b`, query expansion above 1, and every chunking key. `.agents/skills/hpo-search/SKILL.md` is the procedure a round follows with it.
+`configs/hpo_retrieval_small.yaml` is the shipped query-time space: rerank on/off with `top_n` 5 or 10, `top_k` 10/20/50, query expansion 1 to 3, and the three fusion modes that read their weights. It excludes `bm25_k1`, `bm25_b`, and every chunking key. `.agents/skills/hpo-search/SKILL.md` is the procedure a round follows with it.
+
+Expansion is the one sampled key that calls an LLM. Inside Hermes the generation model reaches `deepfix` through the root-owned `/opt/deepfix/eval-env` file the sandbox writes at boot (model ids and endpoint URLs only) and the shim, which puts those values back into the CLI child and maps `OPENROUTER_API_KEY` into `LLM_API_KEY` when the LLM endpoint is OpenRouter; no secret is written into the run bundle, the eval log, or the profile `.env` apart from the key the shim already reads. The pipeline caches each paraphrase per question and requested count for the whole study, and expansion 1 makes no call, so a 12-trial sweep on 20 questions pays at most 40 completions (counts 2 and 3, once each per question). An `eval --compare` scores both sides from one cache so the paired gate compares the same rewrites. A sweep that can sample expansion exits 1 with `error_type` `missing_model` when `LLM_MODEL` is empty, rather than failing trials one at a time.
 
 ---
 

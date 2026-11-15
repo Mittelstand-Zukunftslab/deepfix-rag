@@ -19,6 +19,7 @@ from deepfix_rag.cli.ui import (
 from deepfix_rag.config.hpo import load_hpo_config
 from deepfix_rag.config.mutator import apply_mutation
 from deepfix_rag.config.schema import RetrievalBackend
+from deepfix_rag.config.settings import ModelNotConfigured
 from deepfix_rag.hpo import TRIALS_ARTIFACT_NAME, HyperparameterOpt
 
 
@@ -264,6 +265,16 @@ def hpo_cmd(
                 split=effective_split,
                 limit=effective_limit,
             )
+    except ModelNotConfigured as e:
+        # A space that can sample query expansion above 1 needs LLM_MODEL. The
+        # sweep checks that once, up front, so this is a configuration error and
+        # not a runtime failure to retry.
+        emit_error(
+            f"Optimization configuration error: {e}",
+            code=EXIT_VALIDATION_ERROR,
+            json_output=json_output,
+            error_type="missing_model",
+        )
     except Exception as e:
         emit_error(
             f"Optimization runtime error: {e}",

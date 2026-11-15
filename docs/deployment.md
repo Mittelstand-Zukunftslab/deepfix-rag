@@ -34,7 +34,7 @@ docker compose up -d --no-deps --build web
 | Changed | Rebuild |
 | :--- | :--- |
 | `src/deepfix_rag/**`, `configs/**`, `Dockerfile`, `pyproject.toml`, `uv.lock` | `backend-api` |
-| `docker/hermes/**`, `.agents/skills/**`, `compose.hermes.yml` | `hermes` |
+| `docker/hermes/**`, `.agents/skills/**`, `compose.hermes.yml`, `configs/hpo_retrieval_small.yaml` | `hermes` |
 | `web/**` | `web` |
 | `MLFLOW_SERVER_*`, MLflow image or command | `mlflow` |
 | RustFS settings | `rustfs` |
@@ -42,6 +42,16 @@ docker compose up -d --no-deps --build web
 `.agents/skills/**` is baked into the Hermes image, so a skill edit needs a Hermes rebuild. The backend image bakes `configs/` and `scripts/` too, so a config change needs a backend rebuild.
 
 A rebuild is also the way a Compose-level environment change takes effect: `docker compose up -d --no-deps <service>` recreates that one container with the new environment.
+
+## Query expansion inside the sandbox
+
+A round may now sample `retrieval.query_expansion_num` 1 to 3. The completion that rewrites a question goes to `LLM_MODEL` on `LLM_BASE_URL`, which is the sandbox's generation model and not a separate one:
+
+- `compose.hermes.yml` passes `LLM_MODEL` and `LLM_JUDGE_MODEL` to the container. Boot writes them, with `LLM_BASE_URL` and the other model ids, to `/opt/deepfix/eval-env` (root-owned, mode 0644). That file holds model ids and endpoint URLs only.
+- The `deepfix` shim reads that file and puts the values into the CLI child's environment, so nothing appears on the command line. It also fills `LLM_API_KEY` from `OPENROUTER_API_KEY` when `LLM_BASE_URL` is OpenRouter's, exactly as it already does for the rerank and embedding slots.
+- `LLM_API_KEY` is still rejected in the container environment, and the run bundle still carries no credential: the key stays in the sealed profile `.env` the shim reads.
+
+So a deploy that enables expansion needs the Hermes image rebuilt (new `src/`, new `configs/hpo_retrieval_small.yaml`, new skills). It needs a `backend-api` rebuild too, because the API re-scores a candidate and its champion through the same expansion cache during promotion, and that code lives in `src/deepfix_rag/promotion.py`. No new environment variable is required: the model is the `LLM_MODEL` the deployment already sets. Confirm `LLM_MODEL` is non-empty on the `hermes` service, because a sweep that can expand now exits 1 with `error_type` `missing_model` before the first trial instead of erroring trials one by one.
 
 ## Order of operations for a release that touches several services
 

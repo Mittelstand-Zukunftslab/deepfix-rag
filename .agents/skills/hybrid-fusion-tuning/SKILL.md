@@ -5,8 +5,9 @@ description: >
   fairly high, because the query vocabulary does not match the corpus. Tune the
   hybrid fusion: set fusion_mode to relative_score or dist_based_score together
   with dense_weight and bm25_weight. The default reciprocal_rerank ignores the
-  weights. Query expansion is not available to the agent. Formerly named
-  query-rewriting. This skill does not rewrite queries.
+  weights. Query expansion is a separate lever, sampled by hpo-search and explained
+  in query-rewriting. Formerly named query-rewriting. This skill does not rewrite
+  queries.
 failure_mode:
   - retrieval_miss
 trigger_conditions:
@@ -17,11 +18,11 @@ cli_actions:
   - "deepfix eval --config <run_dir>/candidate.yaml --compare <run_dir>/input/champion.yaml --index-dir <run_dir>/idx-cache --baseline-index-dir <run_dir>/idx-cache --dataset <dev_path> --retrieval-only --json"
 ---
 
-**In an API-driven round, query-time fusion and rerank go through `hpo-search`, not this skill.** `hpo-search` runs one bounded `deepfix hpo` sweep over the shipped small space (fusion mode, dense weight, `top_k`, rerank) and then confirms the best trial on the full dev set. This skill documents a single hand-picked fusion setting for manual use and for reading the findings; a round does not hand-write one candidate instead of the sweep.
+**In an API-driven round, query-time fusion and rerank go through `hpo-search`, not this skill.** `hpo-search` runs one bounded `deepfix hpo` sweep over the shipped small space (fusion mode, dense weight, `top_k`, rerank, and query expansion 1-3) and then confirms the best trial on the full dev set. This skill documents a single hand-picked fusion setting for manual use and for reading the findings; a round does not hand-write one candidate instead of the sweep.
 
 Follow `optimization-loop` for the hard rules, the quality gate, the exit codes and the 40-turn budget. `<run_dir>` is the run directory named in the prompt (`runs/<run_id>/`); `<dev_path>` is the dev dataset path named in the prompt. Everything here is query-time: do not re-index and do not pass `--index-dir`.
 
-Do not set `retrieval.query_expansion_num` above 1 in agent runs: it calls an LLM the agent does not have, so every case would error. The field is capped at 8 and the agent must leave it at 1. Do not edit `retrieval.query_gen_prompt` either. Hypothetical document embeddings (HyDE) are not implemented. This skill does not rewrite the query text.
+Query expansion is sampled by the same sweep as `retrieval.query_expansion_num` 1 to 3; `query-rewriting` explains what it does and when it pays. A hand-written `--set retrieval.query_expansion_num=N` stays at 1 or below, because outside the sweep there is no shared paraphrase cache. Do not edit `retrieval.query_gen_prompt`. Hypothetical document embeddings (HyDE) are not implemented. This skill does not rewrite the query text.
 
 ## When not to use
 
@@ -61,7 +62,7 @@ The query-time sweep an API round runs is `hpo-search` with `configs/hpo_retriev
 deepfix hpo --config <hpo_yaml> --paradigm hybrid --dataset <dataset_path> --retrieval-only --limit 30 --seed 0 --n-trials 20 --timeout 2400 --storage-uri sqlite:///hpo.db --output <out_yaml> --run-dir <run_dir> --json
 ```
 
-`<hpo_yaml>` must set `base_config` to the champion and `query_expansion_num_min` and `query_expansion_num_max` to 1 under `search_space.hybrid`. Run the best config through the `optimization-loop` compare on the full dev set before trusting it. Do not run this inside a round: `hpo-search` is the round's one sweep.
+`<hpo_yaml>` must set `base_config` to the champion and `query_expansion_num_min` and `query_expansion_num_max` to 1 under `search_space.hybrid`. Run the best config through the `optimization-loop` compare on the full dev set before trusting it. Do not run this inside a round: `hpo-search` is the round's one sweep. (A manual study that wants expansion may widen those two bounds; it then pays one completion per question per count, and only the round's sweep shares a cache across trials.)
 
 ## Valid values
 
@@ -85,5 +86,5 @@ No checked-in A/B result for fusion weights yet. Benchmark evidence, not product
 
 - Setting `dense_weight=0.7` under `fusion_mode=reciprocal_rerank` does not change ranking.
 - Setting `dense_weight` without `bm25_weight` leaves BM25 at 0.5. After normalization that is 0.58 / 0.42, not 70 / 30.
-- `query_expansion_num` above 1 adds an LLM call per query. The agent has no LLM, so cases error and the run must stop.
+- `query_expansion_num` above 1 adds one completion per question per requested count. The round's sweep caches it across trials; a hand-set value outside the sweep does not, so leave hand-written expansion at 1 and let `hpo-search` sample it.
 - A `diffs` object that omits the key you set means the mutation was ignored or the key was rejected.

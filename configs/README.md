@@ -12,7 +12,7 @@ Three files are the supported entry points. Everything else is a reference or a 
 | :--- | :--- | :--- |
 | `default.yaml` | The default hybrid baseline: `recursive` chunking at 1024/64, hybrid retrieval, `top_k: 10`, rerank off, `s3://deepfix-index/dev` as the index location. | Your first `deepfix index` and `deepfix eval`. This is also the file the API copies into a fresh workspace as `champion.yaml`, rewritten to point at the workspace corpus and `indexes/current`. |
 | `champion.yaml` | A concrete tuned configuration: hybrid, `top_k: 50`, rerank on with `top_n: 5`, `language: german`, a 100-row Bundestag slice. | Start a round from a known-good config, or copy it as the base for your own champion. |
-| `hpo_retrieval_small.yaml` | The query-time HPO space for one `hpo-search` sweep: 12 trials, 20 seeded questions, rerank on/off, `top_k` 10/20/50, three score-reading fusion modes. | `deepfix hpo --config configs/hpo_retrieval_small.yaml`. Nothing in this space is index-time, so no trial re-indexes. |
+| `hpo_retrieval_small.yaml` | The query-time HPO space for one `hpo-search` sweep: 12 trials, 20 seeded questions, rerank on/off, `top_k` 10/20/50, query expansion 1 to 3, three score-reading fusion modes. | `deepfix hpo --config configs/hpo_retrieval_small.yaml`. Nothing in this space is index-time, so no trial re-indexes. |
 
 A round run through the API does not read this directory: the run bundle carries its own `input/champion.yaml` and `input/hpo_retrieval_small.yaml`. These files are what you copy when running the commands by hand.
 
@@ -35,5 +35,6 @@ Single-purpose configs, kept so each backend and each lever has a checked exampl
 - `retrieval.lancedb_index_dir` is a location, not a hyperparameter. `deepfix index --index-dir` and `deepfix eval --index-dir` override it per command.
 - `rerank.top_n` must be at most `retrieval.top_k`, and `eval.cutoff_k` at most `rerank.top_n`, when rerank is enabled. The schema rejects a config that breaks either rule.
 - `retrieval.dense_weight` and `retrieval.bm25_weight` are read only under `fusion_mode: relative_score` or `dist_based_score`. The default `reciprocal_rerank` ignores them.
+- `retrieval.query_expansion_num` above 1 calls the generation model: one completion per question per requested count. The shipped small space samples 1 to 3 and the pipeline caches each paraphrase across a study and across a compare, so the cost is bounded. On `dense` or `bm25` the value is inert.
 - Generated candidates belong under the run directory (`runs/<run_id>/candidate.yaml`), not in this folder. Committed run artifacts were removed for that reason; `git log` has the history if you need the old benchmark outputs.
 - `configs/champion.yaml` in this folder is a template. The champion a deployment actually uses is the file in the API workspace, and `promotion.apply_candidate` is its only writer after seeding.

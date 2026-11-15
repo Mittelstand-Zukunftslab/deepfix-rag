@@ -24,7 +24,7 @@ from deepfix_rag.config.hpo import (
 )
 from deepfix_rag.config.mutator import apply_mutation
 from deepfix_rag.config.schema import RAGConfig
-from deepfix_rag.config.settings import LOGGER
+from deepfix_rag.config.settings import LOGGER, require_model
 from deepfix_rag.evaluation.runner import EvaluationRunner
 from deepfix_rag.index_cache import (
     index_dir_populated as _index_dir_populated,
@@ -34,6 +34,7 @@ from deepfix_rag.index_cache import (
     localize_index,
 )
 from deepfix_rag.pipeline import RAGWorkflow
+from deepfix_rag.query_expansion import ExpansionCache
 
 INDEX_CACHE_DIRNAME = "idx-cache"
 TRIALS_ARTIFACT_NAME = "hpo_trials.json"
@@ -223,6 +224,8 @@ class HPOResult:
     stopped_early: bool = False
     failed_trials: int = 0
     pruned_trials: int = 0
+    expansion_llm_calls: int = 0
+    expansion_cache_hits: int = 0
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert study trials to a structured DataFrame."""
@@ -285,6 +288,8 @@ class HPOResult:
             "trials_path": str(self.trials_path) if self.trials_path is not None else None,
             "index_dir": str(self.index_dir) if self.index_dir is not None else None,
             "index_cache_source": self.index_cache_source,
+            "expansion_llm_calls": self.expansion_llm_calls,
+            "expansion_cache_hits": self.expansion_cache_hits,
         }
 
     def export_best_config(self, output_path: Path | str) -> Path:
@@ -318,6 +323,10 @@ class HPOResult:
 
             mlflow.log_metric("hpo.total_trials", len(self.study.trials))
             mlflow.log_metric("hpo.pareto_count", len(self.pareto_trials))
+            # Cost of the sweep, not a ranking measurement: completions sent
+            # upstream and prompts answered from the shared expansion cache.
+            mlflow.log_metric("hpo.expansion_llm_calls", self.expansion_llm_calls)
+            mlflow.log_metric("hpo.expansion_cache_hits", self.expansion_cache_hits)
 
             df = self.to_dataframe()
             if not df.empty:
@@ -396,6 +405,11 @@ class HyperparameterOpt:
         # rebuilding the BM25 docstore per trial was the largest avoidable
         # allocation in the HPO-007 sweep.
         self.shared_index: Any = None
+        # One expansion cache for the whole study. A trial that samples
+        # expansion above 1 pays one completion per question per requested
+        # count, not per trial, so a sweep over the shipped space costs a
+        # bounded number of completions rather than one per trial per question.
+        self.expansion_cache = ExpansionCache()
         # A test pins the embedding model so it never calls a live endpoint.
         self.embed_model = embed_model
         self.llm = llm
@@ -451,6 +465,7 @@ class HyperparameterOpt:
             llm=self.llm,
             persist=self.persist,
             index=self.shared_index,
+            expansion_cache=self.expansion_cache,
         )
         summary = await runner.run(
             dataset_path=dataset_path,
@@ -511,6 +526,24 @@ class HyperparameterOpt:
         LOGGER.info(f"Copying the index from {uri} into {target}")
         localize_index(uri, target, self.base_config)
         return target
+
+    def _space_can_expand(self) -> bool:
+        """True when the space or base config can produce an expanded query.
+
+        A trial with ``retrieval.query_expansion_num > 1`` asks the generation
+        model for paraphrases. The sweep checks this once up front so a missing
+        ``LLM_MODEL`` fails the whole command by name instead of failing every
+        expanded trial one at a time with an empty per-case error.
+        """
+        if self.base_config.retrieval.query_expansion_num > 1:
+            return True
+        space = self.search_space
+        paradigm = str(getattr(self.base_config.retrieval.backend, "value", ""))
+        candidate_space = getattr(space, paradigm, None)
+        for attribute in (candidate_space, space.dense, space.hybrid, space.graph):
+            if attribute is not None and getattr(attribute, "query_expansion_num_max", 1) > 1:
+                return True
+        return False
 
     def _base_overrides(self) -> dict[str, Any]:
         """Index location plus the sample seed shared by every trial."""
@@ -668,6 +701,7 @@ class HyperparameterOpt:
             )
 
         run_name = f"hpo_{self.study_name}_trial_{trial.number}"
+        before = self.expansion_cache.stats()
         try:
             try:
                 metrics = self._run_trial_evaluation(
@@ -698,6 +732,14 @@ class HyperparameterOpt:
             # key is recorded so a later redraw compares on the config that was
             # actually scored, not on the sampled key set.
             trial.set_user_attr(_EFFECTIVE_KEY_ATTR, list(self._effective_config_key(overrides)))
+            after = self.expansion_cache.stats()
+            trial.set_user_attr(
+                "expansion_llm_calls", after["expansion_llm_calls"] - before["expansion_llm_calls"]
+            )
+            trial.set_user_attr(
+                "expansion_cache_hits",
+                after["expansion_cache_hits"] - before["expansion_cache_hits"],
+            )
             for k in ("retrieval_induced_error_rate", "deflection_rate"):
                 if k in metrics:
                     trial.set_user_attr(k, float(metrics[k]))
@@ -775,7 +817,15 @@ class HyperparameterOpt:
         )
         # Copy a remote index before the first trial so no trial fetches it again.
         self.local_index_for()
+        # An expanded query is a completion. Fail here, naming LLM_MODEL, rather
+        # than letting every expanded trial error one case at a time.
+        if self._space_can_expand():
+            require_model("LLM_MODEL")
         self._load_shared_index()
+        # A cache may be handed in already warm (a resumed study, or a caller
+        # that shared one), so report this study's own completions, not the
+        # cache's running total.
+        expansion_before = self.expansion_cache.stats()
 
         directions = ["maximize"] * len(self.metric_names)
 
@@ -869,6 +919,7 @@ class HyperparameterOpt:
         final_completed = len([t for t in study.trials if t.state == TrialState.COMPLETE])
         failed_count = len([t for t in study.trials if t.state == TrialState.FAIL])
         pruned_count = len([t for t in study.trials if t.state == TrialState.PRUNED])
+        expansion = self.expansion_cache.stats()
         trials_path: Path | None = None
         if self.run_dir is not None:
             trials_path = _write_trial_rows(self.run_dir, self.metric_names, study.trials)
@@ -889,4 +940,9 @@ class HyperparameterOpt:
             # A timeout, or a trial that failed, can leave the budget unspent.
             pruned_trials=pruned_count,
             stopped_early=final_completed < target_n_trials,
+            expansion_llm_calls=expansion["expansion_llm_calls"]
+            - expansion_before["expansion_llm_calls"],
+            expansion_cache_hits=(
+                expansion["expansion_cache_hits"] - expansion_before["expansion_cache_hits"]
+            ),
         )
