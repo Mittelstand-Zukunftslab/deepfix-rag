@@ -125,6 +125,23 @@ describe("Dashboard pages", () => {
     expect(screen.queryByText(/Evaluated/)).toBeNull();
   });
 
+  it("ask shows no passages as sources when nothing met the relevance floor", () => {
+    renderWithQuery(
+      <AskPage
+        indexReady
+        askedQuery="how do I turn rerank off"
+        answer="Nothing in these documents matches that question."
+        grounding="no_relevant_sources"
+        hits={[]}
+      />,
+    );
+    expect(screen.getAllByText("Not found in the documents").length).toBeGreaterThan(0);
+    expect(screen.getByText("No matching passages")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Passages" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /sources/ })).toBeNull();
+    expect(screen.queryByText("Grounded")).toBeNull();
+  });
+
   it("pressing the filled thumb clears and the other thumb switches", () => {
     expect(nextVoteAction("up", "up")).toBe("clear");
     expect(nextVoteAction("up", "down")).toBe("down");

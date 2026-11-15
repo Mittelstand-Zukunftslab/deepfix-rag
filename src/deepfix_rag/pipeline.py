@@ -99,6 +99,13 @@ class RAGResult(BaseModel):
 
     retrieval_results: list[RetrievalResult] = Field(..., description="The retrieval results")
     generated_answer: str | None = Field(None, description="The generated answer of the document")
+    dropped_results: list[RetrievalResult] = Field(
+        default_factory=list,
+        description=(
+            "Passages the relevance floor removed. They never reach generation and are not "
+            "shown as sources; they are kept so an interaction records what retrieval found."
+        ),
+    )
 
 
 class ChunkStatistics(BaseModel):
@@ -816,7 +823,7 @@ class RAGWorkflow(Workflow):
 
     @step
     async def rerank(self, ctx: Context, ev: RetrieverEvent) -> RerankEvent:
-        """Rerank candidate nodes through OpenRouter's rerank endpoint."""
+        """Rerank candidate nodes, then drop the ones below the relevance floor."""
         query = await ctx.store.get("query")
         nodes = ev.nodes
         reranker = self._get_reranker()
@@ -828,7 +835,48 @@ class RAGWorkflow(Workflow):
         nodes = reranker.postprocess_nodes(nodes, query_str=query)
         LOGGER.debug(f"Reranked {len(nodes)} nodes")
 
-        return RerankEvent(nodes=nodes)
+        return RerankEvent(nodes=self._above_relevance_floor(nodes))
+
+    def _above_relevance_floor(self, nodes: list[NodeWithScore]) -> list[NodeWithScore]:
+        """Keep the nodes whose rerank score meets ``rerank.min_relevance_score``."""
+        kept, _dropped = self._ranker_split(nodes)
+        return kept
+
+    def split_by_relevance_floor(
+        self, nodes: list[NodeWithScore]
+    ) -> tuple[list[NodeWithScore], list[NodeWithScore]]:
+        """Split reranked nodes into the ones that reach generation and the dropped ones."""
+        return self._ranker_split(nodes)
+
+    def _ranker_split(
+        self, nodes: list[NodeWithScore]
+    ) -> tuple[list[NodeWithScore], list[NodeWithScore]]:
+        """Split nodes into the ones that reach generation and the ones the floor dropped.
+
+        The floor is compared against the reranker's ``relevance_score``, which is
+        the only score whose scale it was calibrated on, so it applies only when
+        rerank ran. Without rerank the retriever's own score is on a different
+        scale (hybrid fusion scores sit near 0.03) and no floor is applied. Both
+        lists keep their original order.
+        """
+        floor = self.config.rerank.min_relevance_score
+        if floor <= 0.0:
+            return list(nodes), []
+        kept: list[NodeWithScore] = []
+        dropped: list[NodeWithScore] = []
+        for node in nodes:
+            if float(node.score or 0.0) >= floor:
+                kept.append(node)
+            else:
+                dropped.append(node)
+        if dropped:
+            LOGGER.debug(
+                "Relevance floor %.3f dropped %d of %d passages",
+                floor,
+                len(dropped),
+                len(nodes),
+            )
+        return kept, dropped
 
     def convert_nodes_to_results(self, nodes: list[NodeWithScore]) -> list[RetrievalResult]:
         """Convert retrieved nodes to results keyed by parent `doc_id`, never `chunk_id`."""
@@ -861,6 +909,10 @@ class RAGWorkflow(Workflow):
                     generated_answer=None,
                 )
             )
+
+        if not ev.nodes:
+            LOGGER.info("No passage met the relevance floor. Skipping generation.")
+            return StopEvent(result=RAGResult(retrieval_results=[], generated_answer=None))
 
         summarizer = self._get_response_synthesizer()
         response = await summarizer.asynthesize(query, nodes=ev.nodes)

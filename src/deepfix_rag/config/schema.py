@@ -394,6 +394,18 @@ class RerankConfig(StrictModel):
     top_n: int = Field(
         default=5, ge=1, description="Final number of top passages passed to generation."
     )
+    min_relevance_score: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Relevance floor applied to the reranker's relevance_score, so only when "
+            "rerank.enabled is true. A passage scoring below it is dropped before "
+            "generation and before display. Without rerank the retriever's own score is "
+            "on a different scale (hybrid fusion scores sit near 0.03), so no floor is "
+            "applied there. 0.0 disables the floor."
+        ),
+    )
 
 
 class GenerationConfig(StrictModel):

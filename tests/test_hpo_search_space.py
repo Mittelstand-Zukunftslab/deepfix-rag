@@ -178,6 +178,37 @@ def test_the_broader_manual_space_still_samples_the_wider_bounds() -> None:
     assert apply_mutation(base, samples[0]) is not None
 
 
+def test_the_relevance_floor_is_tunable_and_only_when_rerank_is_on() -> None:
+    """A space may sample the floor; a trial with rerank off never sets it."""
+    space = HybridSearchSpace.model_validate(
+        {
+            "top_k_choices": [20],
+            "rerank_choices": [False, True],
+            "rerank_top_n_choices": [5],
+            "rerank_min_score_choices": [0.0, 0.2, 0.5],
+            "tune_bm25_params": False,
+            "fusion_modes": ["reciprocal_rerank"],
+        }
+    )
+    seen_scores = set()
+    for params in _samples(space, trials=30):
+        if params["rerank.enabled"]:
+            seen_scores.add(params["rerank.min_relevance_score"])
+        else:
+            assert "rerank.min_relevance_score" not in params
+    assert seen_scores == {0.0, 0.2, 0.5}
+
+    with pytest.raises(ValueError, match="within 0.0 and 1.0"):
+        HybridSearchSpace.model_validate({"rerank_min_score_choices": [1.5]})
+
+
+def test_the_shipped_small_space_leaves_the_floor_alone() -> None:
+    """The shipped sweep has no unanswerable rows, so it cannot measure a cut-off."""
+    assert _small().search_space.hybrid.rerank_min_score_choices is None
+    for params in _samples(_small().search_space.hybrid):
+        assert "rerank.min_relevance_score" not in params
+
+
 def test_the_shipped_yaml_names_only_real_space_keys() -> None:
     loaded = yaml.safe_load(SMALL_PATH.read_text(encoding="utf-8"))
     hybrid = loaded["search_space"]["hybrid"]

@@ -49,20 +49,41 @@ class QueryService:
         return index
 
     async def retrieve(self, query: str) -> list[RetrievalResult]:
-        """Return ranked passages. Does not call the generation model."""
+        """Return the ranked passages that would reach an answer.
+
+        The relevance floor applies here too, so a search shows the same
+        passages an answer would have been grounded in.
+        """
         nodes = await self._search(query)
         return self._workflow.convert_nodes_to_results(nodes)
 
     async def answer(self, query: str) -> RAGResult:
-        """Return ranked passages and a generated answer."""
-        nodes = await self._search(query)
-        generated = await self._generate(query, nodes)
+        """Return ranked passages and a generated answer.
+
+        When no passage meets ``rerank.min_relevance_score`` there is nothing to
+        ground an answer in, so the generation model is not called at all: the
+        result carries no passages and no answer, plus the dropped ones for the
+        stored snapshot, and the route reports ``no_relevant_sources`` rather
+        than a generation failure.
+        """
+        kept, dropped = await self._search_split(query)
+        if not kept:
+            return RAGResult(
+                retrieval_results=[],
+                generated_answer=None,
+                dropped_results=self._workflow.convert_nodes_to_results(dropped),
+            )
+        generated = await self._generate(query, kept)
         return RAGResult(
-            retrieval_results=self._workflow.convert_nodes_to_results(nodes),
+            retrieval_results=self._workflow.convert_nodes_to_results(kept),
             generated_answer=generated,
         )
 
     async def _search(self, query: str) -> list[NodeWithScore]:
+        kept, _dropped = await self._search_split(query)
+        return kept
+
+    async def _search_split(self, query: str) -> tuple[list[NodeWithScore], list[NodeWithScore]]:
         retriever = self._workflow._build_retriever(
             index=self._index,
             top_k=self.config.retrieval.top_k,
@@ -72,8 +93,10 @@ class QueryService:
         nodes = await retriever.aretrieve(query)
         reranker = self._workflow._get_reranker()
         if reranker is None:
-            return nodes
-        return reranker.postprocess_nodes(nodes, query_str=query)
+            return nodes, []
+        return self._workflow.split_by_relevance_floor(
+            reranker.postprocess_nodes(nodes, query_str=query)
+        )
 
     def replace_document(self, document: Document) -> None:
         """Replace one document's chunks in the current index. Other documents stay put."""
