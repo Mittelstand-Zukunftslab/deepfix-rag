@@ -1,9 +1,11 @@
 # PRD: Ask becomes a streaming, multi-turn chat with the RAG as a tool
 
 > **Status: plan. Nothing here is implemented.** Reviewed against the tree at
-> `642f720` on `feat/hermes-optimizer`, 15 November 2026. Validated with
-> `validate-prd` — see `tasks/prd-ask-streaming-multiturn-validation.md` and
-> "Validation (validate-prd)" below.
+> `642f720` on `feat/hermes-optimizer`, 15 November 2026. All decisions are
+> settled: **D-1 … D-6 and D-8** while the document was written, **D-7 and
+> D-9 … D-11** by the product owner on 2026-11-15. Validated with `validate-prd`
+> — see `tasks/prd-ask-streaming-multiturn-validation.md` and "Validation
+> (validate-prd)" below. There are no open questions.
 
 ## Overview
 
@@ -81,12 +83,18 @@ because the stories depend on it.
    `apply_candidate` stay byte-for-byte as they are; the chat is a consumer of
    the same champion config and the same index.
    B. Yes. Multi-turn conversation becomes a new eval surface.
-   Answer: **A** (D-7). B is a follow-up project, not this release.
+   Answer: **A** (D-6). B is a follow-up project, not this release.
 
 ## Decisions
 
 Each decision records the alternatives it replaces, so a reader can see what was
 considered and why it lost.
+
+**D-1 … D-6 and D-8 were settled while this document was written. D-7 and the
+four questions that were open on the first draft were answered by the product
+owner on 2026-11-15.** D-7 is rewritten around its answer, and D-9, D-10, and
+D-11 record the other three, each stating what it replaces so a reader can find
+the earlier text it supersedes.
 
 ### D-1: The agent loop runs in deepfix-api, not in the web server
 
@@ -309,19 +317,35 @@ Two consequences worth stating plainly:
   recorded as a risk (R-3), with the mitigation that the system prompt and model
   are shared and the eval path is not the one that serves members.
 
-### D-7: Models are unchanged, and the fallback is named
+### D-7: Models are unchanged; the chat resolves `LLM_MODEL` and there is no Ask-chat model setting
+
+Decided by the product owner on **2026-11-15**. This decision replaces the
+earlier proposal of an `ASK_CHAT_MODEL` setting that fell back to `LLM_MODEL`
+when empty; that proposal is described below so the reasoning is on record.
 
 - Generation: `LLM_MODEL` = `qwen/qwen3.8-flash`, as `example.env` ships it.
   **Verified today** against OpenRouter's model list: `qwen/qwen3.8-flash`
   advertises `tools` and `tool_choice` in `supported_parameters`, with a
   1,000,000-token context. Tool calling is therefore supported by the model that
   is already configured, and no model change is needed for this feature.
-- Fallback if a live turn fails tool calling in practice: a new setting
-  `ASK_CHAT_MODEL: str = ""` that falls back to `LLM_MODEL` when empty,
-  mirroring the settled `HERMES_CHAT_MODEL` → `HERMES_MODEL` pattern, with
-  `qwen/qwen3.8-27b` (also `tools: true`) as the documented second choice. The
-  setting exists so an operator can switch without touching `LLM_MODEL`, which
-  `deepfix eval` uses. No model id is written in Python or TypeScript.
+- **No `ASK_CHAT_MODEL` setting.** The Ask chat resolves `LLM_MODEL` directly,
+  the same value `deepfix eval` and the single-turn `POST /ask` already use. One
+  model, one place to change it, and no setting that can silently diverge from
+  what the promotion gate scores. This is the owner's decision and it replaces
+  the earlier proposal of a chat-specific setting falling back to `LLM_MODEL`
+  (mirroring `HERMES_CHAT_MODEL` → `HERMES_MODEL`), which is recorded here so a
+  reader can see what was considered and rejected.
+- If a live turn fails tool calling in practice, the manual fallback is to point
+  `LLM_MODEL` at a model that advertises `tools` — `qwen/qwen3.8-27b` is the
+  documented candidate. This is an operator action, not a setting this feature
+  adds, and it moves generation for the chat, `POST /ask`, and eval together on
+  purpose. `example.env` today ships no commented alternative for `LLM_MODEL`
+  (checked: lines 28–40 hold `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`,
+  `LLM_JUDGE_MODEL`, `DEEPFIX_LLM_DROP_PARAMS` and nothing else), so ASKCHAT-005
+  adds **one comment line** beneath `LLM_MODEL` naming `qwen/qwen3.8-27b` as the
+  tool-calling fallback. A comment, not a variable: no new `Settings` field, no
+  new Compose entry, and the `ASK_CHAT_.*MODEL` guard below still passes.
+- No model id is written in Python or TypeScript.
 - Embeddings `perplexity/pplx-embed-v1-4b` and rerank `cohere/rerank-4-fast`:
   unchanged, and no setting is added for them.
 
@@ -347,6 +371,79 @@ holds, and adds no resident memory beyond in-flight request state. The caps that
 matter stay untouched: `hermes` at 4 GB with `cpus: "2"`, `mlflow` at 2 GB,
 `rustfs` and `diagnostic-agent` at 1 GB each. Nothing here raises a cap or adds a
 container, and no setting gets a literal outside `Settings`.
+
+### D-9: Deleting a thread keeps its `interactions` rows and their votes
+
+Decided by the product owner on **2026-11-15**. This replaces the open question
+"what happens to a member's votes when a thread is deleted?".
+
+A thread delete removes the conversation: the thread row and its `ask_chat_turns`
+rows, children before parent, in one transaction. It does **not** remove the
+`interactions` rows those turns produced, nor their `interaction_hits`, nor any
+`feedback_events`, `feedback_mirrors`, or `feedback_comments` row.
+
+Why: those rows are the optimizer's dataset. `build_questions` reads
+`feedback_events` joined to `interactions`, and `is_holdout` derives holdout
+membership from the normalized query text. A delete that cascaded would shrink
+the dataset mid-flight, could move a holdout question out of the split, and would
+let a member change what the optimizer is scored on by tidying their history. The
+member loses the conversation, not the record of their judgement. FR-010 carries
+this, and ASKCHAT-001's integration test asserts it.
+
+The consequence to know about: a deleted thread's interactions remain visible in
+the admin history screen (`GET /admin/interactions`), exactly as a single-turn
+`ask` interaction does today. That is intended — the admin view is the feedback
+record, not the member's conversation.
+
+### D-10: A grounded but uncited answer shows as "Partly grounded"
+
+Decided by the product owner on **2026-11-15**. This replaces the open question
+"should a turn be allowed to answer with no citation when passages were found?".
+
+Yes, it is allowed. The badge has four states and the two-level distinction is
+deliberate:
+
+| Data | Badge | Style |
+| :--- | :--- | :--- |
+| `grounding == "grounded"` and `citations` non-empty | **Grounded** | success |
+| `grounding == "grounded"` and `citations` empty | **Partly grounded** | warning |
+| `grounding == "no_relevant_sources"` | **No relevant sources** | neutral |
+| `grounding == "declined"` | **Declined** | neutral |
+
+Why: the model is instructed to cite, and a non-compliant answer is a quality
+defect rather than a product state. Turning a model slip into a member-visible
+error would punish the member for the model's mistake, and refusing the answer
+would throw away text that was in fact grounded. FR-009 carries the rule and
+ASKCHAT-008's test asserts both the badge and that a citation marker which
+resolves to nothing renders as plain text, never as a link.
+
+The "Partly grounded" count is a quality signal to watch: Success Metrics tracks
+that no turn is labelled Grounded without a valid citation, and the partly-
+grounded rate is observable from `ask_chat_turns.citations`.
+
+### D-11: Threads are unbounded, with a 50-item list cap and no prune
+
+Decided by the product owner on **2026-11-15**. This replaces the open question
+"how long should a thread list be allowed to grow?".
+
+There is no retention window in this release: no
+`ASK_CHAT_THREAD_RETENTION_DAYS`, no prune job, no scheduled deletion. A member's
+threads stay until the member deletes them. `GET /ask/chat/threads` returns the
+newest 50 and nothing paginates beyond that, which is a display cap rather than a
+lifecycle rule — the older threads still exist and are still reachable by id.
+
+Why: a thread is text only — a few kilobytes per turn — and the pilot has tens of
+members. Adding a prune would add a deletion path, a setting, and a class of bug
+(a member's history disappearing) for no measured pressure. `admin_chat.prune_audit`
+exists because the audit table is an append-only security log that grows with
+every action regardless of anyone's intent; a member's own conversations are
+bounded by their own usage and are theirs to delete.
+
+The conditions that would reopen this: `ask_chat_turns` or `ask_chat_threads`
+becoming a measurable share of `product_db_path`, or a member accumulating
+thousands of threads. The mechanism would be an
+`ASK_CHAT_THREAD_RETENTION_DAYS` prune on the existing optimization scheduler
+tick, exactly as `admin_chat.prune_audit` does — one story, no schema change.
 
 ## Glossary
 
@@ -396,7 +493,8 @@ container, and no setting gets a literal outside `Settings`.
 - Multi-turn evaluation, conversation-level metrics, or a new promotion gate.
 - Chat-driven configuration changes or optimization runs (that is the admin
   Hermes chat's job, and its gate forbids promotion).
-- A second model, a model picker, or per-turn model choice.
+- A second model, a model picker, or per-turn model choice. The chat resolves
+  `LLM_MODEL` and nothing else (D-7).
 - Editing or branching a conversation ("edit this earlier message and re-run").
 - Attachments, images, voice, or dictation on Ask.
 - Replacing `POST /ask`, `POST /retrieval`, or the Search page.
@@ -512,8 +610,8 @@ may slip one release), or **Could** (nice, unplanned).
 | FR-006 | The passages a turn's tool returned must be persisted as that turn's `interaction_hits`, ranked in tool order, so `POST /feedback` with `target: "passage"` and a rank keeps working with no new endpoint, and so reloading the thread restores the panel from the store. The **full** passage text must be stored even when the text sent to the model was truncated at `ASK_CHAT_MAX_PASSAGE_CHARS`, because `passage_key` is a hash of the text and `build_questions` groups on it: storing the truncated text would give a chat passage a different key from the same chunk's single-turn passage, and the two votes would never combine. | Must | G5, D-5. Votes are keyed on `(interaction_id, rank)`, so the ranks must be the ones the member sees, and the passage identity must be the one the optimizer already knows. |
 | FR-007 | The sources panel must be rendered from the `tool-output-available` parts of the message, never from parsing the answer's prose, and must survive a reload by being rebuilt from the stored message parts. | Must | G3. A prose parser breaks on the first table or footnote and would disagree with what the model saw. |
 | FR-008 | The system prompt must require `[n]` citation markers for every factual claim drawn from a passage; the server must validate each marker against the passages delivered in that turn, keep only markers that resolve to a passage at or above the cutoff, persist them in `ask_chat_turns.citations`, and emit them in `data-deepfix-grounding`. | Must | G3, D-3. A citation is only meaningful if it resolves to something the model was given. |
-| FR-009 | Each turn must persist `grounding` as one of `grounded`, `no_relevant_sources`, `declined`. `grounded` requires at least one passage at or above the cutoff to have been delivered; `declined` requires a `DEFLECTION_PHRASES` match. The badge must read "Grounded" only when `grounding == "grounded"` **and** `citations` is non-empty, and "Partly grounded" when it is grounded without a citation. | Must | G3, D-3. This is the ASK- enum, unchanged, plus a verdict the answer can fail. |
-| FR-010 | Threads must be server-side and per member: `GET /ask/chat/threads` (newest first, limit 50), `POST /ask/chat/threads`, `GET /ask/chat/threads/{thread_id}` (thread, turns, and their grounding/citations), `PATCH /ask/chat/threads/{thread_id}` (rename, 1–120 characters), `DELETE /ask/chat/threads/{thread_id}` (hard delete of turns and thread in one transaction; the `interactions` rows and their votes are kept, because they are the member's feedback history and the optimizer's dataset). Any other member's thread id must answer 404. | Must | G4, G5, D-5. Deleting a conversation must not delete evidence the optimizer already ingested. |
+| FR-009 | Each turn must persist `grounding` as one of `grounded`, `no_relevant_sources`, `declined`. `grounded` requires at least one passage at or above the cutoff to have been delivered; `declined` requires a `DEFLECTION_PHRASES` match. The badge must have exactly four states: "Grounded" only when `grounding == "grounded"` **and** `citations` is non-empty; "Partly grounded" when it is grounded without a citation; "No relevant sources" and "Declined" for the other two. | Must | G3, D-3, D-10. This is the ASK- enum, unchanged, plus a verdict the answer can fail — and D-10 settles that an uncited grounded answer is a warning, not an error. |
+| FR-010 | Threads must be server-side and per member: `GET /ask/chat/threads` (newest first, limit 50, no pagination beyond it), `POST /ask/chat/threads`, `GET /ask/chat/threads/{thread_id}` (thread, turns, and their grounding/citations), `PATCH /ask/chat/threads/{thread_id}` (rename, 1–120 characters), `DELETE /ask/chat/threads/{thread_id}` (hard delete of turns and thread in one transaction; the `interactions` rows and their votes are kept, because they are the member's feedback history and the optimizer's dataset). Any other member's thread id must answer 404. There must be no retention window and no prune job on these tables. | Must | G4, G5, D-5, D-9, D-11. Deleting a conversation must not delete evidence the optimizer already ingested, and 50 is a display cap rather than a lifecycle rule. |
 | FR-011 | The upstream conversation must be built from the store, never from the client's array: the system prompt, then the last `ASK_CHAT_MAX_HISTORY_MESSAGES` stored messages, then the new user message. A request whose last message is not a user message must be 400. | Must | G2, G7. The client cannot rewrite the policy or claim a history that never happened. |
 | FR-012 | A follow-up must be retrievable: the tool's own `query` argument is what is searched, and it must be stored as `ask_chat_turns.retrieval_query` while `interactions.query` keeps the member's literal message. No separate query-rewriting model call is added in this release. | Must | G2, G5, D-6. The model already has the history; a second rewrite call would add a model hop and a second thing to evaluate. |
 | FR-013 | Each passage delivered to the model must be wrapped in explicit delimiters and labelled as untrusted corpus text whose instructions must not be followed, and the system prompt must say so. | Must | G7. Members upload the corpus, so a document can contain an instruction. |
@@ -528,10 +626,10 @@ may slip one release), or **Could** (nice, unplanned).
 | FR-022 | `POST /ask`, `POST /retrieval`, `GET /interactions/{id}`, the Search page, the history screens, the admin Hermes chat, and their existing tests must be unchanged, except that the single-turn `POST /ask` route may write the new `thread_id`/`turn_id` columns as `NULL`. | Must | G6, G7. No regression to shipped surfaces. |
 | FR-023 | `promotion.apply_candidate` must remain the only writer of `configs/champion.yaml` and `indexes/current`; no ask-chat path may call it, write those paths, or read holdout. | Must | G6, G7. The gate is not negotiable. |
 | FR-024 | `deepfix eval`, `run_evaluation`, the promotion gate, and their settings must be unchanged, and a test must assert that the tool's passage list equals `QueryService.retrieve`'s output truncated at the cutoff survivors — same ids, order, and scores. | Must | G6, D-6. Served and scored retrieval must be one implementation. |
-| FR-025 | Generation must stay `LLM_MODEL` (`qwen/qwen3.8-flash`) through `litellm.acompletion`; a new `ASK_CHAT_MODEL` must default to empty and fall back to `LLM_MODEL`; embeddings and rerank settings must not change; and no model id may appear in Python or TypeScript. | Must | G7, D-7. The model already advertises tool calling; the fallback exists so an operator can switch without touching eval. |
+| FR-025 | Generation must stay `LLM_MODEL` (`qwen/qwen3.8-flash`) through `litellm.acompletion`, resolved directly with no Ask-chat model setting; embeddings and rerank settings must not change; and no model id may appear in Python or TypeScript. | Must | G7, D-7. The model already advertises tool calling, and one model id in one place cannot diverge from what the gate scores. |
 | FR-026 | Rate limits must be enforced from `ask_chat_turns` rows: `ASK_CHAT_MAX_TURNS_PER_WINDOW` per member per `ASK_CHAT_TURN_WINDOW_SECONDS`, and `ASK_CHAT_MAX_CONCURRENT_TURNS` globally; a breach must be 429 with `Retry-After` and a sentence naming the wait. | Must | G7, D-8. Members outnumber admins and share one API process. |
 | FR-027 | Per turn, `ASK_CHAT_MAX_MESSAGE_CHARS`, `ASK_CHAT_MAX_HISTORY_MESSAGES`, `ASK_CHAT_MAX_TOOL_CALLS`, `ASK_CHAT_MAX_PASSAGE_CHARS`, and `ASK_CHAT_TURN_TIMEOUT_SECONDS` must bound the request, the prompt, the loop, one passage, and the wall clock; exceeding a bound must be a readable 400 or a terminal error part, never a hang. | Must | G7, D-8. A chat reply is not a training job. |
-| FR-028 | No new container, service, worker, or memory cap may be added; every `ASK_CHAT_*` setting must exist on `Settings`, appear in `docker-compose.yml`'s `backend-api` environment with a non-empty default, and be documented in `example.env`. The `hermes`, `mlflow`, `rustfs`, and `diagnostic-agent` caps must not change. | Must | G7, D-8. The host has 7.6 GB and `backend-api` has no cap of its own. |
+| FR-028 | No new container, service, worker, or memory cap may be added; every `ASK_CHAT_*` setting must exist on `Settings`, appear in `docker-compose.yml`'s `backend-api` environment with a non-empty default, and be documented in `example.env`. No `ASK_CHAT_*` model setting may exist (FR-025, D-7). The `hermes`, `mlflow`, `rustfs`, and `diagnostic-agent` caps must not change. | Must | G7, D-8. The host has 7.6 GB and `backend-api` has no cap of its own. |
 | FR-029 | The Ask page must stream the answer into the message column, show the send control becoming **Stop** while a turn runs, offer regenerate on a finished or failed answer, keep a per-thread runtime so a reply in flight does not move between threads, and render the thread list from the server. | Must | G1, G4, D-1. The admin chat's per-thread `Chat` is what fixed this exact bug there (CHAT-015). |
 | FR-030 | The sources panel must list each tool passage with its filename, rank, score, text, and vote controls, and must open on the passages for the selected answer; a citation marker in the answer must focus the passage it names. The streaming region must be `aria-live="polite"`, every control must have a name, and focus must return to the composer after a turn. | Must | G1, G3. A keyboard and a screen reader must reach Stop and the evidence. |
 | FR-031 | The page must reuse the existing shared components rather than growing second copies: `web/src/components/chat/markdown.tsx` (`ChatMarkdown`) and `web/src/components/chat/composer.tsx` (`ChatComposerBar`, `ChatComposerHint`); the stream-part builders in `src/deepfix_rag/api/chat_stream.py`, extended with `tool-input-*` and `tool-output-*`; and the per-thread `Chat` transport pattern from `web/src/features/admin-chat/chat-transport.ts`. | Must | G1, G7. CHAT-016 already made one markdown renderer and one composer bar; a second of either is the drift this requirement forbids. |
@@ -626,7 +724,8 @@ No FR is unlinked to a goal (see Traceability), and no FR contradicts a non-goal
     readable 429; a fifth concurrent turn across the deployment is refused and
     says to try again.
 11. No new container, service, or memory cap exists, and every `ASK_CHAT_*`
-    setting is in `Settings`, in `docker-compose.yml`, and in `example.env`.
+    setting is in `Settings`, in `docker-compose.yml`, and in `example.env` —
+    and there is no `ASK_CHAT_MODEL`: the chat resolves `LLM_MODEL`.
 12. `uv run --env-file .env pytest -m "not network and not e2e"`,
     `uv run ruff check`, `uv run ruff format --check`, `bun run typecheck`,
     `bun run lint`, `bun run test`, and `bun run build` are green in `web/`.
@@ -679,6 +778,10 @@ No FR is unlinked to a goal (see Traceability), and no FR contradicts a non-goal
 - **(assumption)** `litellm.acompletion(stream=True)` closes the upstream
   connection when the async generator is closed, so Stop stops the spend. If it
   does not, the turn timeout bounds it and R-2 records the residual cost.
+- **(decided, 2026-11-15)** The chat has no model setting of its own: it resolves
+  `LLM_MODEL`, the same value eval and `POST /ask` use (D-7). A model that fails
+  tool calling is handled by an operator pointing `LLM_MODEL` at
+  `qwen/qwen3.8-27b`, not by a new variable.
 - **(assumption)** The API keeps running one uvicorn worker, so the in-process
   turn registry (`chat_turns.py`) is enough for live resume; a second worker
   degrades to stored-text replay, as it does for the admin chat.
@@ -790,8 +893,12 @@ private to me, so a reload or another browser shows the same history.
   `open_turn`, `finish_turn`, `set_grounding`, `count_recent_turns` are typed
   functions; every one takes `owner_id` and filters on it.
 - `DELETE` is one transaction: the thread's turns, then the thread row. The
-  `interactions` rows for those turns are **not** deleted, and a test asserts the
-  member's votes survive a thread delete.
+  `interactions` rows for those turns, their `interaction_hits`, and every
+  `feedback_events` / `feedback_mirrors` / `feedback_comments` row are **not**
+  deleted, and a test asserts the member's votes survive a thread delete (D-9).
+- There is no prune: no `ASK_CHAT_THREAD_RETENTION_DAYS` setting, no scheduler
+  hook, and a test asserts a thread older than any plausible window still lists
+  and still loads (D-11).
 - Routes: `GET /ask/chat/threads`, `POST /ask/chat/threads`,
   `GET /ask/chat/threads/{thread_id}`,
   `PATCH /ask/chat/threads/{thread_id}`, `DELETE /ask/chat/threads/{thread_id}`,
@@ -803,9 +910,12 @@ private to me, so a reload or another browser shows the same history.
 - **Integration test (`tests/test_ask_chat_threads.py`)** with two members and a
   real SQLite file through the real app: create, list ordering, rename, get,
   delete; every route answers 404 for the other member's id; a deleted thread
-  leaves its `interactions` and `feedback_events` rows intact; a restart between
-  two requests settles the `running` turn `failed`; `EXPLAIN QUERY PLAN` for the
-  two load queries reports an index search.
+  leaves its `interactions`, `interaction_hits`, `feedback_events`, and
+  `feedback_mirrors` rows intact, and the surviving vote is still returned by
+  `current_votes` and still exported by `build_questions`; a restart between two
+  requests settles the `running` turn `failed`; a thread whose `updated_at` is
+  years old still lists and still loads; `EXPLAIN QUERY PLAN` for the two load
+  queries reports an index search.
 
 ### ASKCHAT-002: `search_documents` over the champion index
 
@@ -857,8 +967,9 @@ searched the corpus first, so I can read it and see what it was based on.
   ends with `data: [DONE]`.
 - The loop is `litellm.acompletion(model=…, messages=…, tools=[search_documents],
   tool_choice="required"|"auto"|"none", stream=True)` with `drop_params` from
-  `litellm_additional_kwargs()`, the model resolved from `ASK_CHAT_MODEL or
-  LLM_MODEL` and never from a literal.
+  `litellm_additional_kwargs()`, the model resolved from `require_model("LLM_MODEL")`
+  through the existing `resolve_litellm_model(...)` helper — the same two calls
+  `RAGWorkflow._get_llm` makes — and never from a literal or a second setting.
 - Step 1 uses `tool_choice: "required"`; a step that ends with no tool call while
   the turn has made none causes the server to run `search_documents` with the
   user's message, append the result, and continue (FR-005). A turn stops calling
@@ -940,11 +1051,19 @@ every bound visible where I configure it.
 - `ASK_CHAT_MAX_TURNS_PER_WINDOW`, `ASK_CHAT_TURN_WINDOW_SECONDS`,
   `ASK_CHAT_MAX_CONCURRENT_TURNS`, `ASK_CHAT_MAX_TOOL_CALLS`,
   `ASK_CHAT_MAX_HISTORY_MESSAGES`, `ASK_CHAT_MAX_MESSAGE_CHARS`,
-  `ASK_CHAT_MAX_PASSAGE_CHARS`, `ASK_CHAT_TURN_TIMEOUT_SECONDS`, and
-  `ASK_CHAT_MODEL` exist on `Settings` with the D-8 defaults, appear in
-  `docker-compose.yml`'s `backend-api` environment with non-empty defaults
-  (`${ASK_CHAT_MAX_TOOL_CALLS:-3}`, and `${ASK_CHAT_MODEL:-}` for the string),
-  and are documented in `example.env`.
+  `ASK_CHAT_MAX_PASSAGE_CHARS`, and `ASK_CHAT_TURN_TIMEOUT_SECONDS` exist on
+  `Settings` with the D-8 defaults, appear in `docker-compose.yml`'s
+  `backend-api` environment with non-empty defaults
+  (`${ASK_CHAT_MAX_TOOL_CALLS:-3}` and so on), and are documented in
+  `example.env`. **No model setting is added:** there is no `ASK_CHAT_MODEL`, and
+  a test asserts no `Settings` field and no `example.env` variable line matches
+  `ASK_CHAT_.*MODEL`, so the D-7 decision cannot be quietly reversed by a later
+  story. The one `example.env` change is a comment beneath `LLM_MODEL` naming
+  `qwen/qwen3.8-27b` as the manual tool-calling fallback — a comment, not a
+  variable, so the guard above still passes.
+- The plumbing test also asserts the chat's model comes from `LLM_MODEL`: with
+  `LLM_MODEL` set to a fixture id and `Settings()` built, the loop's resolved
+  model id is that fixture — no default, no fallback, no second variable.
 - The limiter counts `ask_chat_turns` rows for the member in the window, then
   running turns globally, and refuses with 429, `Retry-After`, and a sentence
   naming the wait; a refusal writes no turn row, so it cannot ratchet itself.
@@ -958,7 +1077,10 @@ every bound visible where I configure it.
   hits the timeout and settles `failed`; a 400 for a 4001-character message; a
   composed `docker-compose.yml` with every `ASK_CHAT_*` unset still builds
   `Settings()`, and a test fails when a setting read by `Settings` is missing
-  from the Compose file or `example.env`.
+  from the Compose file or `example.env`; the model guard holds — `Settings` has
+  no field and `example.env` no variable line matching `ASK_CHAT_.*MODEL`, and a
+  turn streamed against the fixture endpoint reports the `LLM_MODEL` fixture id
+  as its model.
 
 ### ASKCHAT-006: The web data layer and the per-thread transport
 
@@ -1005,7 +1127,9 @@ streaming answers, a Stop control, a thread list I can name and delete.
   No second markdown renderer or composer bar is added.
 - The thread list renders from `GET /ask/chat/threads`, supports create, rename,
   and delete with a confirmation dialog naming what goes, and opens the newest
-  thread on load.
+  thread on load. It shows the newest 50 as the server returns them and offers no
+  pagination, matching D-11; a list of exactly 50 must not imply the member has
+  lost anything older, so the control copy says the list is the most recent.
 - The controlled mode the Search page uses (`askedQuery` / `answer` / `hits`) keeps
   working unchanged for a single result, and the `indexReady={false}` state is
   unchanged.
@@ -1037,9 +1161,11 @@ the one it cites, and know whether it was actually grounded.
 - `[n]` markers in the answer render as focusable buttons that select the
   matching passage in the panel; a marker that resolved to nothing is rendered
   as plain text and is never a link.
-- The badge follows FR-009 exactly: **Grounded** only when grounded *and* cited,
-  **Partly grounded** when grounded without a citation, **No relevant sources**
-  and **Declined** otherwise, each as text with an icon, not colour alone.
+- The badge follows FR-009 and D-10 exactly: **Grounded** only when grounded
+  *and* cited, **Partly grounded** when grounded without a citation, **No
+  relevant sources** and **Declined** otherwise, each as text with an icon, not
+  colour alone. Partly grounded is a warning, never an error, and never blocks
+  the answer or the vote.
 - FR-034's badge half: a `no_relevant_sources` turn renders the badge, its own
   explanation, no passage cards, and no Regenerate control — the four states are
   distinguishable without reading the answer's prose.
@@ -1279,7 +1405,8 @@ Each fact below is cited by file, because the stories assume them.
   whose `retrieval_query` differs from the raw message is observable per thread,
   and a spot check of ten follow-ups reads correctly.
 - Every answer's badge matches its data: zero turns labelled Grounded without a
-  valid citation.
+  valid citation, and the partly-grounded rate is readable from
+  `ask_chat_turns.citations` so a rise is noticed rather than argued about (D-10).
 - Zero 500s from the ask-chat routes in a week of pilot use, and zero `running`
   rows after any restart.
 - The optimizer's dev set grows with standalone questions: no exported question
@@ -1311,6 +1438,14 @@ Each fact below is cited by file, because the stories assume them.
 - [x] **Every FR maps to at least one goal** (see Traceability) and each FR is
   reachable from a story (see Story to FR map). No FR is marked "New": each is
   traceable to a goal derived from the owner's brief.
+- [x] **Every decided question is carried through, not just recorded.** The four
+  answers of 2026-11-15 were traced to every place the earlier text asserted the
+  opposite: D-7 removed `ASK_CHAT_MODEL` from FR-025, ASKCHAT-003, ASKCHAT-005,
+  the release acceptance criteria and the assumptions; D-9 is in FR-010 and
+  ASKCHAT-001's delete criteria and test; D-10 is FR-009, ASKCHAT-008 and Success
+  Metrics; D-11 is FR-010, ASKCHAT-001's no-prune test and ASKCHAT-007's list
+  copy. A search for `ASK_CHAT_MODEL` in this document now returns only the
+  record of the decision and the guards that keep it from returning.
 
 ## Validation (validate-prd)
 
@@ -1337,70 +1472,55 @@ Validated with `validate-prd` from
   export `retrieval_query` through a `LEFT JOIN`. Six should-fix items are also
   closed, including the invented `superseded` vote action (now the existing
   `clear`, because `feedback_events.action` has its own `CHECK`) and an
-  overstatement about which secret names `_SECRET_ENVS` is missing. The
-  remaining actions are the four open questions below, each with a recommended
-  default already implemented by a named story, and none of them is a table,
-  route, or setting decision.
+  overstatement about which secret names `_SECRET_ENVS` is missing.
+- **Third pass: Pass.** The four questions open on the second pass were answered
+  by the product owner on 2026-11-15 and are now **D-7** (no `ASK_CHAT_MODEL`;
+  the chat resolves `LLM_MODEL`), **D-9** (a thread delete keeps `interactions`
+  and votes), **D-10** (grounded without a citation shows as Partly grounded) and
+  **D-11** (threads unbounded, 50-item list cap, no prune). Each was traced to
+  every place the earlier text asserted the opposite — FR-009, FR-010, FR-025,
+  ASKCHAT-001, 003, 005, 007, 008, the release acceptance criteria, the
+  assumptions list and the "Won't" list — and the pass re-checked the dimensions
+  against the changed text rather than the earlier draft. No blocker, no
+  should-fix item, and no open question remain; the "Open questions" section is
+  kept as an index of where each answer lives so a reader who saw an earlier
+  draft is not left guessing.
 - Dimensions at sign-off: Completeness green, Consistency green, Testability
   green, Traceability green, Feasibility **amber** (two provider behaviours are
   asserted from documentation and a model catalogue rather than measured here,
-  which is why ASKCHAT-011 exists), Security green.
+  which is why ASKCHAT-011 exists; this is a property of the plan, not an
+  unclosed action), Security green.
 
 ## Open questions
 
-Six questions were genuinely open when this was drafted. Two were answered by the
-code while verifying it (the model does support tool calling; the BFF already
-streams bodies), so they are recorded in D-7 and "What the code does today"
-rather than here. The remaining four are not blockers: each has a recommended
-default that a story already implements, so silence can be read as agreement.
+**None remain open.** Four were open on the first draft; the product owner
+answered all four on **2026-11-15**, and they are now decisions with their
+reasoning and their consequences recorded:
 
-1. **Should `ASK_CHAT_MODEL` exist at all, or should the fallback be "change
-   `LLM_MODEL`"?**
-   - *Facts:* `qwen/qwen3.8-flash` advertises `tools` and `tool_choice`, so
-     `LLM_MODEL` works today. A separate setting mirrors `HERMES_CHAT_MODEL` and
-     lets an operator move only the chat, at the cost of one more thing that can
-     diverge from what `deepfix eval` scores.
-   - *Recommended default, implemented:* keep `ASK_CHAT_MODEL`, empty by
-     default, falling back to `LLM_MODEL` (FR-025).
-   - *If you prefer one model for everything:* drop the setting from ASKCHAT-005
-     and resolve `LLM_MODEL` in the loop. One line, one test.
-   - *Owner:* product owner.
+| Was open | Answer | Recorded as |
+| :--- | :--- | :--- |
+| Should an `ASK_CHAT_MODEL` setting exist? | No. The chat resolves `LLM_MODEL` directly; `qwen/qwen3.8-27b` stays only as a documented manual fallback via `LLM_MODEL`. | **D-7** |
+| Do a member's votes survive a thread delete? | Yes. The thread and its turns go; the `interactions` rows and votes stay. | **D-9** |
+| May an answer be grounded without a citation? | Yes, and it shows as **Partly grounded**. | **D-10** |
+| Do threads need a retention window? | No. Unbounded, with a 50-item list cap and no prune. | **D-11** |
 
-2. **What happens to a member's votes when a thread is deleted?**
-   - *Facts:* votes live on `interactions`, which the optimizer reads through
-     `build_questions`. Deleting them would shrink the dataset and could move a
-     holdout question out of the split.
-   - *Recommended default, implemented:* keep the `interactions` rows and their
-     votes; delete only the thread and its turns (FR-010). The member loses the
-     conversation, not the record of their judgement.
-   - *If deletion should be total:* the delete becomes a cascade into
-     `interactions` and `feedback_events`, and the optimizer must expect a
-     shrinking dataset. That is a different product decision and would need its
-     own story.
-   - *Owner:* product owner.
+Two further questions were answered by the code rather than by anyone's
+judgement, and are recorded where they belong rather than here: the model does
+advertise tool calling (D-7, and OpenRouter's live catalogue), and the BFF already
+streams response bodies (`web/src/server.ts`, and "What the code does today").
 
-3. **Should a turn be allowed to answer with no citation when passages were
-   found?**
-   - *Facts:* the model is instructed to cite, and a non-compliant answer is a
-     quality defect, not a product state.
-   - *Recommended default, implemented:* allow it, label it **Partly grounded**
-     (FR-009), and count it — a hard failure would turn a model slip into a
-     member-visible error.
-   - *If it should be a failure:* make `citations` non-empty a required condition
-     for `grounded`, and treat an uncited answer as `declined` for evaluation
-     purposes. One predicate in the route and one test.
-   - *Owner:* product owner.
+Each decision names the condition that would reopen it, so a later reader does
+not have to guess whether it was examined or merely assumed:
 
-4. **How long should a thread list be allowed to grow?**
-   - *Facts:* `GET /ask/chat/threads` returns the newest 50 with no pagination,
-     and nothing prunes old threads.
-   - *Recommended default, implemented:* no pruning in this release; 50 is the
-     list cap and the database is small (text only, tens of kilobytes per
-     thread). A member can delete their own.
-   - *If retention is wanted:* an `ASK_CHAT_THREAD_RETENTION_DAYS` prune on the
-     existing optimization scheduler tick, exactly as `admin_chat.prune_audit`
-     does. One story, no schema change.
-   - *Owner:* operator.
+- **D-7** reopens if a model is needed for the chat that must not serve eval —
+  and the answer then is a decision about splitting the scored path from the
+  served path, not a new setting.
+- **D-9** reopens only as a product decision about dataset retention, which
+  belongs to the optimizer's design, not to this feature.
+- **D-10** reopens if the partly-grounded rate turns out to be high enough to be
+  a defect rather than an outlier.
+- **D-11** reopens if the thread tables become a measurable share of
+  `product_db_path`.
 
 ## Handoff
 
