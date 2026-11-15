@@ -164,6 +164,20 @@ Four decisions are fixed by the brief and are not re-opened in a story:
   duplicate after reload, regenerate replaces in place through `ActionBarPrimitive.Reload` and the `regenerate`
   flag, stop keeps the partial text, and dismissing a card starts nothing.
 
+## Implementation status of the redesign
+
+| Id | Status | Commit |
+| :--- | :--- | :--- |
+| CHAT-016 | Done | `2e18721` |
+| CHAT-017 | Done | `ff83e1f` |
+| CHAT-018 | Done | `93873c2` |
+| CHAT-019 | Done | `6bcbb9f` |
+| CHAT-020 | Done | `d76648a` |
+| CHAT-021 | Done | `eadceb1` |
+| CHAT-022 | Done | `099fdeb` |
+| better-interface review | Done, findings fixed | `c03899d` — `docs/admin-chat-interface-review.md` |
+| CHAT-023 | Done | this commit |
+
 ## Test commands
 
 Python, from the repository root:
