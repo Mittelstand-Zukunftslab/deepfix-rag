@@ -16,6 +16,8 @@ def test_rag_config_defaults(default_rag_config: RAGConfig):
     assert default_rag_config.retrieval.backend == RetrievalBackend.HYBRID
     assert default_rag_config.retrieval.language == "german"
     assert default_rag_config.retrieval.bit_width == 4
+    # The floor is calibrated for the served reranker, not an arbitrary 0.2.
+    assert default_rag_config.rerank.min_relevance_score == 0.3
 
 
 def test_apply_mutation(default_rag_config: RAGConfig):

@@ -68,7 +68,7 @@ Every model id is deployment configuration read from the environment. No model i
 | Embeddings | `EMBEDDING_MODEL` | `perplexity/pplx-embed-v1-4b` | OpenRouter (`EMBEDDING_BASE_URL`) |
 | Reranker | `COHERE_MODEL` | `cohere/rerank-4-fast` | `POST <COHERE_BASE_URL>/rerank` |
 
-`embedding.model`, `rerank.model`, and `generation.model` are not configuration keys; `deepfix mutate-config` rejects them. The reranker is DeepFix's own HTTP client for OpenRouter's rerank API, authorized by `OPENROUTER_API_KEY`; the native Cohere `/v2/rerank` path is not called and `COHERE_API_KEY` is not used.
+`embedding.model`, `rerank.model`, and `generation.model` are not configuration keys; `deepfix mutate-config` rejects them. The reranker is DeepFix's own HTTP client for OpenRouter's rerank API, authorized by `OPENROUTER_API_KEY`, which `backend-api` receives for exactly that call; the native Cohere `/v2/rerank` path is not called. `COHERE_API_KEY` survives only as a fallback the client reads when `OPENROUTER_API_KEY` is empty.
 
 ---
 
@@ -337,7 +337,7 @@ Names and purpose only; `example.env` carries the values and one comment per gro
 | `DEEPFIX_LLM_DROP_PARAMS` | Omits sampling parameters a provider rejects (some models allow only `temperature=1`). Applies to generation, the judge, and eval. Default on. |
 | `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | Embeddings for indexing and retrieval. |
 | `COHERE_BASE_URL`, `COHERE_MODEL` | Reranker; the client posts to `<COHERE_BASE_URL>/rerank`. |
-| `OPENROUTER_API_KEY` | Bearer for the rerank call and for the Hermes sandbox's model calls. Distinct from `LLM_API_KEY`. |
+| `OPENROUTER_API_KEY` | Bearer for the rerank call and for the Hermes sandbox's model calls. Distinct from `LLM_API_KEY`. `backend-api` gets it for rerank; `COHERE_API_KEY` is only read when it is empty. |
 
 **Storage and datasets**
 

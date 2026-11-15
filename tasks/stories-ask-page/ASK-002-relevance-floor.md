@@ -25,8 +25,9 @@ scores stay on the stored interaction, so an operator can still see what was ret
 
 1. Given `RAGConfig`, when the schema is read, then `rerank` has a
    `min_relevance_score: float` field with a documented default and bounds `0.0 <= x <= 1.0`, it is a
-   config key and not an environment setting, and `configs/champion.yaml` sets it explicitly so a
-   tuner can raise or lower it with `deepfix mutate-config --set rerank.min_relevance_score=…`.
+   config key and not an environment setting, and `configs/champion.yaml` sets it explicitly (0.3,
+   the live biology measurement) so a tuner can raise or lower it with
+   `deepfix mutate-config --set rerank.min_relevance_score=…`.
 2. Given rerank is enabled, when retrieval returns candidates, then a candidate whose rerank
    relevance score is below `rerank.min_relevance_score` is dropped before the passages are returned
    or sent to the model, and the passages that survive keep their relative order.
@@ -75,17 +76,28 @@ scores stay on the stored interaction, so an operator can still see what was ret
 
 ## Verification note
 
-**The chosen threshold is `rerank.min_relevance_score: 0.2`, on the reranker's 0..1 relevance scale,
+**The chosen threshold is `rerank.min_relevance_score: 0.3`, on the reranker's 0..1 relevance scale,
 and it applies only when rerank is enabled.**
 
-How it was chosen. The OpenRouter rerank endpoint cannot be called from this checkout:
-`OPENROUTER_API_KEY` is empty and the `COHERE_API_KEY` that is set is not an OpenRouter key (both
-return HTTP 401), so the deployed `cohere/rerank-4-fast` scale could not be observed directly. The
-scale was therefore measured on real data with a local cross-encoder that emits the same 0..1
-calibrated score, reproducing the live path's shape: dense retrieval picks a top-50 candidate pool
-from a 3,000-chunk Bundestag slice, then the cross-encoder scores that pool exactly as rerank would.
-Twelve real QA questions were run against the pool, and ten unrelated questions against the same
-pool:
+How it was chosen. The first version of this floor used `0.2`, measured with a local cross-encoder
+that emitted the same 0..1 calibrated score as the deployed `cohere/rerank-4-fast`; the
+`OPENROUTER_API_KEY` in this checkout was empty at the time, so the real scale could not be observed.
+The live deployment then produced the real Cohere scores through OpenRouter on the biology corpus:
+
+| | top score |
+| :--- | ---: |
+| in-corpus questions | 0.658-0.910 |
+| off-corpus questions | 0.091-0.179 |
+| biology-adjacent but not covered | 0.46-0.54 |
+
+`0.3` is the live decision: it sits above every off-corpus hit and below the adjacent band, so a
+covered question keeps its passages, an adjacent-but-unanswered one still shows what was found, and
+an unrelated one returns none. The earlier 0.2 came from a Bundestag slice whose scale
+(0.986-1.000 in-corpus) never occurred on the live corpus, which is why the shipped default moved.
+
+The measurement below is the original 0.2 study, kept for the method it documents. Twelve real QA
+questions were run against the pool, and ten unrelated questions against the same pool, using dense
+retrieval over a 3,000-chunk Bundestag slice:
 
 | | min | p25 | median | max |
 | :--- | ---: | ---: | ---: | ---: |
@@ -95,13 +107,12 @@ pool:
 | off-corpus, 5th of top-5 | 0.0000 | 0.0000 | 0.0004 | 0.0143 |
 
 Every in-corpus question's best passage scored at least 0.986; the best off-corpus question peaked
-at 0.172. `0.2` sits inside that empty band, so an unrelated question returns nothing while a real
-one keeps its passages. It is a conservative choice on purpose: it is nearer the off-corpus ceiling
-than the in-corpus floor, so the risk it carries is a few unrelated passages surviving rather than a
-real question losing its answer. Cohere documents that `relevance_score` is "not linear" and that a
-threshold should be set from samples of the actual corpus, which is what the table is.
+at 0.172. `0.2` sat inside that empty band, so an unrelated question returned nothing while a real
+one kept its passages. That band does not exist on the live corpus, which is why the shipped value
+is `0.3`. Cohere documents that `relevance_score` is "not linear" and that a threshold should be set
+from samples of the actual corpus, which is what both tables are.
 
-Risk and mitigation. The scale is model-specific, so `COHERE_MODEL` changing makes `0.2` stale; the
+Risk and mitigation. The scale is model-specific, so `COHERE_MODEL` changing makes `0.3` stale; the
 comment in `configs/champion.yaml` says so and says to re-measure. On the sample fixture the floor
 is inert with rerank off (hybrid fusion scores there sit near 0.03, a different scale), which is why
 it is scoped to the rerank path rather than applied to whatever score is on the node: a single

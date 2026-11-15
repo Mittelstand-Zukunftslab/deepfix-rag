@@ -40,14 +40,18 @@ retrieval:
 rerank:
   enabled: true
   top_n: 5
-  # Relevance floor, on the reranker's relevance_score scale (0..1). Calibrated
-  # 2026-11-15 on real Bundestag chunks: in-corpus questions put their best
-  # passage at 0.986-1.000 and their 5th at 0.65 or above in 10 of 12 cases,
-  # while off-corpus questions topped out at 0.172 (median 0.002). 0.2 sits above
-  # every off-corpus hit and below every in-corpus one, so a normal question
-  # keeps its passages and an unrelated one returns none. Re-measure if
-  # COHERE_MODEL changes; the absolute scale is model-specific.
-  min_relevance_score: 0.2
+  # Relevance floor, on the reranker's 0..1 relevance_score scale. Calibrated
+  # 2026-11-15 with the real Cohere scores that OpenRouter returns for
+  # cohere/rerank-4-fast on the live biology corpus: in-corpus questions put
+  # their best passage at 0.658-0.910, off-corpus questions topped out at
+  # 0.091-0.179, and biology-adjacent questions the corpus does not cover landed
+  # at 0.46-0.54. 0.3 sits above every off-corpus hit and below the adjacent
+  # band, so a covered question keeps its passages, an adjacent-but-unanswered
+  # one still shows what was found, and an unrelated one returns none. This
+  # replaced the earlier 0.2, which was measured on Bundestag chunks on a scale
+  # that never occurred on the live corpus. Re-measure if COHERE_MODEL changes;
+  # the absolute scale is model-specific.
+  min_relevance_score: 0.3
 generation:
   temperature: 0.0
   max_tokens: 4096
