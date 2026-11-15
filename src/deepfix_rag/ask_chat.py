@@ -41,7 +41,7 @@ import uuid
 from deepfix_rag.documents import document_filenames
 from deepfix_rag.grounding import Grounding
 from deepfix_rag.indexing import IndexCoordinator
-from deepfix_rag.interactions import init_interactions
+from deepfix_rag.interactions import init_interactions, record_interaction
 from deepfix_rag.interactions import link_interaction as link_stored_interaction
 from deepfix_rag.pipeline import RetrievalResult
 from deepfix_rag.service import INDEX_PREPARING, displayed_limit
@@ -366,6 +366,83 @@ def rename_thread(db_path: Path, thread_id: str, owner_id: str, title: str) -> T
     return get_thread(db_path, thread_id, owner_id)
 
 
+def reopen_turn(
+    db_path: Path,
+    turn_id: str,
+    owner_id: str,
+    *,
+    question: str,
+) -> Turn:
+    """Reopen a settled turn in place for a regenerate (FR-015).
+
+    The turn keeps its ``turn_id`` and ``seq``, so the thread does not grow a
+    second answer beside the first, and its ``ended_at`` is cleared with the
+    status because the turn is running again. Its ``interactions`` row is
+    rewritten by the caller, which is how the previous answer's text and votes go.
+    """
+    turn = get_turn(db_path, turn_id, owner_id)
+    if turn.status == "running":
+        raise TurnBusy(turn_id)
+    if not turn.interaction_id:
+        raise KeyError(turn_id)
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE ask_chat_turns
+            SET status = 'running', error = NULL, grounding = NULL, citations = '[]',
+                retrieval_query = NULL, first_token_ms = NULL, started_at = ?, ended_at = NULL
+            WHERE turn_id = ? AND owner_id = ?
+            """,
+            (_now(), turn_id, owner_id),
+        )
+        _touch_thread(conn, turn.thread_id, _now(), question)
+    return get_turn(db_path, turn_id, owner_id)
+
+
+def clear_turn_votes(db_path: Path, turn: Turn) -> int:
+    """Clear every vote on a turn's answer and passages before its text is replaced.
+
+    It goes through ``feedback.record_vote`` with the existing ``clear`` action,
+    which appends an event and deletes the mirrored MLflow assessment, so no
+    assessment points at text nobody can see (FR-015). No new vote action and no
+    ``CHECK`` change.
+    """
+    from deepfix_rag.feedback import current_votes, record_vote
+
+    if not turn.interaction_id:
+        return 0
+    answer_vote, passage_votes = current_votes(db_path, turn.owner_id, turn.interaction_id)
+    cleared = 0
+    if answer_vote is not None:
+        record_vote(
+            db_path,
+            user_id=turn.owner_id,
+            interaction_id=turn.interaction_id,
+            target="answer",
+            action="clear",
+        )
+        cleared += 1
+    for rank in sorted(passage_votes):
+        record_vote(
+            db_path,
+            user_id=turn.owner_id,
+            interaction_id=turn.interaction_id,
+            target="passage",
+            rank=rank,
+            action="clear",
+        )
+        cleared += 1
+    return cleared
+
+
+class TurnBusy(RuntimeError):
+    """The turn is still being written, so a regenerate must not replace it (FR-015)."""
+
+    def __init__(self, turn_id: str) -> None:
+        super().__init__("That answer is still being written.")
+        self.turn_id = turn_id
+
+
 def _checked_title(title: str) -> str:
     """The trimmed title, or a ``ValueError`` when it is empty or longer than 120."""
     cleaned = _WHITESPACE.sub(" ", title).strip()
@@ -584,44 +661,33 @@ def thread_turns(db_path: Path, thread_id: str, owner_id: str) -> list[Turn]:
     return [_turn_from_row(row) for row in rows]
 
 
-def record_turn_answer(
+def open_turn_interaction(
     db_path: Path,
     turn: Turn,
     *,
     question: str,
-    answer: str,
-    results: list[RetrievalResult],
-    retrieval_query: str | None,
-    grounding: Grounding | str,
-    citations: list[dict[str, object]],
-    build_id: str | None,
     config_path: str,
     user_email: str = "",
-    trace_id: str | None = None,
 ) -> str:
-    """Store one assistant turn's single ``interactions`` row and its hits (FR-019).
+    """Insert the turn's single ``interactions`` row before its answer exists (FR-019).
 
-    ``kind`` is ``'ask'`` and the table's ``CHECK`` is untouched, so votes, the
-    admin history, the MLflow assessment mirror, and the optimizer's export keep
-    working with no second path. The row is written through
-    ``interactions.record_interaction`` and then linked to the thread and the turn
-    by the caller, so the two nullable columns have one writer.
+    Opening the row before the first byte is what lets a cancelled or failed turn
+    keep its question and the text the member had read (D-4); the answer and the
+    hits are filled in later by ``interactions.replace_interaction``. ``kind`` is
+    ``'ask'`` and the table's ``CHECK`` is untouched, so votes, history, the MLflow
+    assessment mirror, and the optimizer's export keep working with one shape.
     """
-    from deepfix_rag.interactions import record_interaction
-
-    stored = record_interaction(
+    return record_interaction(
         db_path,
         kind="ask",
         user_id=turn.owner_id,
         user_email=user_email,
         query=question,
-        build_id=build_id or "",
+        build_id="",
         config_path=config_path,
-        results=results,
-        answer=answer,
-        trace_id=trace_id,
-    )
-    return stored.interaction_id
+        results=[],
+        answer=None,
+    ).interaction_id
 
 
 def link_interaction(

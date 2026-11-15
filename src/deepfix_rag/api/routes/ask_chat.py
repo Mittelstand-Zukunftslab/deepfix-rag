@@ -19,6 +19,7 @@ and its turns go, and the ``interactions`` rows and votes behind them stay, so a
 member who tidies their history does not delete the optimizer's evidence.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -26,10 +27,12 @@ from fastapi.responses import StreamingResponse
 
 from deepfix_rag import ask_chat, ask_chat_turn
 from deepfix_rag.api import chat_stream
+from deepfix_rag.api.ask_chat_turns import registry_for, resume_frames
 from deepfix_rag.api.deps import current_user, get_settings
 from deepfix_rag.api.errors import (
     BAD_GATEWAY,
     BAD_REQUEST,
+    CONFLICT,
     NOT_FOUND,
     SERVICE_UNAVAILABLE,
     UNAUTHORIZED,
@@ -47,13 +50,14 @@ from deepfix_rag.api.schemas import (
 from deepfix_rag.config.settings import LOGGER, Settings
 from deepfix_rag.grounding import Grounding
 from deepfix_rag.indexing import IndexCoordinator
+from deepfix_rag.interactions import replace_interaction, update_answer
 from deepfix_rag.service import INDEX_PREPARING
 from deepfix_rag.tracing import trace_request
 
 router = APIRouter(tags=["ask-chat"])
 
 NO_THREAD_MESSAGE = "No conversation with that id."
-STALE_THREAD_MESSAGE = "The conversation is out of date. Reload the thread."
+NO_TURN_MESSAGE = "No answer with that id."
 NOTHING_TO_REGENERATE_MESSAGE = "There is no answer to regenerate yet."
 
 
@@ -181,19 +185,58 @@ async def ask_chat_completion(
     thread = _owned_thread(settings, payload.thread_id, user)
     question = _question(payload)
     history = ask_chat.thread_turns(settings.product_db_path, thread.thread_id, user.id)
-    regenerate_of = _regenerate_target(history) if payload.regenerate else None
+    regenerate_of = _regenerate_target(history, payload.regenerate)
 
     coordinator: IndexCoordinator = request.app.state.index
     if not _index_ready(coordinator):
         raise HTTPException(status_code=SERVICE_UNAVAILABLE, detail=INDEX_PREPARING)
 
-    turn = ask_chat.open_turn(
-        settings.product_db_path,
-        thread.thread_id,
-        user.id,
-        question=question,
-        retry_of=regenerate_of,
-    )
+    registry = registry_for(request.app.state)
+    previous: ask_chat.Turn | None = None
+    if regenerate_of is not None:
+        # A regenerate replaces the answer it names rather than adding one beside
+        # it: the turn keeps its id and seq, its votes are cleared, and its answer
+        # text is rewritten (FR-015).
+        try:
+            previous = ask_chat.get_turn(settings.product_db_path, regenerate_of, user.id)
+            turn = ask_chat.reopen_turn(
+                settings.product_db_path, regenerate_of, user.id, question=question
+            )
+        except ask_chat.TurnBusy as exc:
+            raise HTTPException(
+                status_code=CONFLICT, detail=ask_chat_turn.ALREADY_RUNNING
+            ) from exc
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=BAD_REQUEST, detail=NOTHING_TO_REGENERATE_MESSAGE
+            ) from exc
+        ask_chat.clear_turn_votes(settings.product_db_path, previous)
+        history = [item for item in history if item.turn_id != regenerate_of]
+    else:
+        turn = ask_chat.open_turn(
+            settings.product_db_path,
+            thread.thread_id,
+            user.id,
+            question=question,
+        )
+
+    # The interaction is opened before the first byte, so a cancelled or failed
+    # turn keeps the passages it found and the text the member had read (D-4).
+    # A regenerate reuses the row the turn already has: one assistant turn holds
+    # exactly one interaction, and the previous answer is overwritten in place.
+    if previous is not None and previous.interaction_id:
+        interaction_id = previous.interaction_id
+        update_answer(settings.product_db_path, interaction_id, "")
+    else:
+        interaction_id = ask_chat.open_turn_interaction(
+            settings.product_db_path,
+            turn,
+            question=question,
+            config_path=_config_path(settings),
+            user_email=user.email,
+        )
+    ask_chat.link_interaction(settings.product_db_path, turn.turn_id, user.id, interaction_id)
+    registry.open(turn.turn_id, thread.thread_id)
     return StreamingResponse(
         _relay(
             request,
@@ -202,7 +245,9 @@ async def ask_chat_completion(
             thread=thread,
             turn=turn,
             question=question,
-            history=[item for item in history if item.turn_id != regenerate_of],
+            history=history,
+            interaction_id=interaction_id,
+            question_text=question,
         ),
         media_type="text/event-stream",
         headers={
@@ -223,17 +268,42 @@ async def _relay(
     turn: ask_chat.Turn,
     question: str,
     history: list[ask_chat.Turn],
+    interaction_id: str,
+    question_text: str,
 ) -> AsyncIterator[str]:
     """Forward the turn's parts, then settle its row on every exit path.
 
-    The terminal ``data-deepfix-turn`` is emitted before the stream closes, so a
-    resume and the browser agree about the status. The stored row is written
-    before that part goes out, because the part is the browser's cue to re-read.
+    The answer text is written on every delta, so a resume replays exactly what
+    the browser had read and a cancelled turn keeps its words (D-4). The terminal
+    ``data-deepfix-turn`` is emitted after the row is settled, so a resume and the
+    browser agree about the status.
     """
     turn_id = turn.turn_id
     outcome: ask_chat_turn.TurnOutcome | None = None
     status = "failed"
     failure: str | None = None
+    seen_text: list[str] = []
+
+    def store_hits(calls: list[ask_chat_turn.ToolCall]) -> None:
+        """Persist the hits as each search completes, so a stop keeps the evidence."""
+        seen: set[tuple[str, str]] = set()
+        results = []
+        for call in calls:
+            for result in call.result.results:
+                key = (result.doc_id, result.text)
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append(result)
+        replace_interaction(
+            settings.product_db_path,
+            interaction_id,
+            answer="".join(seen_text),
+            results=results,
+            build_id=calls[-1].result.build_id or "",
+            trace_id=None,
+        )
+
     yield chat_stream.sse(chat_stream.start_part(turn_id))
     try:
         async for produced in ask_chat_turn.run_turn(
@@ -242,12 +312,24 @@ async def _relay(
             history=history,
             question=question,
             is_disconnected=request.is_disconnected,
+            on_tool_call=store_hits,
         ):
             if isinstance(produced, ask_chat_turn.TurnOutcome):
                 outcome = produced
                 continue
+            if produced.get("type") == "text-delta":
+                seen_text.append(str(produced.get("delta") or ""))
+                # Written per delta, so a resume and a cancel both see what was read.
+                update_answer(settings.product_db_path, interaction_id, "".join(seen_text))
             yield chat_stream.sse(produced)
         status = "completed"
+    except (GeneratorExit, asyncio.CancelledError):
+        # The browser went away. Starlette closes this generator, which unwinds
+        # here; the row is settled below in `finally` and no frame is written,
+        # because nothing is listening. This is the Stop path, not an error.
+        status = "cancelled"
+        failure = ask_chat_turn.CANCELLED
+        raise
     except ask_chat_turn.TurnCancelled as exc:
         status = "cancelled"
         failure = ask_chat_turn.CANCELLED if "browser" in str(exc) else ask_chat_turn.TOO_LONG
@@ -261,17 +343,21 @@ async def _relay(
         LOGGER.exception("ask chat turn %s failed", turn_id)
         failure = ask_chat_turn.UPSTREAM_FAILED
         yield chat_stream.sse(chat_stream.error_part(failure))
-
-    stored = _settle(
-        settings,
-        user=user,
-        thread=thread,
-        turn=turn,
-        question=question,
-        status=status,
-        failure=failure,
-        outcome=outcome,
-    )
+    finally:
+        # One owner for the terminal state, on every path including a disconnect:
+        # nothing may leave the row `running` (FR-017, NFR-1).
+        stored = _settle(
+            settings,
+            user=user,
+            turn=turn,
+            question=question,
+            status=status,
+            failure=failure,
+            outcome=outcome,
+            interaction_id=interaction_id,
+            partial="".join(seen_text),
+        )
+        registry_for(request.app.state).close(turn_id)
     grounding = stored.grounding or Grounding.NO_RELEVANT_SOURCES.value
     citations = [
         {"marker": c.marker, "rank": c.rank, "doc_id": c.doc_id} for c in stored.citations
@@ -301,24 +387,27 @@ def _settle(
     settings: Settings,
     *,
     user: User,
-    thread: ask_chat.Thread,
     turn: ask_chat.Turn,
     question: str,
     status: str,
     failure: str | None,
     outcome: ask_chat_turn.TurnOutcome | None,
+    interaction_id: str,
+    partial: str,
 ) -> ask_chat.Turn:
-    """Store the answer, its hits, and the turn's terminal state, in that order.
+    """Finish the turn's one ``interactions`` row and its terminal state.
 
-    The ``interactions`` row goes through ``interactions.record_interaction`` and
-    is then linked to the thread and the turn, so votes, history, the MLflow
-    assessment mirror, and the optimizer's export keep reading one shape (FR-019).
+    The row was opened before the first byte so a cancelled or failed turn can be
+    read at all; this fills in the final answer, its hits, and the tool's query
+    without ever adding a second row for the turn (FR-019). It goes through
+    ``interactions.replace_interaction`` so votes, history, the MLflow assessment
+    mirror, and the optimizer's export keep reading one shape.
     """
     if outcome is not None:
         trace_id = trace_request(
             "ask_chat",
             turn.turn_id,
-            {"question": question, "thread_id": thread.thread_id},
+            {"question": question},
             {
                 "answer": outcome.answer,
                 "grounding": outcome.grounding,
@@ -328,21 +417,18 @@ def _settle(
                 ],
             },
         )
-        stored = ask_chat.record_turn_answer(
+        replace_interaction(
             settings.product_db_path,
-            turn,
-            question=question,
+            interaction_id,
             answer=outcome.answer,
             results=outcome.retrieval_results,
-            retrieval_query=outcome.retrieval_query,
-            grounding=outcome.grounding,
-            citations=outcome.citations,
-            build_id=outcome.build_id,
-            config_path=_config_path(settings),
-            user_email=user.email,
+            build_id=outcome.build_id or "",
             trace_id=trace_id,
         )
-        ask_chat.link_interaction(settings.product_db_path, turn.turn_id, user.id, stored)
+        update_answer(settings.product_db_path, interaction_id, outcome.answer)
+    else:
+        # A turn with no outcome keeps the question and whatever text was read.
+        update_answer(settings.product_db_path, interaction_id, partial)
     return ask_chat.finish_turn(
         settings.product_db_path,
         turn.turn_id,
@@ -389,17 +475,70 @@ def _question(payload: AskChatCompletionRequest) -> str:
     return question
 
 
-def _regenerate_target(history: list[ask_chat.Turn]) -> str | None:
+def _regenerate_target(history: list[ask_chat.Turn], regenerate: bool) -> str | None:
     """The newest answered turn, which a regenerate replaces in place (FR-015).
 
     The AI SDK's reload drops the message it is replacing, so the browser cannot
     name the turn; the server resolves it from the store exactly as the admin
-    chat's ``_regenerate_target`` does.
+    chat's ``_regenerate_target`` does. A thread with nothing answered has nothing
+    to replace, so it is a 400 rather than a silent no-op.
     """
-    answered = [turn for turn in history if turn.status in {"completed", "cancelled"}]
-    if not answered:
+    if not regenerate:
         return None
+    # AC 13: a reply still being written is not replaced underneath itself. The
+    # newest turn decides, because "regenerate" means "redo the last answer".
+    newest = history[-1] if history else None
+    if newest is not None and newest.status == "running":
+        raise HTTPException(status_code=CONFLICT, detail=ask_chat_turn.ALREADY_RUNNING)
+    # A failed turn is offered regenerate in the UI (AC 17), so it is a target too.
+    answered = [turn for turn in history if turn.status in {"completed", "failed", "cancelled"}]
+    if not answered:
+        raise HTTPException(status_code=BAD_REQUEST, detail=NOTHING_TO_REGENERATE_MESSAGE)
     return answered[-1].turn_id
+
+
+@router.get(
+    "/ask/chat/turns/{turn_id}/stream",
+    operation_id="resume_ask_chat_turn",
+    response_class=StreamingResponse,
+    responses={
+        **error_responses(UNAUTHORIZED, NOT_FOUND),
+        200: {
+            "description": "The AI SDK UI message stream, replayed and then tailed.",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        },
+    },
+    summary="Resume an answer that is in progress or already finished",
+)
+def resume_ask_chat_turn(turn_id: str, request: Request) -> StreamingResponse:
+    """Replay the stored answer, then tail the turn when it runs in this process.
+
+    This is what a reload mid-answer calls, and the reason the reply survives it:
+    the text is read from the turn's interaction and the status from the turn row,
+    so a resume on another worker degrades to a replay instead of a blank stream
+    (FR-016).
+    """
+    user = current_user(request)
+    settings = get_settings(request)
+    try:
+        turn = ask_chat.get_turn(settings.product_db_path, turn_id, user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=NOT_FOUND, detail=NO_TURN_MESSAGE) from exc
+    storage = settings.product_db_path
+    return StreamingResponse(
+        resume_frames(
+            registry=registry_for(request.app.state),
+            db_path=storage,
+            turn=turn,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            chat_stream.STREAM_HEADER: chat_stream.STREAM_HEADER_VALUE,
+        },
+    )
 
 
 def _owned_thread(settings: Settings, thread_id: str, user: User) -> ask_chat.Thread:

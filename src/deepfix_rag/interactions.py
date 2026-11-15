@@ -206,6 +206,67 @@ def link_interaction(
             raise KeyError(interaction_id)
 
 
+def update_answer(db_path: Path, interaction_id: str, answer: str) -> None:
+    """Replace a stored interaction's answer text as a reply streams or is replaced.
+
+    A cancelled turn keeps what the member had read (D-4), and a regenerate
+    overwrites the answer it replaces so the previous text is nowhere in the
+    thread. One row holds the answer, so there is one place to update.
+    """
+    init_interactions(db_path)
+    with connect(db_path) as conn:
+        conn.execute(
+            "UPDATE interactions SET answer = ? WHERE interaction_id = ?",
+            (answer, interaction_id),
+        )
+
+
+def replace_interaction(
+    db_path: Path,
+    interaction_id: str,
+    *,
+    answer: str,
+    results: list[RetrievalResult],
+    build_id: str,
+    trace_id: str | None,
+) -> None:
+    """Fill in a chat turn's answer and hit snapshot once its tool calls are done.
+
+    The row is inserted before the first byte so a cancelled turn can be read; its
+    answer and hits are then written here rather than by a second insert, so one
+    assistant turn still has exactly one ``interactions`` row (FR-019). The hits
+    are replaced wholesale, because a regenerate may have found different passages.
+    """
+    init_interactions(db_path)
+    hits = [
+        StoredHit(
+            rank=index,
+            doc_id=result.doc_id,
+            text=result.text,
+            passage_key=passage_key(result.text),
+            score=float(result.score or 0.0),
+        )
+        for index, result in enumerate(results, start=1)
+    ]
+    with connect(db_path) as conn:
+        conn.execute(
+            "UPDATE interactions SET answer = ?, build_id = ?, trace_id = ? "
+            "WHERE interaction_id = ?",
+            (answer, build_id, trace_id, interaction_id),
+        )
+        conn.execute("DELETE FROM interaction_hits WHERE interaction_id = ?", (interaction_id,))
+        conn.executemany(
+            """
+            INSERT INTO interaction_hits (interaction_id, rank, doc_id, text, passage_key, score)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (interaction_id, hit.rank, hit.doc_id, hit.text, hit.passage_key, hit.score)
+                for hit in hits
+            ],
+        )
+
+
 def get_interaction(db_path: Path, interaction_id: str) -> Interaction | None:
     """Return one interaction and its hit snapshot."""
     init_interactions(db_path)

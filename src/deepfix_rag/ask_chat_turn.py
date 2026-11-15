@@ -30,7 +30,7 @@ would abandon the await and leave the upstream request running to ``max_tokens``
 A generator this module can close is what makes Stop stop the spend (D-4).
 """
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 import json
 import re
@@ -51,6 +51,9 @@ NON_USER_MESSAGE = "The last message must be a question from you."
 UNKNOWN_TOOL = "The assistant tried to use a tool this server does not offer."
 NO_SOURCES_ANSWER = "I do not have enough information in these documents to answer that question."
 TOOL_LIMIT_REACHED = "This reply used all its searches and was stopped."
+CANCELLED = "The browser closed the connection."
+TOO_LONG = "This reply took too long and was stopped."
+ALREADY_RUNNING = "That answer is still being written."
 
 _CITATION = re.compile(r"\[(\d{1,2})\]")
 
@@ -243,6 +246,7 @@ async def run_turn(
     history: Sequence[ask_chat.Turn],
     question: str,
     is_disconnected: Any = None,
+    on_tool_call: Callable[[list["ToolCall"]], None] | None = None,
 ) -> AsyncIterator[Any]:
     """Run one turn, yielding stream parts and finally a ``TurnOutcome``.
 
@@ -252,6 +256,8 @@ async def run_turn(
 
     ``is_disconnected`` is an awaitable the route supplies, so a closed browser
     ends the model stream instead of leaving the request to run to ``max_tokens``.
+    ``on_tool_call`` is called after each completed search, so the caller can store
+    the hits before the answer exists and a cancelled turn keeps its evidence.
     """
     model = model_name(settings)
     messages = upstream_messages(
@@ -321,6 +327,8 @@ async def run_turn(
                 result=result,
             )
             tool_calls.append(call)
+            if on_tool_call is not None:
+                on_tool_call(tool_calls)
             yield chat_stream.tool_input_start(call.call_id, call.name)
             yield chat_stream.tool_input_available(call.call_id, call.name, call.arguments)
             yield chat_stream.tool_output_available(call.call_id, result.as_dict())
@@ -376,6 +384,10 @@ async def run_turn(
             build_id = result.build_id or build_id
             call = ToolCall(call_id=call_id, name=name, arguments=arguments, result=result)
             tool_calls.append(call)
+            if on_tool_call is not None:
+                # Written as each call finishes, so a turn cancelled before its
+                # answer keeps the passages already found (D-4, FR-006).
+                on_tool_call(tool_calls)
             yield chat_stream.tool_output_available(call_id, result.as_dict())
             messages.append(
                 {"role": "tool", "tool_call_id": call_id, "content": passage_block(result)}

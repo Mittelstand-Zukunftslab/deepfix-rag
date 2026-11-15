@@ -4105,6 +4105,59 @@
         ]
       }
     },
+    "/ask/chat/turns/{turn_id}/stream": {
+      "get": {
+        "description": "Replay the stored answer, then tail the turn when it runs in this process.\n\nThis is what a reload mid-answer calls, and the reason the reply survives it:\nthe text is read from the turn's interaction and the status from the turn row,\nso a resume on another worker degrades to a replay instead of a blank stream\n(FR-016).",
+        "operationId": "resume_ask_chat_turn",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The AI SDK UI message stream, replayed and then tailed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Resume an answer that is in progress or already finished",
+        "tags": [
+          "ask-chat"
+        ]
+      }
+    },
     "/documents": {
       "get": {
         "description": "Return non-deleted documents for any signed-in user, newest first.",

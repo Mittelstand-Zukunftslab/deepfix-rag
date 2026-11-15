@@ -2401,6 +2401,40 @@ export type RenameAskChatThreadResponses = {
 
 export type RenameAskChatThreadResponse = RenameAskChatThreadResponses[keyof RenameAskChatThreadResponses];
 
+export type ResumeAskChatTurnData = {
+    body?: never;
+    path: {
+        /**
+         * Turn Id
+         */
+        turn_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/turns/{turn_id}/stream';
+};
+
+export type ResumeAskChatTurnErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type ResumeAskChatTurnError = ResumeAskChatTurnErrors[keyof ResumeAskChatTurnErrors];
+
+export type ResumeAskChatTurnResponses = {
+    /**
+     * The AI SDK UI message stream, replayed and then tailed.
+     */
+    200: string;
+};
+
+export type ResumeAskChatTurnResponse = ResumeAskChatTurnResponses[keyof ResumeAskChatTurnResponses];
+
 export type ListDocumentsData = {
     body?: never;
     path?: never;
