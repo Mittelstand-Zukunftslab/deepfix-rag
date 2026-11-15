@@ -43,6 +43,8 @@ from deepfix_rag.api.identity import User
 from deepfix_rag.api.schemas import (
     AskChatCitationResponse,
     AskChatCompletionRequest,
+    AskChatImportRequest,
+    AskChatImportResponse,
     AskChatPassageResponse,
     AskChatRenameRequest,
     AskChatThreadDetailResponse,
@@ -98,6 +100,38 @@ def create_ask_chat_thread(request: Request) -> AskChatThreadResponse:
     settings = get_settings(request)
     thread = ask_chat.create_thread(settings.product_db_path, user.id, owner_email=user.email)
     return _thread_response(thread)
+
+
+@router.post(
+    "/ask/chat/threads/import",
+    operation_id="import_ask_chat_sessions",
+    response_model=AskChatImportResponse,
+    responses=error_responses(BAD_REQUEST, UNAUTHORIZED),
+    summary="Import the browser's old conversations once",
+)
+def import_ask_chat_sessions(
+    payload: AskChatImportRequest, request: Request
+) -> AskChatImportResponse:
+    """Bring a member's legacy localStorage sessions across, best effort (FR-033).
+
+    The caller's own interactions only: a turn whose interaction is missing or
+    belongs to somebody else is skipped and counted. The import never fabricates an
+    interaction, so it cannot create a question the optimizer would score with no
+    passages behind it.
+    """
+    user = current_user(request)
+    settings = get_settings(request)
+    result = ask_chat.import_sessions(
+        settings.product_db_path,
+        user.id,
+        [session.model_dump(by_alias=False) for session in payload.sessions],
+        owner_email=user.email,
+    )
+    return AskChatImportResponse(
+        threads_created=result.threads_created,
+        turns_created=result.turns_created,
+        turns_skipped=result.turns_skipped,
+    )
 
 
 @router.get(

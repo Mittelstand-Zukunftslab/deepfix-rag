@@ -555,3 +555,49 @@ class AskChatCompletionRequest(ApiModel):
     thread_id: str = Field(min_length=1)
     messages: list[ChatMessageModel] = Field(min_length=1)
     regenerate: bool = False
+
+
+class LegacyTurnRequest(ApiModel):
+    """One turn from the browser's old localStorage sessions."""
+
+    interaction_id: str | None = Field(default=None, alias="interactionId")
+    user_query: str = Field(default="", alias="userQuery")
+    answer: str | None = None
+
+    model_config = ConfigDict(
+        populate_by_name=True, json_schema_serialization_defaults_required=True
+    )
+
+
+class LegacySessionRequest(ApiModel):
+    """One session from the browser's old localStorage sessions."""
+
+    id: str = Field(min_length=1)
+    title: str = ""
+    created_at: str | None = Field(default=None, alias="createdAt")
+    updated_at: str | None = Field(default=None, alias="updatedAt")
+    turns: list[LegacyTurnRequest] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        populate_by_name=True, json_schema_serialization_defaults_required=True
+    )
+
+
+class AskChatImportRequest(ApiModel):
+    """The browser's legacy sessions, imported once (FR-033).
+
+    The list is bounded rather than unbounded: an import is one write per stored
+    turn, so a payload past the bound is a 400 naming it instead of a long write.
+    An empty list is accepted and creates nothing, which is what a member with
+    nothing to import produces.
+    """
+
+    sessions: list[LegacySessionRequest] = Field(default_factory=list, max_length=200)
+
+
+class AskChatImportResponse(ApiModel):
+    """What the import created and what it skipped, so the client can say so."""
+
+    threads_created: int
+    turns_created: int
+    turns_skipped: int

@@ -88,7 +88,119 @@ const COMPOSER_INPUT =
 export const ASK_DISCLAIMER =
   "Answers cite the passages they came from. Press Stop to end a reply you do not need.";
 
-export function AskPage({ indexReady = true }: { indexReady?: boolean }) {
+/** The retired page's storage keys, and the import's one-time marker. */
+export function legacyStorageKeys(ownerId: string): {
+  sessions: string;
+  active: string;
+  imported: string;
+} {
+  return {
+    sessions: `deepfix.chat_sessions.v2:${ownerId}`,
+    active: `deepfix.active_session_id.v2:${ownerId}`,
+    imported: `deepfix.chat_imported.v2:${ownerId}`,
+  };
+}
+
+type LegacySession = {
+  id: string;
+  title: string;
+  createdAt: number | string;
+  updatedAt: number | string;
+  turns: { interactionId?: string | null; userQuery: string; answer?: string | null }[];
+};
+
+/**
+ * Import the browser's old conversations once, then stop looking (FR-033).
+ *
+ * The keys are removed whatever happens: a member left on a store the server
+ * cannot see would keep two copies of the same history that silently diverge, and
+ * a retry loop against a store the server cannot read cannot converge. A failure
+ * is reported once, in a sentence, rather than repeated.
+ */
+export function useLegacyImport(ownerId: string | null, onError: (message: string) => void): void {
+  const attempted = useRef(false);
+  useEffect(() => {
+    if (!ownerId || attempted.current) return;
+    attempted.current = true;
+    const keys = legacyStorageKeys(ownerId);
+    let raw: string | null = null;
+    try {
+      if (window.localStorage.getItem(keys.imported)) {
+        // An earlier visit already imported and cleaned up; nothing to send.
+        window.localStorage.removeItem(keys.active);
+        window.localStorage.removeItem(keys.sessions);
+        return;
+      }
+      raw = window.localStorage.getItem(keys.sessions);
+    } catch {
+      return;
+    }
+    const sessions = parseLegacySessions(raw);
+    if (sessions.length > 0) {
+      void askChatService
+        .importSessions(sessions)
+        .catch(() => onError("Your earlier conversations could not be carried over."));
+    }
+    try {
+      window.localStorage.removeItem(keys.sessions);
+      window.localStorage.removeItem(keys.active);
+      window.localStorage.setItem(keys.imported, "1");
+    } catch {
+      // A browser with storage disabled has nothing to clean up.
+    }
+  }, [ownerId, onError]);
+}
+
+/** The stored sessions, or an empty list when the key is absent or unreadable. */
+export function parseLegacySessions(raw: string | null): LegacySession[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const session = item as Record<string, unknown>;
+      if (typeof session["id"] !== "string" || !session["id"]) return [];
+      const turns = Array.isArray(session["turns"]) ? session["turns"] : [];
+      return [
+        {
+          id: session["id"],
+          title: typeof session["title"] === "string" ? session["title"] : "",
+          createdAt: (session["createdAt"] as number | string) ?? Date.now(),
+          updatedAt: (session["updatedAt"] as number | string) ?? Date.now(),
+          turns: turns.flatMap((turn) => {
+            if (!turn || typeof turn !== "object") return [];
+            const value = turn as Record<string, unknown>;
+            const query = typeof value["userQuery"] === "string" ? value["userQuery"] : "";
+            const interactionId =
+              typeof value["interactionId"] === "string" ? value["interactionId"] : null;
+            // A turn with no interaction cannot be linked, so it is not sent: the
+            // server would only skip it, and the count is not the member's news.
+            if (!query || !interactionId) return [];
+            return [
+              {
+                interactionId,
+                userQuery: query,
+                answer: typeof value["answer"] === "string" ? value["answer"] : null,
+              },
+            ];
+          }),
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function AskPage({
+  indexReady = true,
+  ownerId = null,
+}: {
+  indexReady?: boolean;
+  /** The signed-in member, needed only to find their legacy browser sessions. */
+  ownerId?: string | null;
+}) {
   const [threads, setThreads] = useState<{ thread_id: string; title: string }[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -97,6 +209,7 @@ export function AskPage({ indexReady = true }: { indexReady?: boolean }) {
   const [, forceRender] = useState(0);
 
   const onError = useCallback((message: string) => setListError(message), []);
+  useLegacyImport(ownerId, onError);
 
   const refresh = useCallback(async () => {
     try {

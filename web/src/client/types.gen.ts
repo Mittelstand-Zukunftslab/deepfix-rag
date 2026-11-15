@@ -54,6 +54,43 @@ export type AskChatCompletionRequest = {
 };
 
 /**
+ * AskChatImportRequest
+ *
+ * The browser's legacy sessions, imported once (FR-033).
+ *
+ * The list is bounded rather than unbounded: an import is one write per stored
+ * turn, so a payload past the bound is a 400 naming it instead of a long write.
+ * An empty list is accepted and creates nothing, which is what a member with
+ * nothing to import produces.
+ */
+export type AskChatImportRequest = {
+    /**
+     * Sessions
+     */
+    sessions?: Array<LegacySessionRequest>;
+};
+
+/**
+ * AskChatImportResponse
+ *
+ * What the import created and what it skipped, so the client can say so.
+ */
+export type AskChatImportResponse = {
+    /**
+     * Threads Created
+     */
+    threads_created: number;
+    /**
+     * Turns Created
+     */
+    turns_created: number;
+    /**
+     * Turns Skipped
+     */
+    turns_skipped: number;
+};
+
+/**
  * AskChatPassageResponse
  *
  * One stored passage: the hit snapshot a turn's answer was built from.
@@ -1134,6 +1171,54 @@ export type InteractionReviewResponse = {
      * Trace Id
      */
     trace_id: string | null;
+};
+
+/**
+ * LegacySessionRequest
+ *
+ * One session from the browser's old localStorage sessions.
+ */
+export type LegacySessionRequest = {
+    /**
+     * Createdat
+     */
+    createdAt?: string | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Title
+     */
+    title?: string;
+    /**
+     * Turns
+     */
+    turns?: Array<LegacyTurnRequest>;
+    /**
+     * Updatedat
+     */
+    updatedAt?: string | null;
+};
+
+/**
+ * LegacyTurnRequest
+ *
+ * One turn from the browser's old localStorage sessions.
+ */
+export type LegacyTurnRequest = {
+    /**
+     * Answer
+     */
+    answer?: string | null;
+    /**
+     * Interactionid
+     */
+    interactionId?: string | null;
+    /**
+     * Userquery
+     */
+    userQuery?: string;
 };
 
 /**
@@ -2342,6 +2427,35 @@ export type CreateAskChatThreadResponses = {
 };
 
 export type CreateAskChatThreadResponse = CreateAskChatThreadResponses[keyof CreateAskChatThreadResponses];
+
+export type ImportAskChatSessionsData = {
+    body: AskChatImportRequest;
+    path?: never;
+    query?: never;
+    url: '/ask/chat/threads/import';
+};
+
+export type ImportAskChatSessionsErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type ImportAskChatSessionsError = ImportAskChatSessionsErrors[keyof ImportAskChatSessionsErrors];
+
+export type ImportAskChatSessionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: AskChatImportResponse;
+};
+
+export type ImportAskChatSessionsResponse = ImportAskChatSessionsResponses[keyof ImportAskChatSessionsResponses];
 
 export type DeleteAskChatThreadData = {
     body?: never;

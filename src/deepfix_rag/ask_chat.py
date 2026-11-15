@@ -123,7 +123,8 @@ _SCHEMA = f"""
         owner_id TEXT NOT NULL,
         owner_email TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        legacy_session_id TEXT
     );
     CREATE TABLE IF NOT EXISTS ask_chat_turns (
         turn_id TEXT PRIMARY KEY,
@@ -298,6 +299,11 @@ def init_ask_chat(db_path: Path) -> None:
     init_interactions(db_path)
     with connect(db_path) as conn:
         conn.executescript(_SCHEMA)
+        # An existing database predates the import column, so it is added the way
+        # `user_email` was on `interactions`: check, then alter only when absent.
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(ask_chat_threads)")}
+        if "legacy_session_id" not in columns:
+            conn.execute("ALTER TABLE ask_chat_threads ADD COLUMN legacy_session_id TEXT")
         conn.executescript(_INDEXES)
 
 
@@ -498,6 +504,135 @@ def check_rate_limit(
 def _parse_time(value: str) -> datetime:
     moment = datetime.fromisoformat(value)
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+@dataclass(frozen=True)
+class ImportResult:
+    """What a legacy import created, and what it had to skip."""
+
+    threads_created: int
+    turns_created: int
+    turns_skipped: int
+
+
+def import_sessions(
+    db_path: Path,
+    owner_id: str,
+    sessions: list[dict[str, object]],
+    *,
+    owner_email: str = "",
+) -> ImportResult:
+    """Import the browser's old sessions once, best effort (FR-033, D-5).
+
+    One session becomes one thread and one stored turn becomes one turn, linked to
+    the ``interactions`` row it already has. A turn whose interaction is missing,
+    or belongs to another member, is skipped and counted rather than invented: the
+    interaction is the only place its passages and votes live, and a fabricated one
+    would create a question the optimizer later scores with no evidence.
+
+    Idempotence is per session id and per interaction id, not per payload: a member
+    may load two browsers, and the second import must not duplicate the first's
+    threads or turns.
+    """
+    init_ask_chat(db_path)
+    threads_created = 0
+    turns_created = 0
+    turns_skipped = 0
+    for session in sessions:
+        legacy_id = str(session.get("id") or "")
+        if not legacy_id:
+            continue
+        if _legacy_thread(db_path, legacy_id, owner_id) is not None:
+            continue
+        title = str(session.get("title") or "")
+        thread = _insert_legacy_thread(db_path, owner_id, owner_email, legacy_id, title, session)
+        threads_created += 1
+        for turn in session.get("turns") or []:
+            if not isinstance(turn, dict):
+                continue
+            interaction_id = str(turn.get("interactionId") or turn.get("interaction_id") or "")
+            if not interaction_id or _interaction_owner(db_path, interaction_id) != owner_id:
+                turns_skipped += 1
+                continue
+            if _turn_for_interaction(db_path, interaction_id) is not None:
+                continue
+            question = str(turn.get("userQuery") or turn.get("user_query") or "")
+            stored = append_turn(
+                db_path,
+                thread.thread_id,
+                owner_id,
+                question=question,
+                status="completed",
+                grounding=Grounding.GROUNDED,
+            )
+            link_stored_interaction(
+                db_path,
+                interaction_id,
+                user_id=owner_id,
+                thread_id=thread.thread_id,
+                turn_id=stored.turn_id,
+            )
+            turns_created += 1
+    return ImportResult(
+        threads_created=threads_created,
+        turns_created=turns_created,
+        turns_skipped=turns_skipped,
+    )
+
+
+def _legacy_thread(db_path: Path, legacy_id: str, owner_id: str) -> Thread | None:
+    """This member's thread already imported from that session, if any."""
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM ask_chat_threads WHERE legacy_session_id = ? AND owner_id = ?",
+            (legacy_id, owner_id),
+        ).fetchone()
+    return None if row is None else _thread_from_row(row)
+
+
+def _insert_legacy_thread(
+    db_path: Path,
+    owner_id: str,
+    owner_email: str,
+    legacy_id: str,
+    title: str,
+    session: dict[str, object],
+) -> Thread:
+    """Insert one thread for an imported session, keeping its own timestamps."""
+    thread_id = _new_id()
+    at = _now()
+    created = str(session.get("createdAt") or session.get("created_at") or at)
+    updated = str(session.get("updatedAt") or session.get("updated_at") or at)
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO ask_chat_threads
+                (thread_id, title, owner_id, owner_email, created_at, updated_at,
+                 legacy_session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (thread_id, title_from(title), owner_id, owner_email, created, updated, legacy_id),
+        )
+    return get_thread(db_path, thread_id, owner_id)
+
+
+def _interaction_owner(db_path: Path, interaction_id: str) -> str | None:
+    """The member who owns that stored interaction, or ``None`` when it is gone."""
+    from deepfix_rag.interactions import get_interaction
+
+    stored = get_interaction(db_path, interaction_id)
+    return None if stored is None else stored.user_id
+
+
+def _turn_for_interaction(db_path: Path, interaction_id: str) -> str | None:
+    """The turn already linked to that interaction, so an import cannot duplicate it."""
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT turn_id FROM ask_chat_turns WHERE turn_id = "
+            "(SELECT turn_id FROM interactions WHERE interaction_id = ?)",
+            (interaction_id,),
+        ).fetchone()
+    return None if row is None else str(row["turn_id"])
 
 
 class TurnBusy(RuntimeError):

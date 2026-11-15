@@ -325,6 +325,9 @@ def test_the_schema_is_idempotent_and_checks_its_statuses(settings: Settings) ->
         "owner_email",
         "created_at",
         "updated_at",
+        # ASKCHAT-009: the legacy session a thread was imported from, so an
+        # import is idempotent per session id rather than per payload.
+        "legacy_session_id",
     ]
     assert turn_columns == [
         "turn_id",

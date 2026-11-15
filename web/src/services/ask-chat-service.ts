@@ -2,12 +2,28 @@ import {
   createAskChatThread,
   deleteAskChatThread,
   getAskChatThread,
+  importAskChatSessions,
   listAskChatThreads,
   renameAskChatThread,
 } from "@/client";
 
 import type { AskThread, AskThreadDetail } from "@/schemas/ask-chat";
 import { resumeTurn, streamTurn, type StreamHandlers } from "@/services/ask-chat-sse";
+
+/** One session as the retired localStorage page wrote it. */
+export type LegacySession = {
+  id: string;
+  title: string;
+  createdAt: number | string;
+  updatedAt: number | string;
+  turns: { interactionId?: string | null; userQuery: string; answer?: string | null }[];
+};
+
+export type ImportCounts = {
+  threadsCreated: number;
+  turnsCreated: number;
+  turnsSkipped: number;
+};
 
 /**
  * The Ask chat's data layer: the five thread routes and the two stream calls.
@@ -88,8 +104,31 @@ export const askChatService = {
     }
   },
 
+  /**
+   * Bring the browser's old localStorage sessions across, once (FR-033).
+   *
+   * The payload is the shape the retired page wrote, so the server can link each
+   * stored turn to the interaction it already has. A failure is the caller's to
+   * report once; the keys are removed either way, because leaving a member on a
+   * store the server cannot see is worse than telling them once.
+   */
+  async importSessions(sessions: LegacySession[]): Promise<ImportCounts> {
+    const result = await importAskChatSessions({
+      body: { sessions: sessions as never },
+    });
+    if (result.error || !result.data) {
+      throw new AskChatError(
+        errorDetail(result.error, "The earlier conversations could not be carried over."),
+      );
+    }
+    return {
+      threadsCreated: result.data.threads_created,
+      turnsCreated: result.data.turns_created,
+      turnsSkipped: result.data.turns_skipped,
+    };
+  },
+
   streamTurn,
   resumeTurn,
 };
-
 export type { StreamHandlers };

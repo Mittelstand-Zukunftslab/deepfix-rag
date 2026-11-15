@@ -56,6 +56,45 @@
         "title": "AskChatCompletionRequest",
         "type": "object"
       },
+      "AskChatImportRequest": {
+        "description": "The browser's legacy sessions, imported once (FR-033).\n\nThe list is bounded rather than unbounded: an import is one write per stored\nturn, so a payload past the bound is a 400 naming it instead of a long write.\nAn empty list is accepted and creates nothing, which is what a member with\nnothing to import produces.",
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/LegacySessionRequest"
+            },
+            "maxItems": 200,
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "title": "AskChatImportRequest",
+        "type": "object"
+      },
+      "AskChatImportResponse": {
+        "description": "What the import created and what it skipped, so the client can say so.",
+        "properties": {
+          "threads_created": {
+            "title": "Threads Created",
+            "type": "integer"
+          },
+          "turns_created": {
+            "title": "Turns Created",
+            "type": "integer"
+          },
+          "turns_skipped": {
+            "title": "Turns Skipped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "threads_created",
+          "turns_created",
+          "turns_skipped"
+        ],
+        "title": "AskChatImportResponse",
+        "type": "object"
+      },
       "AskChatPassageResponse": {
         "description": "One stored passage: the hit snapshot a turn's answer was built from.\n\nThe text is the whole chunk, not the truncated copy sent to the model, so a\nreload shows what the vote records under that rank (FR-006).",
         "properties": {
@@ -1921,6 +1960,89 @@
           "hits"
         ],
         "title": "InteractionReviewResponse",
+        "type": "object"
+      },
+      "LegacySessionRequest": {
+        "description": "One session from the browser's old localStorage sessions.",
+        "properties": {
+          "createdAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Createdat"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/LegacyTurnRequest"
+            },
+            "title": "Turns",
+            "type": "array"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "LegacySessionRequest",
+        "type": "object"
+      },
+      "LegacyTurnRequest": {
+        "description": "One turn from the browser's old localStorage sessions.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "interactionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interactionid"
+          },
+          "userQuery": {
+            "default": "",
+            "title": "Userquery",
+            "type": "string"
+          }
+        },
+        "title": "LegacyTurnRequest",
         "type": "object"
       },
       "OptimizationRunResponse": {
@@ -4000,6 +4122,58 @@
           }
         },
         "summary": "Start a new conversation",
+        "tags": [
+          "ask-chat"
+        ]
+      }
+    },
+    "/ask/chat/threads/import": {
+      "post": {
+        "description": "Bring a member's legacy localStorage sessions across, best effort (FR-033).\n\nThe caller's own interactions only: a turn whose interaction is missing or\nbelongs to somebody else is skipped and counted. The import never fabricates an\ninteraction, so it cannot create a question the optimizer would score with no\npassages behind it.",
+        "operationId": "import_ask_chat_sessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskChatImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskChatImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "Import the browser's old conversations once",
         "tags": [
           "ask-chat"
         ]
