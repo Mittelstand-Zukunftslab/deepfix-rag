@@ -127,6 +127,30 @@ class Settings(BaseSettings):
     HERMES_BASE_URL: str = "http://hermes:8642"
     # Bearer token for the Hermes API. Empty leaves the hermes agent unavailable.
     API_SERVER_KEY: str | None = None
+
+    # Admin Hermes chat. Off by default: nothing listens on 8643 and the chat
+    # profile's gateway is not started. The audit read and thread delete stay
+    # reachable either way (D-4).
+    HERMES_CHAT_ENABLED: bool = False
+    HERMES_CHAT_BASE_URL: str = "http://hermes:8643"
+    # Bearer for the chat profile only. Never the optimization key.
+    HERMES_CHAT_API_SERVER_KEY: str | None = None
+    # Model the chat profile runs. Empty falls back to HERMES_MODEL (D-3).
+    HERMES_CHAT_MODEL: str = ""
+    MLFLOW_HERMES_CHAT_EXPERIMENT: str = "deepfix_hermes_chat"
+    ADMIN_CHAT_MAX_PROMPT_CHARS: int = 48000
+    ADMIN_CHAT_MAX_MESSAGES: int = 60
+    ADMIN_CHAT_TURN_TIMEOUT_SECONDS: float = 300
+    ADMIN_CHAT_DIGEST_MAX_CHARS: int = 6000
+    ADMIN_CHAT_MAX_TURNS_PER_WINDOW: int = 30
+    ADMIN_CHAT_TURN_WINDOW_SECONDS: int = 300
+    ADMIN_CHAT_MAX_CONCURRENT_TURNS: int = 2
+    ADMIN_CHAT_ACTION_TTL_SECONDS: int = 600
+    ADMIN_CHAT_STEP_TAIL: int = 50
+    ADMIN_CHAT_STEP_READ_BYTES: int = 65536
+    # Audit rows are kept this long and pruned hourly. 0 or a negative value
+    # keeps them forever (D-6).
+    ADMIN_CHAT_AUDIT_RETENTION_DAYS: int = 14
     OPTIMIZATION_MIN_DEV_QUESTIONS: int = 50
     OPTIMIZATION_MIN_NEW_DEV_QUESTIONS: int = 10
     OPTIMIZATION_MIN_HOLDOUT_QUESTIONS: int = 15

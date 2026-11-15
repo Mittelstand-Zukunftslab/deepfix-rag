@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from deepfix_rag.feedback import COMMENT_MAX_LENGTH, CommentReason
+from deepfix_rag.grounding import Grounding
 
 
 class ApiModel(BaseModel):
@@ -17,10 +18,28 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
 
+class ChatErrorDetail(ApiModel):
+    """The chat routes' structured error body, nested under ``detail``.
+
+    A chat failure carries a stable machine-readable ``code`` beside a sentence,
+    so the UI branches on the code and an operator can tell "turned off"
+    (``chat_disabled``) from "turned on but broken" (``chat_misconfigured``).
+    Only the chat routes use this shape; every other route keeps ``detail: str``.
+    """
+
+    code: str = Field(description="Stable machine-readable reason, e.g. chat_disabled.")
+    message: str = Field(description="Sentence shown to the admin.")
+
+
 class ErrorResponse(ApiModel):
     """Body returned for every 4xx and 5xx response."""
 
-    detail: str = Field(description="Human-readable explanation of what went wrong.")
+    detail: str | ChatErrorDetail = Field(
+        description=(
+            "Human-readable explanation of what went wrong. The chat routes nest a "
+            "{code, message} object here so the UI never matches on the sentence."
+        )
+    )
 
 
 class HealthResponse(ApiModel):
@@ -81,12 +100,20 @@ class RetrievalResponse(ApiModel):
 
 
 class AskResponse(ApiModel):
-    """One single-turn answer and the passages it used."""
+    """One single-turn answer and the passages it used.
+
+    ``grounding`` is how the corpus supports the answer: ``grounded`` when the
+    answer came from the retrieved passages, ``declined`` when the model refused
+    because the corpus does not answer the question, and ``no_relevant_sources``
+    when no passage passed the relevance floor and no answer was attempted. The
+    UI branches on it, so it is never absent.
+    """
 
     interaction_id: str
     answer: str | None = None
     error: str | None = None
     vote: Literal["up", "down"] | None = None
+    grounding: Grounding
     hits: list[HitResponse]
 
 
@@ -99,6 +126,7 @@ class InteractionResponse(ApiModel):
     answer: str | None = None
     error: str | None = None
     vote: Literal["up", "down"] | None = None
+    grounding: Grounding
     hits: list[HitResponse]
 
 
@@ -191,8 +219,14 @@ class OptimizationRunSummary(ApiModel):
 
 
 class OptimizationStatusResponse(ApiModel):
-    """Schedule, champion diff, and the 20 most recent runs."""
+    """Schedule, champion diff, and the 20 most recent runs.
 
+    ``chat_enabled`` is the admin chat's switch (D-2). It rides here rather than
+    on a chat route so the disabled page can render without calling one, and so
+    the eleven chat routes stay exactly eleven.
+    """
+
+    chat_enabled: bool = False
     cron: str
     timezone: str
     enabled: bool
@@ -306,3 +340,126 @@ class InteractionReviewResponse(ApiModel):
     trace_id: str | None
     answer_comments: list[ReviewedCommentResponse]
     hits: list[ReviewedHitResponse]
+
+
+class ChatMessageModel(ApiModel):
+    """One message the browser sends. Only ``user`` and ``assistant`` are accepted."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatCompletionRequest(ApiModel):
+    """An OpenAI-shaped turn request.
+
+    The server rebuilds the upstream conversation from the stored thread, so this
+    array is a consistency check rather than the prompt: the client cannot rewrite
+    the system message or claim a history that never happened.
+
+    ``retry_of`` names the earlier turn whose answer is being asked for again.
+    With ``regenerate`` the turn is reused and its answer replaced in place, which
+    is what the chat UI's regenerate control does: the thread does not grow a
+    second answer beside the first. Without it, a retry opens a new turn and the
+    thread keeps both attempts (CHAT-005).
+    """
+
+    thread_id: str = Field(min_length=1)
+    messages: list[ChatMessageModel] = Field(min_length=1)
+    retry_of: str | None = None
+    regenerate: bool = False
+
+
+class ChatThreadResponse(ApiModel):
+    """One conversation."""
+
+    thread_id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class ChatThreadSummaryResponse(ChatThreadResponse):
+    """A thread in the list: the same fields plus how its newest turn ended."""
+
+    last_turn_status: Literal["running", "completed", "failed", "cancelled"] | None = None
+
+
+class ChatMessageResponse(ApiModel):
+    """One stored message."""
+
+    message_id: str
+    turn_id: str | None = None
+    role: Literal["user", "assistant"]
+    seq: int
+    content: str
+    created_at: str
+
+
+class ChatTurnResponse(ApiModel):
+    """One attempt at a reply."""
+
+    turn_id: str
+    status: Literal["running", "completed", "failed", "cancelled"]
+    retry_of: str | None = None
+    error: str | None = None
+    first_token_ms: int | None = None
+    started_at: str
+    ended_at: str | None = None
+
+
+class ChatActionResponse(ApiModel):
+    """One proposed action card."""
+
+    action_id: str
+    turn_id: str
+    kind: str
+    payload: str = Field(description="The JSON object the assistant proposed, as text.")
+    status: Literal["proposed", "confirmed", "rejected", "expired", "failed"]
+    created_at: str
+    expires_at: str
+    decided_at: str | None = None
+    result: str | None = None
+
+
+class ChatThreadDetailResponse(ApiModel):
+    """One thread with everything a page render needs."""
+
+    thread: ChatThreadResponse
+    messages: list[ChatMessageResponse]
+    turns: list[ChatTurnResponse]
+    actions: list[ChatActionResponse]
+
+
+class ChatAuditResponse(ApiModel):
+    """One audit row. It holds no message text, only ids, counts, and a detail."""
+
+    event_id: int
+    at: str
+    admin_id: str
+    admin_email: str
+    thread_id: str | None = None
+    turn_id: str | None = None
+    kind: str
+    detail: str
+    thread_deleted: bool = Field(
+        description="True when the thread this event names has since been deleted."
+    )
+
+
+class ChatThreadRunResponse(ApiModel):
+    """One optimization run linked to a thread, with its step tail."""
+
+    run_id: str
+    status: Literal["running", "skipped", "rejected", "promoted", "succeeded", "failed"]
+    trigger: Literal["cron", "manual"]
+    reason: str | None = None
+    started_at: str
+    ended_at: str | None = None
+    primary_metric: str | None = None
+    dev_delta: dict[str, float] | None = None
+    holdout_delta: dict[str, float] | None = None
+    holdout_wins: int | None = None
+    holdout_losses: int | None = None
+    mlflow_run_id: str | None = None
+    mlflow_url: str | None = None
+    steps: list[str] = Field(default_factory=list)

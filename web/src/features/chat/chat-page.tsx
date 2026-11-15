@@ -29,20 +29,22 @@ import {
   User as UserIcon,
   X,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
+import { ChatComposerBar, ChatComposerHint } from "@/components/chat/composer";
+import { ChatMarkdown } from "@/components/chat/markdown";
 import { TopBar } from "@/components/layout/app-shell";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { GroundingBadge } from "@/features/chat/answer-grounding";
+import { groundingNote } from "@/features/chat/grounding-copy";
 import { commentKey, useFeedbackComments } from "@/features/feedback/use-feedback-comments";
 import { VoteButtons, type Vote } from "@/features/feedback/vote-buttons";
 import { VoteComment } from "@/features/feedback/vote-comment";
 import { IndexPreparing } from "@/features/index/index-preparing";
 import { askService, type AskHit } from "@/services/ask-service";
 import { feedbackService } from "@/services/feedback-service";
+import type { Grounding } from "@/client";
 
 const SESSIONS_STORAGE_KEY = "deepfix.chat_sessions.v2";
 const ACTIVE_SESSION_STORAGE_KEY = "deepfix.active_session_id.v2";
@@ -71,6 +73,7 @@ export interface ChatTurn {
   timestamp: number;
   answer: string | null;
   error: string | null;
+  grounding: Grounding;
   hits: AskHit[];
   answerVote: Vote;
   interactionId: string | null;
@@ -102,6 +105,7 @@ export function AskPage({
   hits,
   askedQuery = null,
   ownerId = null,
+  grounding = "grounded",
 }: {
   indexReady?: boolean;
   answer?: string | null;
@@ -109,6 +113,7 @@ export function AskPage({
   hits?: AskHit[];
   askedQuery?: string | null;
   ownerId?: string | null;
+  grounding?: Grounding;
 }) {
   const isControlledMode =
     askedQuery !== null || answer !== undefined || hits !== undefined || initialError !== null;
@@ -122,6 +127,7 @@ export function AskPage({
         timestamp: Date.now(),
         answer: hits ? (answer ?? null) : null,
         error: initialError,
+        grounding,
         hits: hits ?? [],
         answerVote: null,
         interactionId: null,
@@ -165,8 +171,7 @@ export function AskPage({
   });
 
   const [draft, setDraft] = useState(isControlledMode ? (askedQuery ?? "") : "");
-  const [pending, setPending] = useState(false);
-  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const [pendingBySession, setPendingBySession] = useState<Record<string, string>>({});
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
 
@@ -178,6 +183,10 @@ export function AskPage({
   const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // The session the member is looking at right now, readable from an async
+  // callback without capturing the render that started the request.
+  const activeSessionIdRef = useRef<string>(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
 
   useEffect(() => {
     if (!storageKeys) return;
@@ -194,6 +203,10 @@ export function AskPage({
   const activeSession =
     sessions.find((s) => s.id === activeSessionId) ?? sessions[0] ?? createNewSession();
   const turns = activeSession?.turns ?? [];
+  // Pending belongs to the session that asked, so the thinking card and the
+  // disabled composer follow that session rather than the whole page.
+  const pendingQuery = pendingBySession[activeSession?.id ?? ""] ?? null;
+  const pending = pendingQuery !== null;
 
   const currentTurn =
     (selectedTurnId ? turns.find((t) => t.id === selectedTurnId) : null) ??
@@ -218,6 +231,14 @@ export function AskPage({
 
   const handleDeleteSession = (sessionId: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
+    // A deleted session must not keep its pending entry: a response that lands
+    // afterwards would otherwise re-create a session the member removed.
+    setPendingBySession((prev) => {
+      if (!(sessionId in prev)) return prev;
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
     setSessions((prev) => {
       const remaining = prev.filter((s) => s.id !== sessionId);
       if (remaining.length === 0) {
@@ -257,10 +278,10 @@ export function AskPage({
       return;
     }
 
+    const sessionId = activeSession.id;
     setDraft("");
     setGlobalError(null);
-    setPending(true);
-    setPendingQuery(trimmed);
+    setPendingBySession((prev) => ({ ...prev, [sessionId]: trimmed }));
 
     const turnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -273,14 +294,16 @@ export function AskPage({
         timestamp: Date.now(),
         answer: response.answer,
         error: response.error,
+        grounding: response.grounding,
         hits: response.hits ?? [],
         answerVote: response.vote ?? null,
         interactionId: response.interaction_id,
       };
 
+      // Land the turn in the session that asked, whatever the member is viewing now.
       setSessions((prev) =>
         prev.map((session) => {
-          if (session.id !== activeSession.id) return session;
+          if (session.id !== sessionId) return session;
           const isFirstTurn = session.turns.length === 0;
           const newTitle =
             isFirstTurn && session.title === "New Chat"
@@ -298,7 +321,10 @@ export function AskPage({
         }),
       );
 
-      setSelectedTurnId(turnId);
+      // A question in one session must not move the other sessions' view.
+      if (activeSessionIdRef.current === sessionId) {
+        setSelectedTurnId(turnId);
+      }
     } catch (caught) {
       const errorMsg = caught instanceof Error ? caught.message : "Unable to ask. Try again.";
       setGlobalError(errorMsg);
@@ -309,6 +335,7 @@ export function AskPage({
         timestamp: Date.now(),
         answer: null,
         error: errorMsg,
+        grounding: "no_relevant_sources",
         hits: [],
         answerVote: null,
         interactionId: null,
@@ -316,14 +343,18 @@ export function AskPage({
 
       setSessions((prev) =>
         prev.map((session) =>
-          session.id === activeSession.id
+          session.id === sessionId
             ? { ...session, turns: [...session.turns, failedTurn], updatedAt: Date.now() }
             : session,
         ),
       );
     } finally {
-      setPending(false);
-      setPendingQuery(null);
+      setPendingBySession((prev) => {
+        if (!(sessionId in prev)) return prev;
+        const next = { ...prev };
+        delete next[sessionId];
+        return next;
+      });
     }
   };
 
@@ -737,7 +768,7 @@ export function AskPage({
                           </div>
                         )}
 
-                        {/* Assistant Grounded Answer Card */}
+                        {/* Assistant Answer Card: the badge says what grounding it actually has */}
                         {turn.answer && (
                           <div className="flex items-start gap-3.5">
                             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xs ring-4 ring-primary/10">
@@ -750,17 +781,12 @@ export function AskPage({
                                   <span className="text-label-lg font-semibold text-foreground">
                                     Answer
                                   </span>
-                                  <Badge
-                                    variant="outline"
-                                    className="border-primary/25 bg-primary/10 text-[11px] font-medium text-primary"
-                                  >
-                                    Grounded
-                                  </Badge>
+                                  <GroundingBadge grounding={turn.grounding} />
                                 </div>
 
                                 <div className="flex items-center gap-2">
                                   <span className="text-xs text-muted-foreground">
-                                    Generated from corpus
+                                    {groundingNote(turn.grounding, turn.hits.length)}
                                   </span>
                                   {turn.hits.length > 0 && (
                                     <Button
@@ -781,9 +807,7 @@ export function AskPage({
                               </div>
 
                               <div className="prose prose-sm dark:prose-invert max-w-none text-body-md leading-relaxed text-foreground">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {turn.answer}
-                                </ReactMarkdown>
+                                <ChatMarkdown prose={false}>{turn.answer}</ChatMarkdown>
                               </div>
 
                               <div className="flex items-center justify-between border-t border-border/40 pt-3">
@@ -810,7 +834,7 @@ export function AskPage({
                                 </div>
 
                                 <span className="text-[11px] text-muted-foreground">
-                                  Evaluated with DeepFix RAG Engine
+                                  DeepFix RAG Engine
                                 </span>
                               </div>
                               {turn.interactionId ? (
@@ -876,44 +900,42 @@ export function AskPage({
               {/* 3. Bottom Prompt Composer (Gemini / ChatGPT Style Floating Input) */}
               <div className="border-t border-border/60 bg-background/95 p-3 backdrop-blur-md sm:p-4">
                 <div className="mx-auto max-w-3xl">
-                  <ComposerPrimitive.Root
-                    asChild
-                    className="relative flex items-center gap-2 rounded-2xl border border-input bg-card/90 px-3 py-1.5 shadow-sm transition-all focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/20 hover:border-border"
-                    aria-label="Ask composer"
-                  >
-                    <form onSubmit={onSubmit} className="flex w-full items-center gap-2">
-                      <label className="sr-only" htmlFor="ask-input">
-                        Ask
-                      </label>
-                      <Input
-                        id="ask-input"
-                        aria-label="Ask"
-                        value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
-                        placeholder="Ask a question about the corpus..."
-                        disabled={pending}
-                        aria-busy={pending}
-                        className="h-10 min-h-[40px] flex-1 border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0 md:text-sm"
-                      />
-                      <Button
-                        type="submit"
-                        size="icon"
-                        className="h-9 w-9 shrink-0 rounded-xl transition-all"
-                        disabled={pending || !draft.trim()}
-                        aria-busy={pending}
-                        aria-label="Ask"
-                      >
-                        {pending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <ArrowUp className="h-4 w-4" />
-                        )}
-                      </Button>
+                  <ComposerPrimitive.Root asChild className="relative" aria-label="Ask composer">
+                    <form onSubmit={onSubmit} className="w-full">
+                      <ChatComposerBar>
+                        <label className="sr-only" htmlFor="ask-input">
+                          Ask
+                        </label>
+                        <Input
+                          id="ask-input"
+                          aria-label="Ask"
+                          value={draft}
+                          onChange={(event) => setDraft(event.target.value)}
+                          placeholder="Ask a question about the corpus..."
+                          disabled={pending}
+                          aria-busy={pending}
+                          className="h-10 min-h-[40px] flex-1 border-0 bg-transparent px-2 py-2 text-base shadow-none focus-visible:ring-0 md:text-sm"
+                        />
+                        <Button
+                          type="submit"
+                          size="icon"
+                          className="h-9 w-9 shrink-0 rounded-xl transition-all"
+                          disabled={pending || !draft.trim()}
+                          aria-busy={pending}
+                          aria-label="Ask"
+                        >
+                          {pending ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <ArrowUp className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </ChatComposerBar>
                     </form>
                   </ComposerPrimitive.Root>
-                  <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
+                  <ChatComposerHint>
                     DeepFix searches indexed documents and grounds answers with citations.
-                  </p>
+                  </ChatComposerHint>
                 </div>
               </div>
             </AssistantRuntimeProvider>

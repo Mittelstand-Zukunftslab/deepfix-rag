@@ -21,6 +21,7 @@ import sqlite3
 import threading
 import time
 from typing import Any, Literal
+from urllib.parse import urlsplit
 import uuid
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -84,6 +85,7 @@ _STEP_LOG_DIRNAME = "optimization-logs"
 _HEARTBEAT_FIELDS = ("run_id", "pid", "elapsed_s", "argv0", "written_at")
 _SECRET_ENVS = (
     "API_SERVER_KEY",
+    "HERMES_CHAT_API_SERVER_KEY",
     "OPENROUTER_API_KEY",
     "S3_SECRET_ACCESS_KEY",
     "HERMES_S3_SECRET_ACCESS_KEY",
@@ -390,15 +392,40 @@ def recent_runs(db_path: Path, limit: int = 20) -> list[OptimizationRun]:
     return [_run_from_row(row) for row in rows]
 
 
+_BROWSER_UNREACHABLE_HOSTS = frozenset({"mlflow", "localhost", "127.0.0.1", "0.0.0.0", "::1"})
+
+
+def _browser_can_open(tracking: str) -> bool:
+    """Whether a tracking URI is a page an admin's browser could open.
+
+    MLflow is not published and has no authentication of its own, so the
+    tracking URI the API uses is a Compose service name
+    (``http://mlflow:5000``) or a loopback address. A link built from either is
+    dead in a browser, so the admin table renders a dash instead. A tracking URI
+    naming any other host is treated as an operator-run public domain and linked.
+    """
+    parsed = urlsplit(tracking)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    return (parsed.hostname or "").lower() not in _BROWSER_UNREACHABLE_HOSTS
+
+
 def mlflow_run_url(run_id: str | None) -> str | None:
-    """Link for an HTTP tracking server. A local SQLite store has no page to open."""
+    """Link for the one tracking server a browser can open, else ``None``.
+
+    Locking MLflow down means the API reaches it over the Compose network, so
+    there is no browser page for a run. The admin screen hides the MLflow cell
+    when this is ``None``. An operator who keeps a public, authenticated MLflow
+    domain sets ``MLFLOW_TRACKING_URI`` to that URL in the API's environment and
+    the link comes back.
+    """
     if not run_id:
         return None
     try:
         import mlflow
 
         tracking = mlflow.get_tracking_uri()
-        if not tracking.startswith("http"):
+        if not _browser_can_open(tracking):
             return None
         experiment_id = mlflow.get_run(run_id).info.experiment_id
     except Exception:

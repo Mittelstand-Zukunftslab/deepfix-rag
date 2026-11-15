@@ -4,6 +4,8 @@ from fastapi.testclient import TestClient
 from llama_index.core.base.llms.types import ChatMessage, ChatResponse, CompletionResponse
 from llama_index.core.embeddings import MockEmbedding
 from llama_index.core.llms import MockLLM
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
+from llama_index.core.schema import NodeWithScore, QueryBundle
 import mlflow
 import pytest
 
@@ -40,6 +42,38 @@ class FailingLLM(MockLLM):
 
     def chat(self, messages, **kwargs) -> ChatResponse:
         raise RuntimeError("generation failed")
+
+
+DECLINED = 'No explanation of "rerank off" is available.'
+
+
+class _LowScores(BaseNodePostprocessor):
+    """A reranker that scores every candidate below any realistic floor.
+
+    Real rerank posts to OpenRouter, which this suite never calls. Scoring is all
+    the floor reads, so a local postprocessor exercises the same branch.
+    """
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "LowScores"
+
+    def _postprocess_nodes(
+        self,
+        nodes: list[NodeWithScore],
+        query_bundle: QueryBundle | None = None,
+    ) -> list[NodeWithScore]:
+        return [NodeWithScore(node=node.node, score=0.01) for node in nodes]
+
+
+class RefusingLLM(MockLLM):
+    """Local model that answers with a refusal instead of using the passages."""
+
+    def complete(self, prompt: str, formatted: bool = False, **kwargs) -> CompletionResponse:
+        return CompletionResponse(text=DECLINED)
+
+    def chat(self, messages, **kwargs) -> ChatResponse:
+        return ChatResponse(message=ChatMessage(role="assistant", content=DECLINED))
 
 
 @pytest.fixture
@@ -86,6 +120,7 @@ def test_ask_stores_the_answer_and_a_single_turn(
         assert body["answer"] == "The harbor budget was approved."
         assert body["error"] is None
         assert body["vote"] is None
+        assert body["grounding"] == "grounded"
         assert body["hits"]
         assert body["hits"][0]["document_filename"] == "harbor.txt"
         assert body["hits"][0]["vote"] is None
@@ -126,6 +161,7 @@ def test_generation_failure_keeps_the_passages(
         body = failed.json()
         assert body["answer"] is None
         assert body["error"] == "The answer could not be generated."
+        assert body["grounding"] == "no_relevant_sources"
         assert body["hits"]
         stored = get_interaction(ask_settings.product_db_path, body["interaction_id"])
         assert stored is not None
@@ -133,3 +169,69 @@ def test_generation_failure_keeps_the_passages(
         assert stored.answer is None
         assert stored.error == body["error"]
         assert stored.hits
+
+
+def test_a_refusal_is_declined_and_a_stored_ask_keeps_its_grounding(
+    ask_settings: Settings, identity: IdentityIssuer
+) -> None:
+    """A model refusal is text, but it is not grounded in the corpus."""
+    with _client(ask_settings, RefusingLLM(), identity) as client:
+        identity.sign_in(client, "ada@example.com")
+        _index_note(client)
+        asked = client.post("/ask", json={"query": "what does the harbor budget say"})
+        assert asked.status_code == 200, asked.text
+        body = asked.json()
+        assert body["answer"] == DECLINED
+        assert body["error"] is None
+        assert body["grounding"] == "declined"
+
+        reopened = client.get(f"/interactions/{body['interaction_id']}")
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["grounding"] == "declined"
+
+        searched = client.post("/retrieval", json={"query": "harbor budget"})
+        assert searched.status_code == 200, searched.text
+        stored_search = client.get(f"/interactions/{searched.json()['interaction_id']}")
+        assert stored_search.status_code == 200
+        assert stored_search.json()["grounding"] == "no_relevant_sources"
+
+
+def test_a_question_below_the_relevance_floor_skips_generation(
+    ask_settings: Settings, identity: IdentityIssuer
+) -> None:
+    """No passage above the floor means no model call, no sources, and an honest message."""
+    with _client(ask_settings, GroundedLLM(), identity) as client:
+        identity.sign_in(client, "ada@example.com")
+        _index_note(client)
+
+        # Turn rerank on so the floor applies, then make the reranker score every
+        # candidate far below it. No HTTP call leaves the process.
+        service = client.app.state.index.checkout()
+        assert service is not None
+        try:
+            service.service.config.rerank.enabled = True
+            workflow = service.service._workflow
+            workflow.config.rerank.enabled = True
+            workflow.config.rerank.min_relevance_score = 0.95
+            workflow.config.rerank.top_n = 5
+            workflow.config.retrieval.top_k = 10
+            workflow._get_reranker = lambda: _LowScores()  # type: ignore[method-assign]
+        finally:
+            client.app.state.index.release(service)
+
+        prompts.clear()
+        asked = client.post("/ask", json={"query": "harbor budget"})
+        assert asked.status_code == 200, asked.text
+        body = asked.json()
+        assert body["grounding"] == "no_relevant_sources"
+        assert body["answer"].startswith("Nothing in these documents")
+        assert body["error"] is None
+        assert body["hits"] == []
+        assert prompts == [], "the generation model must not be called"
+
+        # The dropped candidates are still recorded, so History can tell the two apart.
+        stored = get_interaction(ask_settings.product_db_path, body["interaction_id"])
+        assert stored is not None
+        assert stored.hits
+        assert stored.answer is None
+        assert stored.error is None

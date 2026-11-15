@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AskResponse": {
-        "description": "One single-turn answer and the passages it used.",
+        "description": "One single-turn answer and the passages it used.\n\n``grounding`` is how the corpus supports the answer: ``grounded`` when the\nanswer came from the retrieved passages, ``declined`` when the model refused\nbecause the corpus does not answer the question, and ``no_relevant_sources``\nwhen no passage passed the relevance floor and no answer was attempted. The\nUI branches on it, so it is never absent.",
         "properties": {
           "answer": {
             "anyOf": [
@@ -25,6 +25,9 @@
               }
             ],
             "title": "Error"
+          },
+          "grounding": {
+            "$ref": "#/components/schemas/Grounding"
           },
           "hits": {
             "items": {
@@ -58,6 +61,7 @@
           "answer",
           "error",
           "vote",
+          "grounding",
           "hits"
         ],
         "title": "AskResponse",
@@ -86,6 +90,639 @@
           "file"
         ],
         "title": "Body_create_document",
+        "type": "object"
+      },
+      "ChatActionResponse": {
+        "description": "One proposed action card.",
+        "properties": {
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "description": "The JSON object the assistant proposed, as text.",
+            "title": "Payload",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "enum": [
+              "proposed",
+              "confirmed",
+              "rejected",
+              "expired",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "turn_id",
+          "kind",
+          "payload",
+          "status",
+          "created_at",
+          "expires_at",
+          "decided_at",
+          "result"
+        ],
+        "title": "ChatActionResponse",
+        "type": "object"
+      },
+      "ChatAuditResponse": {
+        "description": "One audit row. It holds no message text, only ids, counts, and a detail.",
+        "properties": {
+          "admin_email": {
+            "title": "Admin Email",
+            "type": "string"
+          },
+          "admin_id": {
+            "title": "Admin Id",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "thread_deleted": {
+            "description": "True when the thread this event names has since been deleted.",
+            "title": "Thread Deleted",
+            "type": "boolean"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          }
+        },
+        "required": [
+          "event_id",
+          "at",
+          "admin_id",
+          "admin_email",
+          "thread_id",
+          "turn_id",
+          "kind",
+          "detail",
+          "thread_deleted"
+        ],
+        "title": "ChatAuditResponse",
+        "type": "object"
+      },
+      "ChatCompletionRequest": {
+        "description": "An OpenAI-shaped turn request.\n\nThe server rebuilds the upstream conversation from the stored thread, so this\narray is a consistency check rather than the prompt: the client cannot rewrite\nthe system message or claim a history that never happened.\n\n``retry_of`` names the earlier turn whose answer is being asked for again.\nWith ``regenerate`` the turn is reused and its answer replaced in place, which\nis what the chat UI's regenerate control does: the thread does not grow a\nsecond answer beside the first. Without it, a retry opens a new turn and the\nthread keeps both attempts (CHAT-005).",
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageModel"
+            },
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "regenerate": {
+            "default": false,
+            "title": "Regenerate",
+            "type": "boolean"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "thread_id": {
+            "minLength": 1,
+            "title": "Thread Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "messages"
+        ],
+        "title": "ChatCompletionRequest",
+        "type": "object"
+      },
+      "ChatErrorDetail": {
+        "description": "The chat routes' structured error body, nested under ``detail``.\n\nA chat failure carries a stable machine-readable ``code`` beside a sentence,\nso the UI branches on the code and an operator can tell \"turned off\"\n(``chat_disabled``) from \"turned on but broken\" (``chat_misconfigured``).\nOnly the chat routes use this shape; every other route keeps ``detail: str``.",
+        "properties": {
+          "code": {
+            "description": "Stable machine-readable reason, e.g. chat_disabled.",
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "description": "Sentence shown to the admin.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ChatErrorDetail",
+        "type": "object"
+      },
+      "ChatMessageModel": {
+        "description": "One message the browser sends. Only ``user`` and ``assistant`` are accepted.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ChatMessageModel",
+        "type": "object"
+      },
+      "ChatMessageResponse": {
+        "description": "One stored message.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          }
+        },
+        "required": [
+          "message_id",
+          "turn_id",
+          "role",
+          "seq",
+          "content",
+          "created_at"
+        ],
+        "title": "ChatMessageResponse",
+        "type": "object"
+      },
+      "ChatThreadDetailResponse": {
+        "description": "One thread with everything a page render needs.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ChatActionResponse"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageResponse"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "thread": {
+            "$ref": "#/components/schemas/ChatThreadResponse"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/ChatTurnResponse"
+            },
+            "title": "Turns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "thread",
+          "messages",
+          "turns",
+          "actions"
+        ],
+        "title": "ChatThreadDetailResponse",
+        "type": "object"
+      },
+      "ChatThreadResponse": {
+        "description": "One conversation.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "title",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChatThreadResponse",
+        "type": "object"
+      },
+      "ChatThreadRunResponse": {
+        "description": "One optimization run linked to a thread, with its step tail.",
+        "properties": {
+          "dev_delta": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dev Delta"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "holdout_delta": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Delta"
+          },
+          "holdout_losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Losses"
+          },
+          "holdout_wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holdout Wins"
+          },
+          "mlflow_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mlflow Run Id"
+          },
+          "mlflow_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mlflow Url"
+          },
+          "primary_metric": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Metric"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "skipped",
+              "rejected",
+              "promoted",
+              "succeeded",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "trigger": {
+            "enum": [
+              "cron",
+              "manual"
+            ],
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "trigger",
+          "reason",
+          "started_at",
+          "ended_at",
+          "primary_metric",
+          "dev_delta",
+          "holdout_delta",
+          "holdout_wins",
+          "holdout_losses",
+          "mlflow_run_id",
+          "mlflow_url",
+          "steps"
+        ],
+        "title": "ChatThreadRunResponse",
+        "type": "object"
+      },
+      "ChatThreadSummaryResponse": {
+        "description": "A thread in the list: the same fields plus how its newest turn ended.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "last_turn_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Turn Status"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "title",
+          "created_at",
+          "updated_at",
+          "last_turn_status"
+        ],
+        "title": "ChatThreadSummaryResponse",
+        "type": "object"
+      },
+      "ChatTurnResponse": {
+        "description": "One attempt at a reply.",
+        "properties": {
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "first_token_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Token Ms"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id",
+          "status",
+          "retry_of",
+          "error",
+          "first_token_ms",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "ChatTurnResponse",
         "type": "object"
       },
       "CommentReason": {
@@ -263,9 +900,16 @@
         "description": "Body returned for every 4xx and 5xx response.",
         "properties": {
           "detail": {
-            "description": "Human-readable explanation of what went wrong.",
-            "title": "Detail",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/ChatErrorDetail"
+              }
+            ],
+            "description": "Human-readable explanation of what went wrong. The chat routes nest a {code, message} object here so the UI never matches on the sentence.",
+            "title": "Detail"
           }
         },
         "required": [
@@ -547,6 +1191,16 @@
         ],
         "title": "FeedbackSummaryResponse",
         "type": "object"
+      },
+      "Grounding": {
+        "description": "How much the corpus supports the answer that was returned.",
+        "enum": [
+          "grounded",
+          "declined",
+          "no_relevant_sources"
+        ],
+        "title": "Grounding",
+        "type": "string"
       },
       "HTTPValidationError": {
         "properties": {
@@ -848,6 +1502,9 @@
             ],
             "title": "Error"
           },
+          "grounding": {
+            "$ref": "#/components/schemas/Grounding"
+          },
           "hits": {
             "items": {
               "$ref": "#/components/schemas/HitResponse"
@@ -894,6 +1551,7 @@
           "answer",
           "error",
           "vote",
+          "grounding",
           "hits"
         ],
         "title": "InteractionResponse",
@@ -1181,7 +1839,7 @@
         "type": "object"
       },
       "OptimizationStatusResponse": {
-        "description": "Schedule, champion diff, and the 20 most recent runs.",
+        "description": "Schedule, champion diff, and the 20 most recent runs.\n\n``chat_enabled`` is the admin chat's switch (D-2). It rides here rather than\non a chat route so the disabled page can render without calling one, and so\nthe eleven chat routes stay exactly eleven.",
         "properties": {
           "agent": {
             "const": "hermes",
@@ -1215,6 +1873,11 @@
             "title": "Champion Diff",
             "type": "object"
           },
+          "chat_enabled": {
+            "default": false,
+            "title": "Chat Enabled",
+            "type": "boolean"
+          },
           "cron": {
             "title": "Cron",
             "type": "string"
@@ -1247,6 +1910,7 @@
           }
         },
         "required": [
+          "chat_enabled",
           "cron",
           "timezone",
           "enabled",
@@ -1502,6 +2166,766 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/chat/actions/{action_id}/confirm": {
+      "post": {
+        "description": "Run the action the assistant proposed, because the admin pressed Confirm.\n\nThis is the only chat path that can change run state, and it reaches the\nsame ``start_run_for``/``cancel_run_for`` helpers the Optimization screen\nuses. A card is confirmable while its turn still streams: the conversation\nplane and the job plane are separate, and ``RunInProgress`` is the real\nguard against two runs.",
+        "operationId": "confirm_admin_chat_action",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Confirm a proposed action and run it",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/actions/{action_id}/reject": {
+      "post": {
+        "description": "Mark a proposed card dismissed. A decided card is 409.",
+        "operationId": "reject_admin_chat_action",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          }
+        },
+        "summary": "Dismiss a proposed action",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/audit": {
+      "get": {
+        "description": "The newest audit rows, admin only, with `thread_deleted` computed at read time.\n\nOne of the two SQLite-only routes: it answers with chat off and with the\nchat key unset, because turning chat off must not hide what chat did (D-4).",
+        "operationId": "list_admin_chat_audit",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatAuditResponse"
+                  },
+                  "title": "Response List Admin Chat Audit",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "List the chat audit trail",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/completions": {
+      "post": {
+        "description": "Validate the turn, then relay the reply as an AI SDK UI message stream.",
+        "operationId": "admin_chat_completion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The AI SDK UI message stream for one turn."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "An upstream dependency answered with an error."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Send one chat turn and stream the reply",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/threads": {
+      "get": {
+        "operationId": "list_admin_chat_threads",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatThreadSummaryResponse"
+                  },
+                  "title": "Response List Admin Chat Threads",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "List this admin's chat threads",
+        "tags": [
+          "admin-chat"
+        ]
+      },
+      "post": {
+        "operationId": "create_admin_chat_thread",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatThreadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Open a new chat thread",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/threads/{thread_id}": {
+      "delete": {
+        "description": "Hard delete, children before parent. Audit rows survive (D-4).\n\nAnswers 204 with chat on or off, with the key set or not: it is one of the\ntwo SQLite-only routes this feature keeps reachable.",
+        "operationId": "delete_admin_chat_thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          }
+        },
+        "summary": "Delete one chat thread for good",
+        "tags": [
+          "admin-chat"
+        ]
+      },
+      "get": {
+        "operationId": "get_admin_chat_thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatThreadDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Show one chat thread with its messages, turns, and actions",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/threads/{thread_id}/runs": {
+      "get": {
+        "description": "Each linked run's status, deltas, MLflow link, and redacted step tail.",
+        "operationId": "list_admin_chat_thread_runs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatThreadRunResponse"
+                  },
+                  "title": "Response List Admin Chat Thread Runs",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Show the runs linked to a thread",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/threads/{thread_id}/runs/{run_id}": {
+      "post": {
+        "description": "Link a run so the thread can show its progress. Linking twice is idempotent.",
+        "operationId": "link_admin_chat_thread_run",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatThreadRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Link an optimization run to a thread",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
+    "/admin/chat/turns/{turn_id}/stream": {
+      "get": {
+        "description": "Replay the stored text, then tail the turn if it is running in this process.",
+        "operationId": "resume_admin_chat_turn",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The AI SDK UI message stream, replayed and then tailed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signed-in user's role does not allow this action."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Resume a reply that is in progress or already finished",
+        "tags": [
+          "admin-chat"
+        ]
+      }
+    },
     "/admin/feedback/summary": {
       "get": {
         "description": "Return vote, dataset, and outbox counts. Members receive 403.",

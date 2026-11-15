@@ -24,6 +24,7 @@ from deepfix_rag.api.schemas import (
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.documents import document_filenames
 from deepfix_rag.feedback import current_votes
+from deepfix_rag.grounding import Grounding, grounding_for
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.interactions import Interaction, get_interaction, record_interaction
 from deepfix_rag.pipeline import RetrievalResult
@@ -33,6 +34,7 @@ router = APIRouter(tags=["retrieval"])
 
 INDEX_PREPARING = "The index is being prepared. Try again in a minute."
 GENERATION_FAILED = "The answer could not be generated."
+NO_RELEVANT_SOURCES_ANSWER = "Nothing in these documents matches that question."
 
 
 def displayed_limit(config: RAGConfig, maximum: int) -> int:
@@ -108,7 +110,8 @@ async def ask_question(payload: QueryRequest, request: Request) -> AskResponse:
     finally:
         coordinator.release(lease)
     results = answered.retrieval_results[:limit]
-    error = None if answered.generated_answer else GENERATION_FAILED
+    no_sources = not answered.retrieval_results and bool(answered.dropped_results)
+    error = None if answered.generated_answer or no_sources else GENERATION_FAILED
     stored = _store(
         settings.product_db_path,
         kind="ask",
@@ -117,16 +120,27 @@ async def ask_question(payload: QueryRequest, request: Request) -> AskResponse:
         query=query,
         build_id=build_id,
         config_path=config_path,
-        results=results,
+        results=results + answered.dropped_results,
         answer=answered.generated_answer,
         error=error,
         trace_name="ask",
     )
+    grounding = Grounding.NO_RELEVANT_SOURCES if no_sources else grounding_for(stored.answer)
+    if no_sources:
+        return AskResponse(
+            interaction_id=stored.interaction_id,
+            answer=NO_RELEVANT_SOURCES_ANSWER,
+            error=None,
+            vote=None,
+            grounding=grounding,
+            hits=[],
+        )
     return AskResponse(
         interaction_id=stored.interaction_id,
         answer=stored.answer,
         error=stored.error,
         vote=_answer_vote(settings.product_db_path, user.id, stored.interaction_id),
+        grounding=grounding,
         hits=_hit_responses(settings.product_db_path, stored, user.id),
     )
 
@@ -251,5 +265,6 @@ def read_interaction(interaction_id: str, request: Request) -> InteractionRespon
         answer=stored.answer,
         error=stored.error,
         vote=_answer_vote(settings.product_db_path, user.id, stored.interaction_id),
+        grounding=grounding_for(stored.answer),
         hits=_hit_responses(settings.product_db_path, stored, user.id),
     )

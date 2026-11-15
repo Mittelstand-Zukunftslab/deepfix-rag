@@ -30,6 +30,9 @@ retrieval:
 rerank:
   enabled: true
   top_n: 5
+  # Relevance floor on the reranker's 0..1 relevance_score. See
+  # configs/champion.yaml for how 0.2 was measured.
+  min_relevance_score: 0.2
 
 generation:
   temperature: 0.0

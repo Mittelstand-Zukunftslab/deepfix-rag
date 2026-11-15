@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 interface SidebarState {
+  /** Whether the app navigation is expanded; collapsed is the icon rail on a wide viewport. */
   isCollapsed: boolean;
   toggleSidebar: () => void;
 }

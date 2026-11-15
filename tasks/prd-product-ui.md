@@ -1,10 +1,17 @@
 # PRD: DeepFix Product UI
 
+> **Status: implemented, with one superseded story.** US-003 ("OpenHands agent
+> runner in a child process") was replaced by the Hermes sandbox in
+> `tasks/prd-hermes-optimizer.md` US-010; `OPTIMIZATION_AGENT` accepts `hermes`
+> only, and the `OPENHANDS_PYTHON` / `OH_*` variables no longer exist. The rest
+> of this document describes the product as built. For current behaviour read
+> the code and `README.md`; the OpenHands sections below are kept as history.
+
 ## Introduction
 
 DeepFix today is a deterministic CLI (`deepfix`) plus an agent loop. Engineers load data, build a LanceDB index, run retrieval or full RAG, score results with DeepEval, and let an agent optimize the pipeline. That is powerful for the team and invisible to everyone else.
 
-This feature turns that pipeline into a small internal product. A FastAPI service wraps the existing domain layer and publishes its OpenAPI schema. A TanStack Start app is the interface. Its TypeScript client is generated from that schema with `@hey-api/openapi-ts`, so the screens never hand-write request types. Signed-in members share **one workspace corpus**: they upload text, Markdown, and PDF files, search the index, and ask questions. Thumbs up and thumbs down on retrieved passages and on answers are stored, traced in MLflow, and turned into an evaluation dataset. Admins, and only admins, open an Optimization section that shows the nightly schedule and can start that same job immediately. The job runs an OpenHands agent through the Software Agent SDK in a child process that the API starts, watches, and can kill, and traces it in MLflow.
+This feature turns that pipeline into a small internal product. A FastAPI service wraps the existing domain layer and publishes its OpenAPI schema. A TanStack Start app is the interface. Its TypeScript client is generated from that schema with `@hey-api/openapi-ts`, so the screens never hand-write request types. Signed-in members share **one workspace corpus**: they upload text, Markdown, and PDF files, search the index, and ask questions. Thumbs up and thumbs down on retrieved passages and on answers are stored, traced in MLflow, and turned into an evaluation dataset. Admins, and only admins, open an Optimization section that shows the nightly schedule and can start that same job immediately. **As built, the job hands the round to the Hermes sandbox described in `tasks/prd-hermes-optimizer.md`**, which replaced the OpenHands child this PRD originally specified; the API still starts the run, watches it, cancels it, and traces it in MLflow.
 
 The feedback loop is the point of the feature, so this PRD is strict about three things:
 

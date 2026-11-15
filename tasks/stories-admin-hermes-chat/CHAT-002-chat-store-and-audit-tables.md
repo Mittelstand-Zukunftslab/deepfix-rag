@@ -171,3 +171,16 @@ Mark the new module `pytestmark = [pytest.mark.unit, pytest.mark.integration]`, 
       the PRD)
 - [ ] `uv run ruff check`, `uv run ruff format --check`, and the fast pytest suite pass
 - [ ] Committed on its own before CHAT-003 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`.
+
+`src/deepfix_rag/admin_chat.py` owns six tables, five indexes, and every read and write. Tests are in
+`tests/test_admin_chat.py` (20 cases) against a real SQLite file: column lists, `CHECK` rejections, idempotent
+`init_admin_chat`, the two `PRAGMA foreign_key_list` checks, ownership isolation, the 60-character title rule,
+`updated_at` ordering, the retry link, `count_recent_turns` reading turns only, a redacted and capped detail, the
+D-4 delete order with its single `thread_deleted` row, `fail_interrupted_chat_turns`, the four retention cases, the
+"audit-only" prune, and `EXPLAIN QUERY PLAN` reporting `USING INDEX` for both thread-load queries.
+
+Not run: nothing is environment-dependent here. No container is involved.

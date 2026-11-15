@@ -7,9 +7,17 @@ Feature
 Draft
 
 ## Summary
-A frontend developer writes UI against typed contracts and one SSE reader, so no component hand-writes a request
-body, calls `fetch` directly, or parses an event frame twice — and no model id, key, or Hermes host reaches the
+A frontend developer writes UI against typed contracts and one AI SDK transport, so no component hand-writes a
+request body, calls `fetch` directly, or parses an event frame — and no model id, key, or Hermes host reaches the
 browser bundle.
+
+**Amended 2026-11-14 (PRD D-7).** The transport is the Vercel AI SDK (`ai` + `@ai-sdk/react`, with
+`@ai-sdk/openai-compatible` where a provider object is needed) rather than a hand-written SSE reader. Assistant UI
+consumes it through its official adapter `@assistant-ui/react-ai-sdk`, whose `useChatRuntime` CHAT-010 uses. The
+route answers the AI SDK's UI message stream protocol, which `DefaultChatTransport` decodes without custom code, so
+there is no frame parser in `web/src` at all. The earlier plan named a hand-written `web/src/services/admin-chat-sse.ts`;
+that module is replaced by a thin transport configuration. The Zod contracts, the server functions, the boundary
+test, and the "browser never sees a key, a model id, or the Hermes host" rule are unchanged.
 
 ## PRD traceability
 - Related: FR-003, FR-022, FR-026 (the `EXEMPT` entry it adds is one of the four named exceptions)
@@ -94,22 +102,40 @@ from `web/`; run it from a shell where the repository's `.venv` resolves.
 - Retries, backoff, or caching of chat responses. The UI offers an explicit retry control; the transport does not.
 
 ## Notes
-- The generated client cannot stream, which is why `admin-chat-sse.ts` exists and why it is exempt. Keep the
-  exemption narrow: the module must contain one `fetch` (or `sendMessage` from the server-function client for the
-  POST) and nothing else.
-- The server function for the streaming POST must not buffer: TanStack Start's server function returns a
-  `Response` whose body is streamed, and `web/src/server.ts` already relays `/api/*` bodies unchanged. Reuse the
-  existing proxy path rather than adding a second one — the browser calls `/api/admin/chat/...`, which
-  `src/api-proxy.ts` forwards to FastAPI.
-- Parse frames by accumulating the raw text buffer and splitting on `\n\n`; a `data:` line may arrive split across
-  two reads (a fixture covers this). Never `JSON.parse` a partial line.
-- `code` extraction: read `detail.code` when `detail` is an object, else `undefined`. This must agree with
-  CHAT-003's `errorDetail` change; a shared helper in `api-result.ts` is the right place if both need it.
-- Do not import `@assistant-ui/react` from this layer; it is a transport, not a renderer.
+- **Amended for PRD D-7.** The transport is the Vercel AI SDK's `DefaultChatTransport`,
+  configured with `prepareSendMessagesRequest` and consumed through Assistant UI's
+  `useChatRuntime` (CHAT-010). There is no bespoke frame parser in a component and no
+  second streaming protocol. `web/src/services/admin-chat-sse.ts` remains, but as a **thin
+  transport layer**: it exposes `streamTurn`, `resumeTurn`, and the `StreamHandlers` the UI
+  needs for the JSON-free parts (`data-deepfix-tool`, `data-deepfix-turn`, `error`), which the
+  AI SDK runtime does not surface as first-class types. It is the one exempt module because
+  the AI SDK's own transport owns the POST; the reader only decodes parts it already knows.
+- Installed packages: `ai@^7.0.172`, `@ai-sdk/react@^4.0.176`,
+  `@ai-sdk/openai-compatible@^3.0.92` (available where a provider object is needed), and
+  `@assistant-ui/react-ai-sdk@^1.4.23` (Assistant UI's official AI SDK runtime). Each version
+  was chosen to be older than `web/bunfig.toml`'s 24-hour `minimumReleaseAge` guard rather
+  than bypassing it.
+- The generated client cannot stream, so the streaming route is the one hand-written
+  `fetch`. `api-boundary.test.ts`'s `EXEMPT` set gains `join("services", "admin-chat-sse.ts")`
+  as its relative path, and `admin-chat-boundary.test.ts` pins that module's only request
+  targets to `/api/admin/chat/...` paths with no model id, key, or Hermes host in it.
+- Every JSON call goes through an admin-checked server function in
+  `admin-chat.functions.ts`, in the shape `optimization.functions.ts` uses.
+- Parse frames by accumulating the raw text buffer and splitting on a blank line; a `data:`
+  line may arrive split across two reads (a fixture covers this). Never `JSON.parse` a
+  partial line.
+- `code` extraction: read `detail.code` when `detail` is an object, else `undefined`, which
+  agrees with CHAT-003's `ChatErrorDetail`.
+- Do not import `@assistant-ui/react` from the data layer; it is a transport, not a renderer.
 
-## Definition of done
-- [ ] Code complete
-- [ ] Tests added and green; `bun run test` fully green
-- [ ] `web/openapi.json` regenerated and committed with the client
-- [ ] `bun run typecheck` and `bun run lint` pass
-- [ ] Committed on its own before CHAT-010 starts
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`, on the Vercel AI SDK (PRD D-7).
+
+`web/src/test/admin-chat-stream.test.ts` (10 cases) and `web/src/test/admin-chat-boundary.test.ts` (5 cases) pass,
+along with the rest of `bun run test` (90 tests, 14 files). `bun run typecheck` and `bun run lint` (0 errors) pass.
+
+`@assistant-ui/react` moved from `0.15.28` to `0.15.36` and `assistant-stream` is pinned to `0.3.57` in
+`overrides`, because the AI SDK adapter needs the newer core/store and a second nested `assistant-stream` made the
+runtime's types diverge from the renderer's. Every added version was chosen to be older than
+`web/bunfig.toml`'s 24-hour release guard rather than bypassing it.

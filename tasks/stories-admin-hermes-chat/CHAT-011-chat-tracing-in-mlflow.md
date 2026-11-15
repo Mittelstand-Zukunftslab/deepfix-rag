@@ -112,3 +112,18 @@ The tests use a temp-sqlite MLflow tracking URI and import the plugin module by 
       experiment
 - [ ] `uv run ruff check`, `uv run ruff format --check`, and the fast pytest suite pass
 - [ ] Committed on its own before CHAT-012 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`.
+
+`tests/test_hermes_chat_trace.py` has 9 cases: the two experiment names differing, the helper creating a named
+experiment while the optimizer's default is unchanged, the plugin stamping the chat labels, reading them from the
+environment, still stamping `deepfix.run_id` for an optimization round and not a chat label, scrubbing the chat key
+from a span, boot writing a separate document and its own plugin links inside `profiles/chat`, the experiment name's
+default and newline rejection, and the document carrying no key.
+
+`tests/test_hermes_sandbox.py`'s CHAT-001 case that asserted the chat profile gets neither plugin is rewritten to
+assert the reversal, which is what this story changes.
+
+Not run: opening a real trace in MLflow. That needs the deployed gateway; CHAT-012 does it.

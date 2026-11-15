@@ -1,13 +1,19 @@
-"""Stamp ``deepfix.run_id`` on spans that hermes-otel exports.
+"""Stamp DeepFix identifiers on spans that hermes-otel exports.
 
 hermes-otel's ``common_attributes`` are fixed when the gateway starts, and a
-DeepFix run id changes every optimization. This plugin reads the id out of
-the turn (the instructions say ``The DeepFix run id is <id>``) and sets that
-one attribute. It does not copy the message, the tool arguments, or any
-credential onto a span.
+DeepFix run id changes every optimization. This plugin reads the id out of the
+turn (the instructions say ``The DeepFix run id is <id>``) and sets that one
+attribute. It does not copy the message, the tool arguments, or any credential
+onto a span.
 
-``content_capture`` stays ``off`` in the optimization profile, so the prompt
-itself is not exported. The id is still on the span.
+The chat profile has no run id, so it is labelled by the sentence the server
+prompt carries: ``The DeepFix chat thread id is <thread_id> and the turn id is
+<turn_id>.`` Those become ``deepfix.chat_thread_id`` and ``deepfix.chat_turn_id``.
+A turn sets one of the two label sets, never both, and the optimization labels
+keep working unchanged.
+
+``content_capture`` stays ``off`` on both profiles, so the prompt and the reply
+are not exported. The ids are still on the span.
 """
 
 from __future__ import annotations
@@ -23,14 +29,25 @@ _RUN_IN_PATH = re.compile(r"(?:^|[\\/])runs[\\/]([A-Za-z0-9][A-Za-z0-9._-]{0,127
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SECRET_ENVS = (
     "API_SERVER_KEY",
+    "HERMES_CHAT_API_SERVER_KEY",
     "OPENROUTER_API_KEY",
     "S3_SECRET_ACCESS_KEY",
     "HERMES_S3_SECRET_ACCESS_KEY",
     "LLM_API_KEY",
 )
 _ATTRIBUTE = "deepfix.run_id"
+_CHAT_THREAD_ATTRIBUTE = "deepfix.chat_thread_id"
+_CHAT_TURN_ATTRIBUTE = "deepfix.chat_turn_id"
+# The chat prompt names both ids in one sentence; either alone is not enough to
+# attribute a span, so the pair is matched together.
+_CHAT_LABELED = re.compile(
+    r"The DeepFix chat thread id is ([A-Za-z0-9][A-Za-z0-9._-]{0,127})"
+    r" and the turn id is ([A-Za-z0-9][A-Za-z0-9._-]{0,127})\b"
+)
 _run_id = ""
+_chat_labels: tuple[str, str] = ("", "")
 _attached = False
+_ATTACHED_ATTRIBUTES: tuple[str, ...] = ()
 
 
 def _scrub_text(text: str) -> str:
@@ -42,12 +59,12 @@ def _scrub_text(text: str) -> str:
 
 
 def _scrub_span(span: Any, run_id: str = "") -> None:
-    """Set the run id and strip credentials from string attributes.
+    """Set this turn's DeepFix labels and strip credentials from string attributes.
 
     hermes-otel records ``hermes.tool.command`` even when content capture is
     off. A command that contains a secret must not leave the process.
     """
-    global _run_id
+    global _run_id, _chat_labels
     try:
         present = dict(span.attributes or {})
     except Exception:
@@ -55,11 +72,12 @@ def _scrub_span(span: Any, run_id: str = "") -> None:
     chosen = run_id or _run_id or _run_id_from_attributes(present)
     if chosen:
         _run_id = chosen
+    if not chosen and _chat_labels[0]:
+        # A chat turn has no run id; its two labels are what identify it.
+        _set(span, _CHAT_THREAD_ATTRIBUTE, _chat_labels[0], present)
+        _set(span, _CHAT_TURN_ATTRIBUTE, _chat_labels[1], present)
     if chosen and _ATTRIBUTE not in present:
-        try:
-            span.set_attribute(_ATTRIBUTE, chosen)
-        except Exception:
-            pass
+        _set(span, _ATTRIBUTE, chosen, present)
     for key, value in present.items():
         if not isinstance(value, str):
             continue
@@ -72,8 +90,34 @@ def _scrub_span(span: Any, run_id: str = "") -> None:
             continue
 
 
+def _set(span: Any, key: str, value: str, present: dict[str, Any]) -> None:
+    if not value or key in present:
+        return
+    try:
+        span.set_attribute(key, value)
+    except Exception:
+        pass
+
+
+def chat_labels(thread_id: str, turn_id: str) -> tuple[str, str]:
+    """The label pair for a chat turn. Exposed so the boot test can assert it."""
+    return (_clean_label(thread_id), _clean_label(turn_id))
+
+
+def _clean_label(value: str) -> str:
+    match = _RUN_ID.match((value or "").strip())
+    return match.group(0) if match else ""
+
+
+def _chat_labels_from_text(text: str) -> tuple[str, str]:
+    found = _CHAT_LABELED.search(text or "")
+    if found is None:
+        return ("", "")
+    return (found.group(1), found.group(2))
+
+
 class _RunIdProcessor:
-    """Copy the current DeepFix run id onto spans started after it is known."""
+    """Copy this turn's DeepFix labels onto spans started after they are known."""
 
     def on_start(self, span: Any, parent_context: Any = None) -> None:
         _scrub_span(span)
@@ -96,24 +140,73 @@ def register(ctx: Any) -> None:
 
 
 def reset_state() -> None:
-    """Forget the run id. Tests call this between cases."""
-    global _run_id, _attached
+    """Forget the labels. Tests call this between cases."""
+    global _run_id, _chat_labels, _attached
     _run_id = ""
+    _chat_labels = ("", "")
     _attached = False
 
 
 def _on_turn(**kwargs: Any) -> None:
+    """Label this turn: a chat thread/turn pair, or an optimization run id.
+
+    The two never mix. A chat prompt has no run id, and an optimization prompt
+    has no thread/turn sentence, so whichever is found decides the label set.
+    """
+    global _run_id, _chat_labels
+    thread_id, turn_id = _find_chat_labels(kwargs)
+    if thread_id and turn_id:
+        _chat_labels = (thread_id, turn_id)
+        _run_id = ""
+        _attach_processor()
+        _stamp_open_spans(str(kwargs.get("session_id") or ""), "")
+        return
     found = _find_run_id(kwargs) or _marker_run_id()
     explicit = os.environ.get("DEEPFIX_RUN_ID", "").strip()
     if _acceptable(explicit):
         found = explicit
     if not found:
+        _chat_labels = ("", "")
         _attach_processor()
         return
-    global _run_id
     _run_id = found
+    _chat_labels = ("", "")
     _attach_processor()
     _stamp_open_spans(str(kwargs.get("session_id") or ""), found)
+
+
+def _find_chat_labels(kwargs: Any) -> tuple[str, str]:
+    """The chat labels on this turn, from a message or the environment."""
+    explicit_thread = os.environ.get("DEEPFIX_CHAT_THREAD_ID", "").strip()
+    explicit_turn = os.environ.get("DEEPFIX_CHAT_TURN_ID", "").strip()
+    if explicit_thread and explicit_turn:
+        return chat_labels(explicit_thread, explicit_turn)
+    return _walk_for_chat_labels(kwargs)
+
+
+def _walk_for_chat_labels(value: Any, depth: int = 0) -> tuple[str, str]:
+    """Walk the hook's keyword arguments for the labelled sentence."""
+    if depth > 6:
+        return ("", "")
+    if isinstance(value, str):
+        return _chat_labels_from_text(value)
+    found: tuple[str, str] = ("", "")
+    if isinstance(value, dict):
+        for item in value.values():
+            found = _walk_for_chat_labels(item, depth + 1)
+            if found[0] and found[1]:
+                return found
+        return found
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found = _walk_for_chat_labels(item, depth + 1)
+            if found[0] and found[1]:
+                return found
+        return found
+    content = getattr(value, "content", None)
+    if isinstance(content, str):
+        return _chat_labels_from_text(content)
+    return found
 
 
 def _stamp_open_spans(session_id: str, run_id: str, tracer: Any = None) -> None:

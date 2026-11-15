@@ -114,3 +114,16 @@ body stays `@pytest.mark.api` in `tests/test_admin_chat_routes.py`.
 - [ ] Docs updated if the prompt policy is documented anywhere user-visible
 - [ ] `uv run ruff check`, `uv run ruff format --check`, and the fast pytest suite pass
 - [ ] Committed on its own before CHAT-005 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`.
+
+`admin_chat.system_prompt(settings, thread_id=, turn_id=, digest=)` and `admin_chat.status_digest(settings, schedule)`
+are covered by `tests/test_admin_chat_prompt.py` (14 cases): the thread/turn sentence, the policy rules, the gate
+thresholds coming from settings (a change to `OPTIMIZATION_MIN_PRIMARY_DELTA` changes the prompt), determinism, the
+quoted action-block shape, five refusal cases (private path, holdout id, `run_bundle` key, credential, and the
+over-size digest), oldest-first run dropping, the "no runs yet" wording, and the untrusted delimiters around a stored
+reason. The route test asserts the digest actually reaches the upstream system message against the real stand-in.
+
+`status_digest` reads only `optimization_schedule.view()`, `champion_diff`, and `recent_runs(limit=10)`.

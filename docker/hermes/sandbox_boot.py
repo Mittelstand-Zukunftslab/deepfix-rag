@@ -60,6 +60,15 @@ MIN_API_KEY_LENGTH = 16
 CHAT_PROFILE = "chat"
 CHAT_API_PORT = 8643
 CHAT_API_KEY_ENV = "HERMES_CHAT_API_SERVER_KEY"
+# Chat is opt-in. Unset or false keeps the chat profile's gateway from running
+# and nothing listens on 8643. The gate is checked here, in the container that
+# would otherwise run the second gateway.
+CHAT_ENABLED_ENV = "HERMES_CHAT_ENABLED"
+# Empty falls back to HERMES_MODEL (D-3), resolved in ``apply_sandbox``.
+CHAT_MODEL_ENV = "HERMES_CHAT_MODEL"
+# The chat profile's own trace experiment, separate from the optimizer's (D-5).
+CHAT_EXPERIMENT_ENV = "MLFLOW_HERMES_CHAT_EXPERIMENT"
+DEFAULT_CHAT_EXPERIMENT = "deepfix_hermes_chat"
 
 # Documented approvals.deny globs for force-push and pipe-to-shell.
 # ``approvals.mode: off`` does not bypass this list.
@@ -326,7 +335,13 @@ def chat_profile_config(
     provider: str = MODEL_PROVIDER,
     model: str = "",
 ) -> dict[str, Any]:
-    """A second profile that is not the optimization agent.
+    """The chat profile: a second, standalone gateway on its own port.
+
+    ``gateway.standalone`` is what keeps the optimization gateway's
+    multiplexing default (``gateway.multiplex_profiles`` is on for this pin)
+    from serving this profile under ``/p/chat/...`` on 8642. ``apply_sandbox``
+    refuses to boot when the key is missing from the written file, so the
+    standalone contract is checked rather than assumed.
 
     Approval mode stays ``smart``. Terminal, file, and code execution are
     absent, so this profile cannot run ``deepfix``. The optimization skill
@@ -341,10 +356,43 @@ def chat_profile_config(
         "approvals": {"mode": "smart"},
         "terminal": {"backend": "local", "timeout": 180},
         "platform_toolsets": {"api_server": list(CHAT_API_TOOLSETS)},
+        "gateway": {"standalone": True},
     }
     if isinstance(config_version, int):
         config["_config_version"] = config_version
     return config
+
+
+def chat_model_id(env: Mapping[str, str]) -> str:
+    """The chat profile's model: ``HERMES_CHAT_MODEL``, else ``HERMES_MODEL``.
+
+    One resolver with three cases (set, blank, unset) and no hidden default, so
+    a deployment that never sets the chat model runs the same id the optimizer
+    uses (D-3). Both empty raises through ``model_id`` naming ``HERMES_MODEL``.
+    """
+    value = env.get(CHAT_MODEL_ENV, "").strip()
+    return value or model_id(env)
+
+
+def chat_enabled(env: Mapping[str, str]) -> bool:
+    """Whether the chat gateway may start. Unset is off, and an unknown value is off."""
+    return env.get(CHAT_ENABLED_ENV, "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def gateway_state_path(home: Path) -> Path:
+    """The bookkeeping file the profile reconciler reads for the chat profile."""
+    return home / "profiles" / CHAT_PROFILE / "gateway_state.json"
+
+
+def chat_start_command() -> list[str]:
+    """The command that starts the chat profile's own gateway.
+
+    The optimization profile is started by the image's entrypoint from its own
+    profile slot. The chat profile is a second, independent listener, so boot
+    runs ``hermes -p chat gateway run`` in the foreground under s6 rather than
+    multiplexing through 8642.
+    """
+    return ["hermes", "-p", CHAT_PROFILE, "gateway", "run"]
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -609,12 +657,20 @@ def _prepare_cli_log(home: Path) -> None:
     log_file.chmod(0o644)
 
 
+def chat_experiment_name(env: Mapping[str, str]) -> str:
+    """The chat profile's trace experiment. Never the optimizer's."""
+    value = env.get(CHAT_EXPERIMENT_ENV, "").strip() or DEFAULT_CHAT_EXPERIMENT
+    if any(char in value for char in "\n\r\x00"):
+        raise SandboxBootError(f"{CHAT_EXPERIMENT_ENV} contains a newline or NUL")
+    return value
+
+
 def hermes_otel_document(env: Mapping[str, str], experiment_id: str | None) -> dict[str, Any]:
-    """``$HERMES_HOME/hermes_otel.yaml`` for the optimization profile.
+    """``$HERMES_HOME/hermes_otel.yaml`` for one profile.
 
     ``type: mlflow`` sends traces only and sets ``x-mlflow-experiment-id``.
-    ``content_capture`` is ``off``, so prompts, responses, and tool bodies
-    are not span attributes. The chat profile does not get this file.
+    ``content_capture`` is ``off``, so prompts, responses, and tool bodies are
+    not span attributes. Each profile gets its own file and its own experiment.
     """
     tracking = mlflow_env(env)["MLFLOW_TRACKING_URI"].rstrip("/")
     backend: dict[str, Any] = {
@@ -637,10 +693,15 @@ def hermes_otel_document(env: Mapping[str, str], experiment_id: str | None) -> d
     }
 
 
-def _trace_experiment_id(env: Mapping[str, str]) -> str | None:
-    """Create ``deepfix_hermes`` when MLflow answers. A miss does not stop boot."""
+def _trace_experiment_id(
+    env: Mapping[str, str],
+    *,
+    name: str = "deepfix_hermes",
+    preset_env: str = "DEEPFIX_HERMES_EXPERIMENT_ID",
+) -> str | None:
+    """Create the trace experiment when MLflow answers. A miss does not stop boot."""
     if env.get("DEEPFIX_SKIP_TRACE_EXPERIMENT", "").strip() == "1":
-        preset = env.get("DEEPFIX_HERMES_EXPERIMENT_ID", "").strip()
+        preset = env.get(preset_env, "").strip()
         return preset or None
     raw_attempts = env.get("DEEPFIX_TRACE_EXPERIMENT_ATTEMPTS", "").strip() or "1"
     raw_delay = env.get("DEEPFIX_TRACE_EXPERIMENT_DELAY_SECONDS", "").strip() or "0"
@@ -656,13 +717,13 @@ def _trace_experiment_id(env: Mapping[str, str]) -> str | None:
     from deepfix_rag.hermes_trace_experiment import ensure_hermes_trace_experiment
 
     for attempt in range(attempts):
-        experiment_id = ensure_hermes_trace_experiment(tracking)
+        experiment_id = ensure_hermes_trace_experiment(tracking, name=name)
         if experiment_id:
             return experiment_id
         if attempt + 1 < attempts and delay > 0:
             time.sleep(delay)
     print(
-        "hermes trace experiment deepfix_hermes was not created; "
+        f"hermes trace experiment {name} was not created; "
         "restart the container once MLflow is reachable",
         file=sys.stderr,
     )
@@ -797,6 +858,8 @@ def apply_sandbox(
     base_url = model_base_url(env)
     provider = model_provider(env)
     model = model_id(env)
+    chat_model = chat_model_id(env)
+    enabled = chat_enabled(env)
     home.mkdir(parents=True, exist_ok=True)
     workspace = home / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -843,16 +906,27 @@ def apply_sandbox(
     chat_dir = home / "profiles" / CHAT_PROFILE
     chat_dir.mkdir(parents=True, exist_ok=True)
     chat_config = chat_profile_config(
-        config.get("_config_version"), base_url=base_url, provider=provider, model=model
+        config.get("_config_version"), base_url=base_url, provider=provider, model=chat_model
     )
     _dump_yaml(chat_dir / "config.yaml", chat_config)
     _chown_hermes(chat_dir / "config.yaml")
+    # The invariant D-1 buys: a chat profile that is not standalone could be
+    # served by the optimization gateway's multiplexing default. The check
+    # reads the file back, so a rejected boot leaves nothing that later starts
+    # unguarded.
+    written = _load_yaml(chat_dir / "config.yaml").get("gateway")
+    if not isinstance(written, dict) or written.get("standalone") is not True:
+        raise SandboxBootError(
+            f"profiles/{CHAT_PROFILE}/config.yaml must set gateway.standalone: true. "
+            "The chat profile may not be multiplexed onto the optimization listener."
+        )
     soul = chat_dir / "SOUL.md"
     soul.write_text(
         "# Chat profile\n\n"
-        "This profile is the future admin chat. It is not the optimization "
-        "agent. It has no terminal toolset and no file-write toolset, and it "
-        "does not receive the optimization profile's OpenRouter key.\n",
+        "This profile is the DeepFix admin chat, a standalone gateway gated on "
+        "HERMES_CHAT_ENABLED. It is not the optimization agent. It has no "
+        "terminal toolset and no file-write toolset, and it does not receive "
+        "the optimization profile's OpenRouter key.\n",
         encoding="utf-8",
     )
     soul.chmod(0o644)
@@ -866,12 +940,97 @@ def apply_sandbox(
         chat_env["API_SERVER_KEY"] = chat_key
     # Replace the file so an optimization key from an older boot cannot linger.
     _upsert_env(chat_dir / ".env", chat_env, frozenset(), replace=True)
-    state = chat_dir / "gateway_state.json"
+    # After the replace above, so the experiment id is not wiped by it.
+    _install_chat_trace_plugins(home, chat_dir, chat_config, env)
+    state = gateway_state_path(home)
     state.write_text('{"gateway_state":"stopped"}\n', encoding="utf-8")
     state.chmod(0o644)
     _chown_hermes(state)
     _chown_hermes(chat_dir)
     repair_home_ownership(home)
+    if enabled:
+        start_chat_gateway(home, env)
+
+
+def _install_chat_trace_plugins(
+    home: Path,
+    chat_dir: Path,
+    chat_config: dict[str, Any],
+    env: Mapping[str, str],
+) -> str | None:
+    """Give the chat profile the same plugins with its own experiment (D-5).
+
+    The document and the enabled list live inside ``profiles/chat``, so the two
+    profiles cannot share an experiment id, and ``content_capture`` stays off.
+    The chat profile's spans are labelled with the thread and turn ids by
+    ``deepfix-run-tag``.
+    """
+    name = chat_experiment_name(env)
+    experiment_id = _trace_experiment_id(
+        env, name=name, preset_env="DEEPFIX_HERMES_CHAT_EXPERIMENT_ID"
+    )
+    document = hermes_otel_document(env, experiment_id)
+    _dump_yaml(chat_dir / "hermes_otel.yaml", document)
+    _chown_hermes(chat_dir / "hermes_otel.yaml")
+    otel_source = _plugin_source(env, "HERMES_OTEL_PACKAGE", DEFAULT_HERMES_OTEL_PACKAGE)
+    tag_source = _plugin_source(env, "DEEPFIX_RUN_TAG_PLUGIN", DEFAULT_RUN_TAG_PLUGIN)
+    enabled_names: list[str] = []
+    plugins = chat_config.setdefault("plugins", {})
+    enabled = plugins.get("enabled")
+    if not isinstance(enabled, list):
+        enabled = []
+    # A profile-local plugin directory, so the chat profile never reads the
+    # optimization profile's home. Hermes resolves `plugins` under the profile.
+    profile_plugins = chat_dir / "plugins"
+    for source, plugin_name in (
+        (otel_source, HERMES_OTEL_PLUGIN),
+        (tag_source, RUN_TAG_PLUGIN),
+    ):
+        if not (source / "plugin.yaml").is_file():
+            continue
+        profile_plugins.mkdir(parents=True, exist_ok=True)
+        dest = profile_plugins / plugin_name
+        if not dest.exists() and not dest.is_symlink():
+            dest.symlink_to(source)
+        if plugin_name not in enabled:
+            enabled.append(plugin_name)
+        enabled_names.append(plugin_name)
+    if not enabled_names:
+        return experiment_id
+    plugins["enabled"] = enabled
+    _dump_yaml(chat_dir / "config.yaml", chat_config)
+    _chown_hermes(chat_dir / "config.yaml")
+    if experiment_id:
+        _upsert_env(
+            chat_dir / ".env",
+            {"DEEPFIX_HERMES_CHAT_EXPERIMENT_ID": experiment_id},
+            frozenset(),
+        )
+    return experiment_id
+
+
+def start_chat_gateway(home: Path, env: Mapping[str, str]) -> dict[str, Any]:
+    """Start the chat profile's gateway when, and only when, chat is enabled.
+
+    Disabled (the default) returns without touching a process: no chat gateway
+    exists, so nothing can listen on 8643 (D-1). A missing or short chat key is
+    a configuration error only when chat is on, where it raises through
+    ``validate_api_key``. The returned mapping is what the boot log records;
+    the tests assert on it instead of on a child process this VM cannot run.
+    """
+    if not chat_enabled(env):
+        return {"started": False, "command": None, "port": CHAT_API_PORT}
+    validate_api_key(env.get(CHAT_API_KEY_ENV, ""), name=CHAT_API_KEY_ENV)
+    command = chat_start_command()
+    state = gateway_state_path(home)
+    state.write_text('{"gateway_state":"running"}\n', encoding="utf-8")
+    state.chmod(0o644)
+    _chown_hermes(state)
+    print(
+        f"chat gateway: {' '.join(command)} HERMES_HOME={home} port={CHAT_API_PORT}",
+        file=sys.stderr,
+    )
+    return {"started": True, "command": command, "port": CHAT_API_PORT}
 
 
 def main() -> None:

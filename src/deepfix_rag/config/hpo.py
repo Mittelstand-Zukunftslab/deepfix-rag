@@ -182,6 +182,16 @@ class HybridSearchSpace(DenseSearchSpace):
         default_factory=lambda: [5, 10],
         description="rerank.top_n candidates, filtered to those <= the trial's top_k.",
     )
+    rerank_min_score_choices: list[float] | None = Field(
+        default=None,
+        description=(
+            "Sample rerank.min_relevance_score from this list, only when the trial turns "
+            "rerank on. None leaves it at the base config's value. The floor is on the "
+            "reranker's 0..1 relevance scale, so a list of candidate cut-offs is "
+            "meaningful; the shipped small space leaves it out because the question set "
+            "has no unanswerable rows to measure a cut-off against."
+        ),
+    )
     tune_bm25_params: bool = Field(
         default=True,
         description=(
@@ -245,6 +255,11 @@ class HybridSearchSpace(DenseSearchSpace):
             raise ValueError("rerank_choices must not be empty when it is set")
         if self.rerank_top_n_choices and any(choice < 1 for choice in self.rerank_top_n_choices):
             raise ValueError("rerank_top_n_choices must all be >= 1")
+        if self.rerank_min_score_choices is not None:
+            if not self.rerank_min_score_choices:
+                raise ValueError("rerank_min_score_choices must not be empty when it is set")
+            if any(not (0.0 <= choice <= 1.0) for choice in self.rerank_min_score_choices):
+                raise ValueError("rerank_min_score_choices must all be within 0.0 and 1.0")
         if not self.fusion_modes:
             raise ValueError("fusion_modes must contain at least one mode")
         return self
@@ -322,10 +337,17 @@ class HybridSearchSpace(DenseSearchSpace):
         enabled = bool(trial.suggest_categorical("rerank.enabled", list(self.rerank_choices)))
         if not enabled:
             return {"rerank.enabled": False}
-        return {
+        params: dict[str, Any] = {
             "rerank.enabled": True,
             "rerank.top_n": int(trial.suggest_categorical("rerank.top_n", choices)),
         }
+        if self.rerank_min_score_choices:
+            params["rerank.min_relevance_score"] = float(
+                trial.suggest_categorical(
+                    "rerank.min_relevance_score", list(self.rerank_min_score_choices)
+                )
+            )
+        return params
 
 
 class GraphSearchSpace(ChunkingSearchSpace):

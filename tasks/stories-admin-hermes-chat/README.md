@@ -93,6 +93,91 @@ Both questions that needed Fadel are settled (2026-11-14) and are decisions, not
   optimization scheduler and running whether chat is on or off. D-6 and FR-030. The function is CHAT-002's; the
   job registration is CHAT-006's; the deployed check is CHAT-012's.
 
+## Implementation status (2026-11-14)
+
+One commit per story on `feat/hermes-optimizer`, each tested and pushed before the next began.
+
+| Id | Status | Commit |
+| :--- | :--- | :--- |
+| CHAT-001 | Done | `5e38596` |
+| CHAT-002 | Done | `7c7eac0` |
+| CHAT-003 | Done | `d56bd5e` |
+| CHAT-004 | Done | `4f48162` |
+| CHAT-005 | Done | `dd29f12` |
+| CHAT-006 | Done | `d4281c8`, `e3d96b8` |
+| CHAT-007 | Done | `9f8ae9d`, `91fcddc` |
+| CHAT-008 | Done | `434ea3d` |
+| CHAT-009 | Done | `08b333d` |
+| CHAT-010 | Done | `456363a` |
+| CHAT-011 | Done | `e5444a5` |
+| CHAT-012 | **Blocked on the deployment** — operator-only; procedure in `docs/admin-hermes-chat-verification.md` | — |
+
+Each story's `## Verification note` records what ran and what could not, and why.
+
+## Amendment: the chat UI uses the Vercel AI SDK (D-7, owner request 2026-11-14)
+
+After these stories were written, the owner required the frontend to use the Vercel AI SDK, wired to Assistant UI
+through Assistant UI's official AI SDK runtime, instead of a hand-rolled SSE reader and `useExternalStoreRuntime`.
+The PRD carries the decision as **D-7**; what it changes in the stories, and what it does not:
+
+| Story | Effect |
+| :--- | :--- |
+| CHAT-003 | The browser-facing encoding is the AI SDK UI message stream (`x-vercel-ai-ui-message-stream: v1`) translated from Hermes's OpenAI `chat.completion.chunk` frames. `model`-stripping moves into that translation. The upstream call, the gate, the limits, the audit, and the terminal `deepfix.turn` information are unchanged; the turn status and actions ride as `data-*` parts. |
+| CHAT-005 | Resume speaks the same protocol, so the transport's `reconnectToStream` consumes it and no browser-side parser exists. |
+| CHAT-009 | Replaces the hand-written `admin-chat-sse.ts` reader with an AI SDK transport. The exemption in `api-boundary.test.ts` narrows to the transport module (or disappears if the transport is handed the app's own fetch). Contracts stay Zod schemas in `web/src/schemas/admin-chat.ts`. |
+| CHAT-010 | Uses `AssistantRuntimeProvider` with `useChatRuntime` from `@assistant-ui/react-ai-sdk` instead of `useExternalStoreRuntime`. The primitives, the accessibility requirements, and the disabled/misconfigured states are unchanged. |
+
+Nothing in the backend design changes: the chat gateway is still the OpenAI-compatible Hermes API, deepfix-api is
+still the only caller, and no key or model id reaches the browser.
+
+## Amendment: the LibreChat redesign (owner request 2026-11-15)
+
+The product owner judged the shipped page "not good at all" and asked for the look and behaviour of LibreChat,
+built from Assistant UI's prebuilt elements rather than hand-written markup. That is a UI change with no new
+backend contract, so it is planned as CHAT-016 … CHAT-023 and follows the same rules as the stories above: one
+story per commit, tested before the next starts, on `feat/hermes-optimizer`.
+
+| Id | Title | Depends on |
+| :--- | :--- | :--- |
+| CHAT-016 | One set of chat components for Ask and Hermes chat | — |
+| CHAT-017 | A LibreChat-style shell for the chat page | CHAT-016, CHAT-015 |
+| CHAT-018 | The Assistant UI composer | CHAT-016, CHAT-017 |
+| CHAT-019 | A welcome state with starting points | CHAT-017, CHAT-018 |
+| CHAT-020 | Messages, markdown, and the action bar | CHAT-017, CHAT-018 |
+| CHAT-021 | Action cards and run panels in the new design | CHAT-020 |
+| CHAT-022 | Dark mode and the mobile drawer | CHAT-017 … CHAT-021 |
+| CHAT-023 | Prove the redesign against a mocked backend | CHAT-017 … CHAT-022 |
+
+Four decisions are fixed by the brief and are not re-opened in a story:
+
+- **The Ask page's chat components are reused, not reimplemented.** The Ask page already renders a chat — a
+  composer bar, a markdown answer body with code blocks, a message stream, an empty state with starter prompts.
+  Those pieces move to `web/src/components/chat/` in CHAT-016 and both pages import them; the Ask page's own
+  tests pass unchanged, and a change there is a regression rather than a test update.
+- **Assistant UI's prebuilt components are the starting point, not a reference.** `thread`, `thread-list`, and the
+  `elements-*` items are installed with `npx assistant-ui@latest add …` and adapted in place, so the composer,
+  markdown renderer, message actions, and empty state come from the registry rather than from new local markup.
+- **The thread list stays the backend's.** Assistant UI's runtime thread list would put every thread on one
+  runtime, which is the shape CHAT-015 removed. The page keeps one AI SDK `Chat` per thread and draws its own list
+  from `adminChatService.threads()`, grouping by date with `date-fns`.
+- **Nothing that CHAT-013 … CHAT-015 fixed may regress**: one runtime per thread across a mid-stream switch, no
+  duplicate after reload, regenerate replaces in place through `ActionBarPrimitive.Reload` and the `regenerate`
+  flag, stop keeps the partial text, and dismissing a card starts nothing.
+
+## Implementation status of the redesign
+
+| Id | Status | Commit |
+| :--- | :--- | :--- |
+| CHAT-016 | Done | `2e18721` |
+| CHAT-017 | Done | `ff83e1f` |
+| CHAT-018 | Done | `93873c2` |
+| CHAT-019 | Done | `6bcbb9f` |
+| CHAT-020 | Done | `d76648a` |
+| CHAT-021 | Done | `eadceb1` |
+| CHAT-022 | Done | `099fdeb` |
+| better-interface review | Done, findings fixed | `c03899d` — `docs/admin-chat-interface-review.md` |
+| CHAT-023 | Done | this commit |
+
 ## Test commands
 
 Python, from the repository root:

@@ -159,3 +159,19 @@ than starting the thread and waiting — no test may sleep an hour either.
       including the `ADMIN_CHAT_AUDIT_RETENTION_DAYS` comment naming the prune and its hourly tick
 - [ ] `uv run ruff check`, `uv run ruff format --check`, the fast pytest suite, and `bun run typecheck` pass
 - [ ] Committed on its own before CHAT-007 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`.
+
+`tests/test_admin_chat_limits.py` has 18 cases: the window cap with its `Retry-After`, a second running turn, the
+global cap with no audit row, a refusal that cannot ratchet its own count, one `rate_limited` row per minute, the
+429 over HTTP, a member 403 on the audit route, the audit route with chat off and the key unset, `thread_deleted`
+with no message text, a redacted stored detail, and the seven retention-wiring cases (job options, startup tick, no
+log at zero, a raising prune, chat off, a paused schedule, no callable, and the app arming the job).
+
+Two timing notes, because a flaky assertion here is worse than none: the limiter takes `now` as an argument, and the
+one test that must see `record_audit`'s real clock pins the stored `at` before asserting.
+
+`tests/test_optimization_schedule.py`'s "one job" assertion now allows the prune job the app injects, which is the
+only change to that file.

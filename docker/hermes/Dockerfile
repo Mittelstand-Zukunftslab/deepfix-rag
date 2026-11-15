@@ -34,8 +34,9 @@
 #        cron), discord, discord_admin (this pin has no toolset named
 #        messaging), code_execution, vision, image_gen, todo, memory,
 #        session_search, clarify, kanban, computer_use, connections
-# agent.max_turns is 40. The chat profile (port 8643, not started) has no
-# terminal, file, or code_execution toolset, so it cannot run deepfix.
+# agent.max_turns is 40. The chat profile (port 8643, a standalone gateway gated
+# on HERMES_CHAT_ENABLED) has no terminal, file, or code_execution toolset, so
+# it cannot run deepfix.
 # Skills are root 0444 under /opt/deepfix/skills. skill_manage on this pin
 # edits a skill wherever it lives, including a writable external_dirs entry;
 # the mode is what blocks that. A same-name skill in the profile skills
@@ -65,9 +66,12 @@
 # python_runtime: external so it is not a workspace member, and a .pth file
 # adds /opt/deepfix/otel to the Hermes interpreter only. Boot writes
 # $HERMES_HOME/hermes_otel.yaml with type: mlflow, content_capture off, and
-# the deepfix_hermes experiment id. The chat profile does not get that file
-# or the plugin. A small deepfix-run-tag plugin stamps deepfix.run_id on the
-# spans. The OTEL exporter env vars are not set; hermes-otel owns the MLflow
+# the deepfix_hermes experiment id. The chat profile gets the same plugins with
+# its own profiles/chat/hermes_otel.yaml and its own experiment
+# (MLFLOW_HERMES_CHAT_EXPERIMENT, default deepfix_hermes_chat); content capture
+# stays off on both. A small deepfix-run-tag plugin stamps deepfix.run_id on an
+# optimization round's spans and deepfix.chat_thread_id / deepfix.chat_turn_id
+# on a chat turn's. The OTEL exporter env vars are not set; hermes-otel owns the MLflow
 # header.
 # deepfix-sync is the fixed bundle command (download input/, upload output/).
 # It is not a script the model writes. The optimization profile's S3 key is

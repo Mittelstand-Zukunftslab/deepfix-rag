@@ -3,10 +3,24 @@ import type { ReactNode } from "react";
 import { SignOutButton } from "@/features/auth/sign-out-button";
 import type { Account } from "@/schemas/auth";
 import { AppSidebar } from "./app-sidebar";
+import { useActivePath } from "@/components/common/nav-link";
+
+/**
+ * Pages that bring their own chrome.
+ *
+ * The admin chat is one: it has a header of its own (thread title, assistant
+ * label, appearance, sidebar control) and an account footer in its sidebar, so
+ * the shell's email-and-sign-out bar would be a second copy of the same thing
+ * above it.
+ */
+const OWNS_CHROME = new Set(["/admin/chat"]);
 
 export function AppShell({ children, user }: { children: ReactNode; user: Account }) {
+  const pathname = useActivePath();
+  const ownsChrome = OWNS_CHROME.has(pathname);
+
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-screen flex-col overflow-hidden bg-background md:flex-row">
       <a
         href="#content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground"
@@ -14,13 +28,15 @@ export function AppShell({ children, user }: { children: ReactNode; user: Accoun
         Skip to content
       </a>
       <AppSidebar role={user.role} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center justify-end gap-4 border-b border-border bg-card px-6">
-          <p className="min-w-0 truncate text-sm text-foreground" title={user.email}>
-            {user.email}
-          </p>
-          <SignOutButton />
-        </header>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {ownsChrome ? null : (
+          <header className="flex h-16 shrink-0 items-center justify-end gap-4 border-b border-border bg-card px-6">
+            <p className="min-w-0 truncate text-sm text-foreground" title={user.email}>
+              {user.email}
+            </p>
+            <SignOutButton />
+          </header>
+        )}
         <main id="content" className="flex min-h-0 flex-1 flex-col overflow-auto">
           {children}
         </main>

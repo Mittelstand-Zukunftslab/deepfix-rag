@@ -349,7 +349,11 @@ def test_the_scheduler_starts_once_and_shuts_down_with_the_app(
         # A re-entrant start must not add a second scheduler or a second job.
         scheduler.start()
         assert scheduler._scheduler._thread is thread
-        assert [job.id for job in scheduler._scheduler.get_jobs()] == [OPTIMIZATION_JOB_ID]
+        # The app injects the audit prune, so the scheduler owns exactly the cron
+        # run and that one hourly interval job (CHAT-006).
+        assert sorted(job.id for job in scheduler._scheduler.get_jobs()) == sorted(
+            [OPTIMIZATION_JOB_ID, PRUNE_JOB_ID]
+        )
     assert scheduler.running is False
     assert thread.is_alive() is False
 

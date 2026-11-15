@@ -40,6 +40,14 @@ retrieval:
 rerank:
   enabled: true
   top_n: 5
+  # Relevance floor, on the reranker's relevance_score scale (0..1). Calibrated
+  # 2026-11-15 on real Bundestag chunks: in-corpus questions put their best
+  # passage at 0.986-1.000 and their 5th at 0.65 or above in 10 of 12 cases,
+  # while off-corpus questions topped out at 0.172 (median 0.002). 0.2 sits above
+  # every off-corpus hit and below every in-corpus one, so a normal question
+  # keeps its passages and an unrelated one returns none. Re-measure if
+  # COHERE_MODEL changes; the absolute scale is model-specific.
+  min_relevance_score: 0.2
 generation:
   temperature: 0.0
   max_tokens: 4096

@@ -122,3 +122,17 @@ AC 6; extend it only if a shared helper is extracted, otherwise assert from the 
 - [ ] Docs updated if the action kinds are listed anywhere user-visible
 - [ ] `uv run ruff check`, `uv run ruff format --check`, the fast pytest suite, and `bun run typecheck` pass
 - [ ] Committed on its own before CHAT-008 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`.
+
+`tests/test_admin_chat_actions.py` has 20 cases: the parser's allowlist, the two-block cap, the malformed and
+unknown-kind counters, a `cancel` block requiring an existing run, the TTL round trip, the policy's quoted block
+parsing with the real parser, confirm returning the Optimization response, a double confirm 409, an expired card 409
+with `action_expired`, another admin's card 404, a member 403, a confirmed start refused while a run is running, a
+reject, the card in the terminal stream frame, a reply with no block, the source walk that proves no promotion or
+holdout access, and the shared-helper parity with Run now.
+
+`start_run_for` and `cancel_run_for` were extracted from `routes/optimization.py` in this commit, so both the
+Optimization screen and a confirmed card reach the same code path.

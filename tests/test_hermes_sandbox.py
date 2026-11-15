@@ -43,6 +43,7 @@ def _env(**overrides: str) -> dict[str, str]:
         "API_SERVER_KEY": API_KEY,
         "OPENROUTER_API_KEY": "sk-or-test",
         "HERMES_MODEL": MODEL,
+        "HERMES_CHAT_API_SERVER_KEY": CHAT_KEY,
         "S3_ENDPOINT_URL": "http://rustfs:9000",
         "S3_URI": "s3://deepfix-index/dev",
         "S3_REGION": "us-east-1",
@@ -182,7 +183,9 @@ def test_a_hermes_model_with_a_newline_is_refused(tmp_path: Path) -> None:
         boot.apply_sandbox(home, _env(HERMES_MODEL="fixture/model\ninjected"), _skills(tmp_path))
 
 
-def test_hermes_otel_is_enabled_on_the_optimization_profile_only(tmp_path: Path) -> None:
+def test_hermes_otel_is_enabled_on_both_profiles_with_separate_experiments(
+    tmp_path: Path,
+) -> None:
     home = tmp_path / "data"
     otel = tmp_path / "hermes_otel"
     tag = tmp_path / "deepfix-run-tag"
@@ -222,13 +225,26 @@ def test_hermes_otel_is_enabled_on_the_optimization_profile_only(tmp_path: Path)
     text = (home / "hermes_otel.yaml").read_text(encoding="utf-8")
     assert "scoped-secret-value" not in text
     assert API_KEY not in text
-    chat = (home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8")
-    assert "hermes_otel" not in chat
-    assert "deepfix-run-tag" not in chat
-    assert not (home / "profiles" / "chat" / "hermes_otel.yaml").exists()
+    # CHAT-011 reverses US-007's exclusion on purpose: the chat profile gets the
+    # same plugins, its own document inside profiles/chat, and its own experiment.
+    chat_document = yaml.safe_load(
+        (home / "profiles" / "chat" / "hermes_otel.yaml").read_text(encoding="utf-8")
+    )
+    assert chat_document["content_capture"] == "off"
+    assert chat_document["capture_conversation_history"] is False
+    assert chat_document["capture_sender_id"] is False
+    assert (
+        chat_document["backends"][0]["experiment_id"] != document["backends"][0]["experiment_id"]
+    )
+    chat_config = yaml.safe_load(
+        (home / "profiles" / "chat" / "config.yaml").read_text(encoding="utf-8")
+    )
+    assert "hermes_otel" in chat_config["plugins"]["enabled"]
+    assert "deepfix-run-tag" in chat_config["plugins"]["enabled"]
     dotenv = (home / ".env").read_text(encoding="utf-8")
     assert f"DEEPFIX_HERMES_EXPERIMENT_ID={document['backends'][0]['experiment_id']}" in dotenv
     chat_env = (home / "profiles" / "chat" / ".env").read_text(encoding="utf-8")
+    assert "DEEPFIX_HERMES_CHAT_EXPERIMENT_ID" in chat_env
     assert "DEEPFIX_HERMES_EXPERIMENT_ID" not in chat_env
     assert "MLFLOW_TRACKING_URI" not in chat_env
 
@@ -389,7 +405,6 @@ def test_image_locks_skills_and_records_the_toolset_names() -> None:
     assert "LLM_JUDGE_MODEL: ${LLM_JUDGE_MODEL:-}" in stack
     assert "HERMES_MODEL: ${HERMES_MODEL:-}" in stack
     assert "HERMES_MODEL_PROVIDER: ${HERMES_MODEL_PROVIDER:-openrouter}" in stack
-    assert '"5000:5000"' in stack
     assert "MLFLOW_TRACKING_USERNAME" not in stack
     assert "MLFLOW_TRACKING_PASSWORD" not in stack
     boot_text = (REPO_ROOT / "docker" / "hermes" / "sandbox_boot.py").read_text(encoding="utf-8")
@@ -448,6 +463,7 @@ def test_apply_sandbox_strips_product_key_left_in_env_file(tmp_path: Path) -> No
 
 
 def test_chat_profile_env_is_replaced(tmp_path: Path) -> None:
+    """The chat .env is rewritten, carries its own key, and never the rest."""
     home = tmp_path / "data"
     chat = home / "profiles" / "chat"
     chat.mkdir(parents=True)
@@ -456,11 +472,18 @@ def test_chat_profile_env_is_replaced(tmp_path: Path) -> None:
     )
     boot.apply_sandbox(home, _env(), _skills(tmp_path))
     text = (chat / ".env").read_text(encoding="utf-8")
+    # (a) the chat key is HERMES_CHAT_API_SERVER_KEY ...
+    assert f"API_SERVER_KEY={CHAT_KEY}" in text
+    # (b) and is not the optimization key, which stays in the optimization file.
+    assert f"API_SERVER_KEY={API_KEY}" not in text
+    optimization_env = (home / ".env").read_text(encoding="utf-8")
+    assert f"API_SERVER_KEY={API_KEY}" in optimization_env
+    # (d) no product credentials leak into the chat profile.
     assert "OPENROUTER_API_KEY" not in text
-    assert "API_SERVER_PORT=8643" in text
-    assert "API_SERVER_KEY" not in text
     assert "S3_" not in text
+    assert "LLM_API_KEY" not in text
     assert "scoped-secret-value" not in text
+    assert "API_SERVER_PORT=8643" in text
 
 
 def test_compose_hermes_is_internal_and_limited() -> None:

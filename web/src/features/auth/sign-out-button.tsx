@@ -1,9 +1,13 @@
 import { useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { authService } from "@/services/auth-service";
 
-export function SignOutButton() {
+/** The app header's sign-out, and the chat sidebar's compact one. */
+export function SignOutButton({
+  variant = "outline",
+  size,
+}: Pick<ButtonProps, "variant" | "size"> = {}) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,8 +34,9 @@ export function SignOutButton() {
       ) : null}
       <Button
         type="button"
-        variant="outline"
-        className="h-11"
+        variant={variant}
+        size={size}
+        className={size ? undefined : "h-11"}
         onClick={signOut}
         aria-busy={pending}
         disabled={pending}

@@ -115,3 +115,12 @@ redaction path is the real one.
 - [ ] Docs updated if the step-tail caps are documented in `example.env`
 - [ ] `uv run ruff check`, `uv run ruff format --check`, the fast pytest suite, and `bun run typecheck` pass
 - [ ] Committed on its own before CHAT-009 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`.
+
+`tests/test_admin_chat_runs.py` has 13 cases: newest-first listing, idempotent linking, unknown run 404, another
+admin 404, member 403, the capped and redacted step tail, the `----- output -----` cut, a 2 MB log read under the
+byte bound, an absent log giving an empty tail, the 9-path/11-operation inventory, the step log surviving a thread
+delete, the MLflow URL shape, and a pruned run row not breaking the thread.

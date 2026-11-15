@@ -11,6 +11,12 @@ An admin opens `/admin/chat` and gets a usable chat: streamed markdown replies, 
 and retry, and action cards they confirm themselves. A member sees a denied page, and a deployment with chat off
 shows an explicit disabled page that makes no chat request at all.
 
+**Amended 2026-11-14 (PRD D-7).** The page's runtime is Assistant UI's official AI SDK runtime (`useChatRuntime`
+from `@assistant-ui/react-ai-sdk`) over the Vercel AI SDK, not `useExternalStoreRuntime` over a hand-rolled
+reader. Streaming, stop, retry, and reconnect come from the AI SDK transport; the page's own work is layout,
+markdown, action cards, the run panel, and the disabled and misconfigured states. Turn status and action cards
+arrive as `data-*` parts on the same stream.
+
 ## PRD traceability
 - Related: FR-022, FR-023, FR-025, FR-026, FR-027, FR-028
 - Decisions: D-1, D-2 (disabled state and the `chat_enabled` flag), D-3 (misconfigured state), D-4 (delete
@@ -60,11 +66,13 @@ Disabled state (D-2, FR-027):
 
 Runtime and streaming:
 
-8. Given the page, when it mounts, then it uses `@assistant-ui/react` `^0.15.28` with `AssistantRuntimeProvider`
-   and `useExternalStoreRuntime`, the pattern `web/src/features/chat/chat-page.tsx` already uses, plus
-   `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`, `ThreadListPrimitive`, and `ActionBarPrimitive`.
-   `onNew` sends a turn, `onReload` sends a retry, `onCancel` aborts and records the cancel; each of the three
-   handlers exists. The verification note records that the installed 0.15.28 supports them.
+8. Given the page, when it mounts, then it uses `@assistant-ui/react` on its current 0.15 line with
+   `AssistantRuntimeProvider` and one `useChatRuntime()` from `@assistant-ui/react-ai-sdk` — Assistant UI's
+   official Vercel AI SDK runtime — plus `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`,
+   `ThreadListPrimitive`, and `ActionBarPrimitive`. There is no `useExternalStoreRuntime` and no hand-written frame
+   parser (PRD D-7). `onNew` sends a turn, `onReload` sends a retry, `onCancel` aborts and records the cancel; all
+   three come from the runtime the adapter returns, and the verification note records that the installed adapter
+   version supports them.
 9. Given a streamed reply, when frames arrive, then text appends without reloading the thread and the viewport
    follows until the admin scrolls up.
 10. Given a `hermes.tool.progress` event, when it arrives, then it renders as a collapsed step row ("Searching the
@@ -174,3 +182,18 @@ shows no chat request.
 - [ ] Browser verification recorded in a verification note appended to this file
 - [ ] `bun run typecheck`, `bun run lint`, and `bun run build` pass
 - [ ] Committed on its own before CHAT-011 starts
+
+## Verification note
+
+Implemented 2026-11-14 on `feat/hermes-optimizer`, on Assistant UI's official AI SDK runtime (PRD D-7).
+
+`web/src/test/admin-chat-page.test.tsx` (7 cases) covers the disabled state with **zero** fetch calls, the denied
+page, the misconfigured message, the Admin navigation placement (directly after Optimization, admin only), exactly
+one active item at `/admin` and at `/admin/chat`, the neighbouring-path rule, and the composer's label. The rest of
+`bun run test` passes (90 tests), as do `bun run typecheck`, `bun run lint`, and `bun run build`.
+
+`GET /admin/optimization` gained `chat_enabled` with a pytest case in `tests/test_api_optimization.py`, and the
+`status()` fixture in `web/src/test/optimization-page.test.tsx` gained the field the generated type now requires.
+
+Not done here: the browser walkthrough of J1-J4. It needs the deployment, and CHAT-012 is the story that runs it;
+the procedure is `docs/admin-hermes-chat-verification.md`.
