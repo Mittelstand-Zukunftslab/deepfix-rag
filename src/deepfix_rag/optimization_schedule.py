@@ -470,15 +470,19 @@ class OptimizationScheduler:
         is harmless and idempotent, so its misfire grace is unlimited while
         ``coalesce`` still collapses a backlog into one call.
         """
+        now = self._now()
         self._scheduler.add_job(
             self._prune,
-            IntervalTrigger(hours=PRUNE_INTERVAL_HOURS, start_date=self._now()),
+            IntervalTrigger(hours=PRUNE_INTERVAL_HOURS, start_date=now),
             id=PRUNE_JOB_ID,
             name=PRUNE_JOB_ID,
             max_instances=1,
             coalesce=True,
             misfire_grace_time=None,
             replace_existing=True,
+            # ``next_run_time`` is what makes the first run immediate: the
+            # trigger alone would only fire an hour after ``start_date``.
+            next_run_time=now,
         )
 
     def _cron_trigger(self, cron: str) -> BaseTrigger:

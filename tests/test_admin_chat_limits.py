@@ -10,18 +10,20 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
+from apscheduler.executors.debug import DebugExecutor
 from fastapi.testclient import TestClient
 import pytest
 
 from deepfix_rag import admin_chat
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.settings import Settings
+from deepfix_rag.optimization import settings_from
 from deepfix_rag.optimization_schedule import PRUNE_JOB_ID, OptimizationScheduler
 from deepfix_rag.storage import connect
 from tests.identity import IdentityIssuer
 from tests.test_admin_chat_routes import ADMIN, CHAT_KEY, MODEL, StandIn
 from tests.test_admin_chat_routes import hermes as hermes_fixture
-from tests.test_optimization_schedule import FakeClock, _tickable
+from tests.test_optimization_schedule import FakeClock, TickableScheduler, _tickable
 from tests.test_optimization_schedule import _settings as _schedule_settings
 
 pytestmark = [pytest.mark.api, pytest.mark.integration]
@@ -297,6 +299,38 @@ def test_the_prune_job_is_hourly_and_writes_one_line_only_when_it_deletes(
     lines = [r for r in caplog.records if "chat audit prune" in r.getMessage()]
     assert all("deleted=3 retention_days=14" in r.getMessage() for r in lines)
     assert len(lines) == 2
+
+
+def test_the_prune_runs_on_the_first_tick_after_start(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The startup run is immediate, not an hour later.
+
+    The FakeClock cases above tick at exactly the frozen ``now``, which hides
+    the real gap: production arms the job a few microseconds before APScheduler
+    computes its next run time, so ``IntervalTrigger(start_date=now)``'s first
+    fire lands at ``now + PRUNE_INTERVAL_HOURS``. A real clock reproduces that.
+    """
+    deleted: list[datetime] = []
+    scheduler = OptimizationScheduler(
+        _schedule_settings(tmp_path).product_db_path,
+        _schedule_settings(tmp_path).workspace_dir,
+        options_for=lambda: settings_from(_schedule_settings(tmp_path)),
+        coordinator_for=lambda: None,
+        scheduler_for=lambda: TickableScheduler(
+            timezone=timezone.utc, executors={"default": DebugExecutor()}
+        ),
+        prune_audit=lambda: deleted.append(datetime.now(timezone.utc)) or 0,
+    )
+    live = scheduler._scheduler
+    assert isinstance(live, TickableScheduler)
+    scheduler.start()
+    try:
+        with caplog.at_level("INFO", logger="DeepFix RAG Eval Runner"):
+            live.tick()
+    finally:
+        scheduler.stop()
+    assert len(deleted) == 1
 
 
 def test_a_prune_that_deletes_nothing_logs_nothing(
