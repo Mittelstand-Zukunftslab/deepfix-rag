@@ -38,9 +38,13 @@ import re
 import sqlite3
 import uuid
 
+from deepfix_rag.documents import document_filenames
 from deepfix_rag.grounding import Grounding
+from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.interactions import init_interactions
 from deepfix_rag.interactions import link_interaction as link_stored_interaction
+from deepfix_rag.pipeline import RetrievalResult
+from deepfix_rag.service import INDEX_PREPARING, displayed_limit
 from deepfix_rag.storage import connect
 
 INTERRUPTED = "Interrupted: the API restarted while this answer was in progress."
@@ -49,6 +53,48 @@ TERMINAL_STATUSES: tuple[str, ...] = ("completed", "failed", "cancelled")
 TITLE_MAX_CHARS = 120
 LIST_LIMIT = 50
 _WHITESPACE = re.compile(r"\s+")
+
+TOOL_NAME = "search_documents"
+TOOL_QUERY_MAX_CHARS = 500
+
+# The one declaration of the tool's contract (D-2). The OpenAI-style definition
+# the model receives is built from this object at import time, so the schema the
+# provider validates against and the schema the tests and the loop read cannot be
+# two different things (AC 1).
+SEARCH_DOCUMENTS_SCHEMA: dict[str, object] = {
+    "name": TOOL_NAME,
+    "description": (
+        "Search the DeepFix document corpus. Returns the ranked passages that survived the "
+        "relevance floor, with their document and score. Call it again with a better query "
+        "when the passages do not answer the question."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": TOOL_QUERY_MAX_CHARS,
+                "description": "The standalone search query, in the corpus language.",
+            },
+            "top_k": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "How many passages to return. Clamped to the window the product itself "
+                    "shows; omit it for all of them."
+                ),
+            },
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+
+SEARCH_DOCUMENTS_TOOL: dict[str, object] = {
+    "type": "function",
+    "function": SEARCH_DOCUMENTS_SCHEMA,
+}
 
 # The two reads a thread load makes, as constants so a test can assert the query
 # plan of the SQL the module actually issues rather than a copy of it (AC 4).
@@ -159,6 +205,62 @@ class Turn:
     interaction_id: str | None
     question: str | None
     answer: str | None
+
+
+@dataclass(frozen=True)
+class Passage:
+    """One retrieved chunk, as the model and the sources panel see it."""
+
+    rank: int
+    doc_id: str
+    filename: str
+    text: str
+    score: float
+    truncated: bool
+
+    def as_dict(self) -> dict[str, object]:
+        """The tool-output shape. The full text travels; ``text`` is the bounded one."""
+        return {
+            "rank": self.rank,
+            "doc_id": self.doc_id,
+            "filename": self.filename,
+            "text": self.text,
+            "score": self.score,
+            "truncated": self.truncated,
+        }
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """What ``search_documents`` returns, and what a turn stores as its hits."""
+
+    query: str
+    grounding: str
+    passages: list[Passage]
+    max_score: float
+    build_id: str | None
+    results: list[RetrievalResult]
+
+    @property
+    def empty(self) -> bool:
+        return not self.passages
+
+    def as_dict(self) -> dict[str, object]:
+        """The D-2 output object, which is also the stream's tool output."""
+        return {
+            "query": self.query,
+            "grounding": self.grounding,
+            "passages": [passage.as_dict() for passage in self.passages],
+            "max_score": self.max_score,
+        }
+
+
+class ToolInputError(ValueError):
+    """The arguments fail the declared input schema, so nothing is retrieved."""
+
+
+class IndexNotReadyError(RuntimeError):
+    """No serving index, so the tool cannot search. The route maps this to 503."""
 
 
 def _now() -> str:
@@ -513,6 +615,87 @@ def fail_interrupted_ask_turns(db_path: Path) -> int:
             (INTERRUPTED, _now()),
         )
         return int(cursor.rowcount or 0)
+
+
+async def search_documents(
+    coordinator: IndexCoordinator,
+    db_path: Path,
+    arguments: dict[str, object],
+    *,
+    max_passage_chars: int,
+    max_displayed_hits: int,
+) -> SearchResult:
+    """Run the one tool: the passages that survived the relevance floor.
+
+    It reports what ``QueryService.retrieve`` returned. The floor lives inside
+    that call (``_search_split`` → ``RAGWorkflow._ranker_split``), so nothing here
+    compares a score against ``rerank.min_relevance_score`` a second time: a
+    threshold of the tool's own would be a second contract that could drift from
+    the one the optimizer tunes (AC 4, D-6).
+
+    The one thing this adds is depth. ``QueryService.retrieve`` returns its whole
+    ranked window because ``displayed_limit`` is applied at the route; the tool
+    applies the same helper, so the model never receives more passages than the
+    Search page would show (AC 6, AC 7).
+    """
+    query = _tool_query(arguments)
+    lease = coordinator.checkout()
+    if lease is None:
+        raise IndexNotReadyError(INDEX_PREPARING)
+    try:
+        found = await lease.service.retrieve(query)
+        limit = displayed_limit(lease.service.config, max_displayed_hits)
+    finally:
+        # A raised error must not pin a build that is being replaced (AC 3).
+        coordinator.release(lease)
+    top_k = _clamped_top_k(arguments.get("top_k"), limit)
+    results = found[: min(limit, top_k)]
+    if not results:
+        return SearchResult(
+            query=query,
+            grounding=Grounding.NO_RELEVANT_SOURCES.value,
+            passages=[],
+            max_score=0.0,
+            build_id=lease.build_id,
+            results=[],
+        )
+    names = document_filenames(db_path, [result.doc_id for result in results])
+    passages = [
+        Passage(
+            rank=rank,
+            doc_id=result.doc_id,
+            filename=names.get(result.doc_id, result.doc_id),
+            text=result.text[:max_passage_chars],
+            score=float(result.score or 0.0),
+            truncated=len(result.text) > max_passage_chars,
+        )
+        for rank, result in enumerate(results, start=1)
+    ]
+    return SearchResult(
+        query=query,
+        grounding=Grounding.GROUNDED.value,
+        passages=passages,
+        max_score=max(float(result.score or 0.0) for result in results),
+        build_id=lease.build_id,
+        results=results,
+    )
+
+
+def _tool_query(arguments: dict[str, object]) -> str:
+    """The searched query, or ``ToolInputError`` when it fails the declared schema."""
+    query = arguments.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise ToolInputError("search_documents needs a non-empty query.")
+    if len(query) > TOOL_QUERY_MAX_CHARS:
+        raise ToolInputError(f"A search query must be at most {TOOL_QUERY_MAX_CHARS} characters.")
+    return query.strip()
+
+
+def _clamped_top_k(requested: object, limit: int) -> int:
+    """A requested depth inside ``[1, limit]``. Out of range is clamped, not refused (AC 7)."""
+    if isinstance(requested, bool) or not isinstance(requested, int):
+        return limit
+    return max(1, min(requested, limit))
 
 
 def _next_seq(conn: sqlite3.Connection, thread_id: str) -> int:

@@ -21,26 +21,19 @@ from deepfix_rag.api.schemas import (
     QueryRequest,
     RetrievalResponse,
 )
-from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.documents import document_filenames
 from deepfix_rag.feedback import current_votes
 from deepfix_rag.grounding import Grounding, grounding_for
 from deepfix_rag.indexing import IndexCoordinator
 from deepfix_rag.interactions import Interaction, get_interaction, record_interaction
 from deepfix_rag.pipeline import RetrievalResult
+from deepfix_rag.service import INDEX_PREPARING, displayed_limit
 from deepfix_rag.tracing import trace_request
 
 router = APIRouter(tags=["retrieval"])
 
-INDEX_PREPARING = "The index is being prepared. Try again in a minute."
 GENERATION_FAILED = "The answer could not be generated."
 NO_RELEVANT_SOURCES_ANSWER = "Nothing in these documents matches that question."
-
-
-def displayed_limit(config: RAGConfig, maximum: int) -> int:
-    """How many passages to show: retrieval depth, or rerank depth, then the display cap."""
-    depth = config.rerank.top_n if config.rerank.enabled else config.retrieval.top_k
-    return max(0, min(depth, maximum))
 
 
 def _coordinator(request: Request) -> IndexCoordinator:
