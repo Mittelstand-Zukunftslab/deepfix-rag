@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UIMessage } from "ai";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { PageHeader } from "@/components/layout/app-shell";
+import { ChatHeader } from "@/features/admin-chat/chat-header";
+import { ChatSidebar } from "@/features/admin-chat/chat-sidebar";
 import { ActionCard } from "@/features/admin-chat/action-card";
 import { ChatComposer } from "@/features/admin-chat/chat-composer";
 import { ChatThread, useChatHooks, useChatSessions } from "@/features/admin-chat/chat-session";
 import { seedMessages, type ChatHooks } from "@/features/admin-chat/chat-transport";
 import { RunPanel } from "@/features/admin-chat/run-panel";
+import { groupThreadsByDate } from "@/features/admin-chat/thread-groups";
+import { cn } from "@/lib/utils";
 import type { ChatActionCard, ChatRun, ChatThreadSummary } from "@/schemas/admin-chat";
 import { adminChatService } from "@/services/admin-chat-service";
+import { useAdminChatStore } from "@/stores/admin-chat-store";
 
 /**
  * The admin chat page.
@@ -20,10 +21,22 @@ import { adminChatService } from "@/services/admin-chat-service";
  * per thread (`chat-session.tsx`), with a transport aimed at the same-origin
  * `/api/admin/chat/completions` route the web server already proxies to FastAPI.
  * The JSON half here is the thread list, the action cards, and the run panels.
+ *
+ * The thread list is drawn from `adminChatService.threads()` rather than from
+ * Assistant UI's runtime thread list on purpose: a runtime thread list puts every
+ * conversation on one shared runtime, which is exactly the shape CHAT-015
+ * removed when it gave each thread its own `Chat`.
  */
-export function AdminChatPage({ chatEnabled }: { chatEnabled: boolean }) {
+export function AdminChatPage({
+  chatEnabled,
+  email = "",
+}: {
+  chatEnabled: boolean;
+  /** The signed-in admin, shown in the sidebar's account footer. */
+  email?: string;
+}) {
   if (!chatEnabled) return <AdminChatDisabled />;
-  return <AdminChat />;
+  return <AdminChat email={email} />;
 }
 
 export function AdminChatDisabled() {
@@ -79,14 +92,18 @@ const LOADING: ThreadState = {
   runs: [],
 };
 
-function AdminChat() {
+function AdminChat({ email }: { email: string }) {
   const [threads, setThreads] = useState<ChatThreadSummary[]>([]);
+  const [threadsLoading, setThreadsLoading] = useState(true);
   const [activeThread, setActiveThread] = useState<string | null>(null);
   const [state, setState] = useState<ThreadState>(LOADING);
   const [failure, setFailure] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const sessions = useChatSessions();
   const loaded = useRef(new Map<string, ThreadState>());
   const emptyComposer = useRef<HTMLTextAreaElement | null>(null);
+  const collapsed = useAdminChatStore((store) => store.sidebarCollapsed);
+  const toggleSidebar = useAdminChatStore((store) => store.toggleSidebar);
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -96,6 +113,8 @@ function AdminChat() {
     } catch (error) {
       setFailure(message(error));
       return [];
+    } finally {
+      setThreadsLoading(false);
     }
   }, []);
 
@@ -162,6 +181,11 @@ function AdminChat() {
       ? sessions.ensure(threadId, state.seed, hooks)
       : null;
 
+  const selectThread = useCallback((next: string) => {
+    setActiveThread(next);
+    setDrawerOpen(false);
+  }, []);
+
   const newThread = useCallback(async () => {
     try {
       const created = await adminChatService.createThread();
@@ -169,6 +193,7 @@ function AdminChat() {
       loaded.current.set(created.thread_id, fresh);
       setActiveThread(created.thread_id);
       setState(fresh);
+      setDrawerOpen(false);
       await refreshThreads();
     } catch (error) {
       setFailure(message(error));
@@ -182,7 +207,9 @@ function AdminChat() {
         sessions.drop(threadIdToDelete);
         loaded.current.delete(threadIdToDelete);
         const items = await refreshThreads();
-        setActiveThread(items[0]?.thread_id ?? null);
+        setActiveThread((current) =>
+          current === threadIdToDelete ? (items[0]?.thread_id ?? null) : current,
+        );
       } catch (error) {
         setFailure(message(error));
       }
@@ -230,67 +257,95 @@ function AdminChat() {
     return <AdminChatMisconfigured message={failure} />;
   }
 
+  const activeTitle =
+    threads.find((thread) => thread.thread_id === activeThread)?.title || "New conversation";
+  const groups = groupThreadsByDate(threads);
+  const sidebar = (
+    <ChatSidebar
+      groups={groups}
+      loading={threadsLoading}
+      activeThreadId={activeThread}
+      email={email}
+      onSelect={selectThread}
+      onNew={newThread}
+      onDelete={deleteThread}
+    />
+  );
+
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 py-10">
-      <PageHeader
-        title="Hermes chat"
-        description="Ask about this server's runs and champion, or ask the assistant to propose a run."
-      />
-      <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
-        <ThreadList
-          threads={threads}
-          active={activeThread}
-          onSelect={setActiveThread}
-          onNew={newThread}
-          onDelete={deleteThread}
+    <div className="flex h-full min-h-0 w-full">
+      <aside
+        aria-label="Conversations"
+        className={cn(
+          "hidden shrink-0 border-e border-sidebar-border transition-[width] duration-200 ease-out md:block",
+          collapsed ? "w-0 overflow-hidden border-e-0" : "w-72",
+        )}
+      >
+        {sidebar}
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <ChatHeader
+          title={activeTitle}
+          collapsed={collapsed}
+          drawerOpen={drawerOpen}
+          onToggleSidebar={() => {
+            toggleSidebar();
+            setDrawerOpen(false);
+          }}
+          onDrawerOpenChange={setDrawerOpen}
+          drawer={sidebar}
         />
-        <div className="flex flex-col gap-4">
-          {session && threadId ? (
-            <ChatThread
-              // Keying by thread is what isolates the two runtimes: switching
-              // threads unmounts one view and mounts the other, while each
-              // session's `Chat` keeps its own messages and its own stream.
-              key={threadId}
-              session={session}
-              runningTurnId={state.runningTurnId}
-              disabled={false}
-            />
-          ) : (
-            <div className="flex min-h-[32rem] flex-col gap-4">
-              <p className="text-body-md text-muted-foreground">
-                {activeThread
-                  ? "Loading this thread…"
-                  : "No messages yet. Ask a question to start."}
-              </p>
-              <ChatComposer
-                busy={false}
-                inputRef={emptyComposer}
-                onSend={() => undefined}
-                onStop={() => undefined}
-                disabled
+
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-4 py-6">
+            {session && threadId ? (
+              <ChatThread
+                // Keying by thread is what isolates the two runtimes: switching
+                // threads unmounts one view and mounts the other, while each
+                // session's `Chat` keeps its own messages and its own stream.
+                key={threadId}
+                session={session}
+                runningTurnId={state.runningTurnId}
+                disabled={false}
               />
-            </div>
-          )}
-          {state.actions.length ? (
-            <div className="flex flex-col gap-3">
-              {state.actions.map((card) => (
-                <ActionCard
-                  key={card.action_id}
-                  card={card}
-                  onConfirm={confirm}
-                  onDismiss={dismiss}
+            ) : (
+              <div className="flex min-h-[28rem] flex-1 flex-col justify-end gap-4">
+                <p className="text-body-md text-muted-foreground">
+                  {activeThread
+                    ? "Loading this thread…"
+                    : "No messages yet. Ask a question to start."}
+                </p>
+                <ChatComposer
+                  busy={false}
+                  inputRef={emptyComposer}
+                  onSend={() => undefined}
+                  onStop={() => undefined}
+                  disabled
                 />
-              ))}
-            </div>
-          ) : null}
-          {state.runs.map((run) => (
-            <RunPanel key={run.run_id} run={run} />
-          ))}
-          {failure ? (
-            <p role="alert" className="text-label-sm text-destructive">
-              {failure}
-            </p>
-          ) : null}
+              </div>
+            )}
+            {state.actions.length ? (
+              <div className="flex flex-col gap-3">
+                {state.actions.map((card) => (
+                  <ActionCard
+                    key={card.action_id}
+                    card={card}
+                    onConfirm={confirm}
+                    onDismiss={dismiss}
+                  />
+                ))}
+              </div>
+            ) : null}
+            {state.runs.map((run) => (
+              <RunPanel key={run.run_id} run={run} />
+            ))}
+            {failure ? (
+              <p role="alert" className="text-label-sm text-destructive">
+                {failure}
+              </p>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>
@@ -316,96 +371,6 @@ function mergeActions(current: ChatActionCard[], next: ChatActionCard[]): ChatAc
   const byId = new Map(current.map((card) => [card.action_id, card]));
   for (const card of next) byId.set(card.action_id, card);
   return [...byId.values()];
-}
-
-function ThreadList({
-  threads,
-  active,
-  onSelect,
-  onNew,
-  onDelete,
-}: {
-  threads: ChatThreadSummary[];
-  active: string | null;
-  onSelect: (threadId: string) => void;
-  onNew: () => Promise<void>;
-  onDelete: (threadId: string) => Promise<void>;
-}) {
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-2">
-        <CardTitle>Threads</CardTitle>
-        <Button size="sm" onClick={() => void onNew()}>
-          New chat
-        </Button>
-      </CardHeader>
-      <CardContent>
-        <ul aria-label="Chat threads" className="flex flex-col gap-1">
-          {threads.length === 0 ? (
-            <li className="text-label-sm text-muted-foreground">No threads yet.</li>
-          ) : null}
-          {threads.map((thread) => (
-            <li key={thread.thread_id} className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => onSelect(thread.thread_id)}
-                aria-current={thread.thread_id === active ? "true" : undefined}
-                className="flex-1 truncate rounded-md px-2 py-1 text-left text-label-sm hover:bg-accent"
-              >
-                {thread.title || "Untitled thread"}
-              </button>
-              {thread.last_turn_status === "running" ? <Badge>Running</Badge> : null}
-              <DeleteThreadButton thread={thread} onDelete={onDelete} />
-            </li>
-          ))}
-        </ul>
-      </CardContent>
-    </Card>
-  );
-}
-
-function DeleteThreadButton({
-  thread,
-  onDelete,
-}: {
-  thread: ChatThreadSummary;
-  onDelete: (threadId: string) => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <Button
-        size="sm"
-        variant="ghost"
-        aria-label={`Delete thread ${thread.title || "Untitled thread"}`}
-        onClick={() => setOpen(true)}
-      >
-        Delete
-      </Button>
-      {open ? (
-        <div role="dialog" aria-label="Delete this thread" className="rounded-md border p-3">
-          <p className="text-label-sm">
-            This deletes the conversation, its messages, and any pending action cards. The record of
-            any run started from it — who started it, not what was said — is kept.
-          </p>
-          <div className="mt-2 flex gap-2">
-            <Button
-              size="sm"
-              onClick={() => {
-                setOpen(false);
-                void onDelete(thread.thread_id);
-              }}
-            >
-              Delete thread
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : null}
-    </>
-  );
 }
 
 function toCard(action: {

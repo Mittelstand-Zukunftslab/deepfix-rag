@@ -30,10 +30,10 @@ export const Route = createFileRoute("/admin_/chat")({
 function AdminChatRoute() {
   const { currentUser } = Route.useRouteContext();
   if (currentUser?.role !== "admin") return <AdminChatDenied />;
-  return <AdminChatAdmin />;
+  return <AdminChatAdmin email={currentUser.email} />;
 }
 
-function AdminChatAdmin() {
+function AdminChatAdmin({ email }: { email: string }) {
   const status = useSuspenseQuery(optimizationQueryOptions());
-  return <AdminChatPage chatEnabled={status.data.chat_enabled} />;
+  return <AdminChatPage chatEnabled={status.data.chat_enabled} email={email} />;
 }
