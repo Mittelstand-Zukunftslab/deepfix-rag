@@ -31,7 +31,7 @@ Per-case labels `retrieval_miss`, `retrieval_induced_error`, `llm_reasoning_fail
 
 Skip the server when `eval --json` already points to a pathology skill and you only need `delta` from `eval --compare`. Do not install the server into the project virtualenv with `uv sync`; that mixes it with the RAG package.
 
-If `.env` already sets `DEEPFIX_SERVER_URL` to a reachable host (the template uses `https://deepfix-server.mittelstand-zukunftslab.de`), call `run-diagnostic` against that URL and do not launch a local server.
+If `.env` already sets `DEEPFIX_SERVER_URL` to a reachable host (the Compose template points at the `diagnostic-agent` service on the internal network), call `run-diagnostic` against that URL and do not launch a local server.
 
 ## Procedure
 
