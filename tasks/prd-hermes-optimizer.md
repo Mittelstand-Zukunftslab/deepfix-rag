@@ -1,5 +1,11 @@
 # PRD: Hermes Optimization Sandbox
 
+> **Status: implemented.** US-001 … US-010 are in the tree on
+> `feat/hermes-optimizer`. The Introduction below describes the state *before*
+> this PRD, when the round ran as an OpenHands child; that path is gone
+> (`d068bba`, US-010). For what the code does now, read `README.md` and
+> `src/deepfix_rag/optimization.py`.
+
 ## Introduction
 
 DeepFix optimization today is a background thread in the API process. That thread starts an OpenHands child (`scripts/openhands_runner.py` via `src/deepfix_rag/agent_process.py`), waits up to `OPTIMIZATION_RUN_TIMEOUT_HOURS` (default 3), and kills the process group on timeout. The API owns the run row, the dev/holdout split, and promotion. The agent only proposes a candidate.
@@ -492,7 +498,7 @@ The OpenHands goal judge is not reimplemented. The API already accepts or reject
 - S3: Hermes's key is a RustFS IAM user limited to `optimization/runs/*`, provisioned once as below. The root key stays on the API. The API copies the champion index into the run prefix. The chat profile does not get either key.
 - Tools: `terminal.backend: local` so commands run as `hermes` inside this container. No Docker socket, so the agent cannot start a sibling container. `approvals.mode: off` is acceptable only because the container is the sandbox. `approvals.deny` covers pipe-to-shell and force-push. The skill files are not writable.
 - Holdout and promotion: unchanged. The prompt and the S3 listing test enforce the boundary.
-- MLflow: Compose publishes port 5000 and allows the public host `deepfix-mlflow.mittelstand-zukunftslab.de`. This feature leaves that in place. Eval artifacts and the API-private Hermes log must not contain the bearer token, the OpenRouter key, or the S3 secret. The skill already forbids printing API keys.
+- MLflow: at the time of writing, Compose published port 5000 and allowed a public MLflow host, and this feature left that in place. **Superseded by `74b2329`**: MLflow and RustFS now publish no host port, the RustFS console is off, and a human reaches the MLflow UI through one Dokploy domain behind a `basicAuth` middleware. See `tasks/record-lockdown-mlflow-rustfs.md`. Eval artifacts and the API-private Hermes log must not contain the bearer token, the OpenRouter key, or the S3 secret. The skill already forbids printing API keys.
 - Egress: the terminal can open outbound connections. The intended destinations are OpenRouter, `rustfs:9000`, and `mlflow:5000`. A platform egress allowlist for those hosts is part of the Dokploy test if the platform supports it. Without it, a prompt injection can try to send the Hermes secrets out. The scoped keys limit the damage. This is called out in Open Questions rather than claimed as solved.
 
 ### Observability

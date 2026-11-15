@@ -1,5 +1,10 @@
 # PRD: Admin Hermes Chat
 
+> **Status: implemented, except the deployed verification.** CHAT-001 … CHAT-011
+> are committed on `feat/hermes-optimizer`; CHAT-012 is operator-only and still
+> open. For current behaviour read `README.md` → "Admin Hermes chat" and
+> `docs/admin-hermes-chat-verification.md`.
+
 ## Introduction
 
 The Admin section of the DeepFix web app today shows the nightly optimization schedule, the champion diff, and a table of recent runs. An admin can press **Run now** and **Cancel run**, and nothing else. Everything the agent learned during a round — why it rejected a candidate, what an HPO sweep sampled, which metric moved — is only readable by opening the run's MLflow trace or the API-private step log. Turning that into a decision takes a CLI session and an operator.

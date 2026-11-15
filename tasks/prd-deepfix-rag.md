@@ -1,5 +1,20 @@
 # Product Requirements Document (PRD): deepfix-rag
 
+> **Status: the original project PRD, partially superseded.** It records the
+> pilot's intent and is kept for history. Where it disagrees with the code, the
+> code wins. Two supersessions matter when reading it:
+>
+> - **The optimization agent is Hermes**, not OpenHands. `OPTIMIZATION_AGENT`
+>   accepts `hermes` only; see `tasks/prd-hermes-optimizer.md` and
+>   `tasks/prd-hermes-hpo-rounds.md`.
+> - **Graph RAG is optional and off the promoted path.** `retrieval.backend` still
+>   supports `graph` and `mixed` with Memgraph or FalkorDB
+>   (`compose.graphdb.yml`), but the promotion gate rejects both backends, and no
+>   API-driven round may use them. The `pageindex` / vectorless paradigm was
+>   never built.
+>
+> For current behaviour read `README.md`.
+
 **Document Version:** 1.0.0  
 **Project Title:** deepfix-rag — Autonomous Diagnosis & Hyperparameter Optimization of Retrieval Models in RAG Systems  
 **Collaboration Parties:** AI Service Center @ HPI (AISC) & Mittelstand Zukunftslab  

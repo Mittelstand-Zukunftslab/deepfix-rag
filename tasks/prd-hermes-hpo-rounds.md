@@ -1,5 +1,12 @@
 # PRD: Hermes HPO Rounds
 
+> **Status: implemented.** The shipped space is `configs/hpo_retrieval_small.yaml`,
+> the bundle carries it to the sandbox, and `.agents/skills/hpo-search/SKILL.md`
+> is the procedure a round follows. The "What the code does today" section below
+> describes the state *before* the change; `--timeout`, `--seed`, `--base-config`,
+> `--run-dir`, and the local index cache all exist now. For current behaviour read
+> `README.md` → "`deepfix hpo` details".
+
 ## Introduction
 
 DeepFix already has an Optuna-backed `deepfix hpo` command (`src/deepfix_rag/cli/hpo.py`, engine in `src/deepfix_rag/hpo.py`, schemas in `src/deepfix_rag/config/hpo.py`). The Hermes optimization sandbox, however, is contracted to **not** use it. `.agents/skills/optimization-loop/SKILL.md` and the run prompt in `src/deepfix_rag/hermes_client.py` (`optimization_instructions`) tell the agent to try **one** hand-written `mutate-config` hypothesis per round. `tasks/prd-hermes-optimizer.md` lists “turning `deepfix hpo` on inside a round” as a non-goal, and US-006 requires the skill to keep that ban.

@@ -16,18 +16,21 @@ agent: `OPTIMIZATION_AGENT` accepts `hermes` and nothing else.
 - Internal URL `http://hermes:8642`, reachable only on the Compose network.
   `HERMES_BASE_URL` defaults to that.
 - The API is the only client. The browser never talks to Hermes.
+- A second, standalone chat profile binds `http://hermes:8643` only when
+  `HERMES_CHAT_ENABLED=true`. It has no terminal, file, or code-execution
+  toolset, so it cannot run `deepfix`. See `README.md` → "Admin Hermes chat".
 
 ## Required environment
 
 | Variable | Purpose |
 | :--- | :--- |
-| `API_SERVER_KEY` | Bearer token the API sends to Hermes. At least 16 characters; placeholders are rejected. |
+| `API_SERVER_KEY` | Bearer token the API sends to the optimization gateway. At least 16 characters; placeholders are rejected. |
 | `HERMES_MODEL` | Model id the sandbox runs. Boot fails without it; there is no code default. |
 | `HERMES_MODEL_PROVIDER` | Provider segment, default `openrouter`. |
 | `HERMES_MODEL_BASE_URL` | Optional non-default OpenAI-compatible endpoint. |
 | `OPENROUTER_API_KEY` | Model calls inside the sandbox. Not the product `LLM_API_KEY`. |
 | `HERMES_S3_ACCESS_KEY_ID`, `HERMES_S3_SECRET_ACCESS_KEY` | The `hermes-optimizer` RustFS key, limited to `optimization/runs/*`. |
-| `HERMES_CHAT_API_SERVER_KEY` | Key for the stopped chat profile. Optional. |
+| `HERMES_CHAT_API_SERVER_KEY` | Bearer for the chat profile. Required only when `HERMES_CHAT_ENABLED=true`, and never the optimization key. |
 
 `LLM_API_KEY`, `RUSTFS_ACCESS_KEY`, and `RUSTFS_SECRET_KEY` must not be present
 in the Hermes environment; boot refuses to start when they are.
@@ -43,6 +46,13 @@ validation error naming the variable rather than a silently ignored value.
 Holdout, the 0.025 primary-delta rule, promotion, and the champion config. The
 sandbox writes `output/result.json` and recommends at most one candidate; it
 never promotes.
+
+## The round's shape
+
+`deepfix hpo` is allowed inside a round again, but only as **one** bounded sweep
+over the shipped query-time space, described in `tasks/prd-hermes-hpo-rounds.md`
+and `.agents/skills/hpo-search/SKILL.md`. Chunking stays a single
+`mutate-config` plus a re-index. The turn budget is `agent.max_turns: 40`.
 
 ## Removed with OpenHands
 
