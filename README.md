@@ -426,7 +426,7 @@ The operator runbook is [`docs/admin-hermes-chat-verification.md`](docs/admin-he
 | :--- | :--- | :--- | :--- |
 | `web` | `8080` | none | Routers declared in `docker-compose.yml`, host from `DEEPFIX_WEB_HOST` |
 | `backend-api` | `8000` | none | Routers declared in `docker-compose.yml`, host from `DEEPFIX_API_HOST` |
-| `mlflow` | `5000` | none | Routers declared in `docker-compose.yml`, behind basic auth |
+| `mlflow` | `5000` | none | Routers declared in `docker-compose.yml`, host from `MLFLOW_PUBLIC_HOST`, behind basic auth |
 | `rustfs` | `9000`, `9001` | none | Compose network only; the console stays off |
 
 Routing for all three is defined in `docker-compose.yml`, not in Dokploy. Each service joins `dokploy-network`, sets `traefik.docker.network`, and declares an http router (`web`, with `redirect-to-https@file`) and an https router (`websecure`, `tls.certresolver=letsencrypt`), plus `traefik.http.services.<name>.loadbalancer.server.port`. `mlflow`'s https router also carries `deepfix-mlflow-auth`. The Dokploy Domain entries for these services must be **removed**, or a second router claims the same host.
@@ -478,7 +478,7 @@ The target is Dokploy with one Compose stack on a **7.6 GB** host. Full notes: [
 - **Memory caps are ceilings, not reservations.** `hermes` 4 GB plus `cpus: "2"`, `mlflow` 2 GB, `rustfs` and `diagnostic-agent` 1 GB each, graph stores 1 GB each, `backend-api` and `web` uncapped. If memory is tight, lower the chat's appetite first (`ADMIN_CHAT_MAX_CONCURRENT_TURNS`, then the chat timeouts and prompt cap) rather than raising `hermes`.
 - **One API worker.** SQLite, the index writer, and the scheduler all assume it.
 - **Secrets live in the deployment environment.** Set the variables above as Dokploy environment variables; never commit a filled `.env`.
-- **Domains.** Nothing publishes a host port; each public route is a Traefik router. The web app has one, from Dokploy, proxying to `web:8080`. The API needs none, because the web app proxies `/api/*` itself. MLflow's router is declared in `docker-compose.yml` with the `deepfix-mlflow-auth` middleware, so it needs no Dokploy Domain entry. RustFS has none, and its console stays off. See [Published ports](#published-ports).
+- **Domains.** Nothing publishes a host port; each public route is a Traefik router declared in `docker-compose.yml`. `web`, `backend-api`, and `mlflow` each declare an http and an https router, with the host from `DEEPFIX_WEB_HOST`, `DEEPFIX_API_HOST`, and `MLFLOW_PUBLIC_HOST`; the Dokploy Domain entries for them must be removed, or a second router claims the same host. RustFS has none, and its console stays off. See [Published ports](#published-ports).
 
 ---
 
