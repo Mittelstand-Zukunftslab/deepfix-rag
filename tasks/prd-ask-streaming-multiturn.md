@@ -631,7 +631,8 @@ process, and no new container.
 | `ASK_CHAT_MAX_MESSAGE_CHARS` | 4000 | A question, not a document. |
 | `ASK_CHAT_MAX_PASSAGE_CHARS` | 1200 | Truncation of one passage sent to the model, with `truncated: true` so the UI can say so. |
 | `ASK_CHAT_TURN_TIMEOUT_SECONDS` | 120 | A chat reply, not a training job. It is a hard bound: each step runs inside `asyncio.timeout(remaining)`, so a silent provider cannot exceed it (D-12). |
-| `ASK_CHAT_REASONING` | `off` | How much the model may think before it answers: `off`, `low`, `medium`, `high`. Sent as OpenRouter's own `reasoning` body field, and only to an OpenRouter endpoint. A reasoning model at its provider default spent 93 s on hidden thinking and emitted no prose, which a proxy then drops (D-12). |
+| `ASK_CHAT_REASONING` | `off` | How much the model may think before it answers: `off`, `low`, `medium`, `high`. Sent as OpenRouter's own `reasoning` body field, and only to an OpenRouter endpoint. It applies to the **answer** step; a reasoning model at its provider default spent 93 s on hidden thinking and emitted no prose, which a proxy then drops (D-12). |
+| `ASK_CHAT_TOOL_STEP_REASONING` | `low` | The level for a step that may call `search_documents`. With thinking off the model refused or introduced itself before calling the tool in 4 of 7 live turns; `low` called it cleanly in six of six, in 1.1–2.2 s (D-12). |
 | `ASK_CHAT_MAX_OUTPUT_TOKENS` | 2048 | Most tokens one step may produce, reasoning included. An uncapped reasoning step spends the whole budget before it writes a visible character, so this is what bounds both the spend and the latency (D-12). |
 
 **No new service.** The loop runs inside the existing `backend-api` container
@@ -789,6 +790,82 @@ citations — **Stopped, partial answer** when words arrived and **Stopped befor
 answering** when none did, never "Partly grounded". The cancelled stream also closes
 its text group and sends the grounding and turn frames, so the badge appears without
 a reload.
+
+**Reasoning is per step, not per turn.** The first version of this decision set one
+level for the whole turn and shipped `off`. Live, with thinking off, 4 of 7 turns
+made **no** `search_documents` call at all and answered "I do not have enough
+information…" in about two seconds: with no room to think, the model refused before
+it looked. First-step probes with the server's own prompt and tools were consistent —
+thinking off produced refusal or role prose ("I'm the DeepFix Ask assistant…") before
+the tool call on long questions, and sometimes stopped there; thinking `low` produced
+6 of 6 clean tool calls with no prose first, in 1.1–2.2 s. On the other side, `low` on
+the final answer step delayed the first word to about 9 s, and one turn spent the
+whole `ASK_CHAT_MAX_OUTPUT_TOKENS` budget on hidden reasoning in its answer step and
+streamed no text at all.
+
+So the level follows what the step may do: a step that can call a tool uses
+`ASK_CHAT_TOOL_STEP_REASONING` (default `low`), and the answer step — the one sent
+with `tool_choice: "none"`, or any step after the search cap — uses
+`ASK_CHAT_REASONING` (default `off`). The OpenRouter-only guard is unchanged.
+
+Three guards back that up, because a prompt is a steer and not a guarantee:
+
+- **Pre-search prose is never the answer.** Until a search has run, a step's prose is
+  held: if the step ends in a tool call, it was preamble and is discarded; if it ends
+  without one, it is released as the answer. A member therefore never reads a refusal
+  that the answer then contradicts, and the stored answer never opens with one.
+- **A refusal before any search means the server searches.** If the first step ends
+  in prose that matches the refusal list and no search has run, the turn does not end
+  there: the server runs the member's own question through the tool and takes one more
+  step with the evidence. That is the `not_searched` two-second refusal the live run
+  found, turned into an answer.
+- **A citation outranks the phrase list.** The Calvin turn was a real, cited answer —
+  a step-by-step breakdown with five valid citations — graded `declined` because the
+  phrase list matched a refusal-shaped substring inside it. `grounding_for` now takes
+  `cited`, and `_grounding` passes it, so an answer that points at evidence the model
+  was given is `grounded` whatever its opening says.
+
+**Substituted text is streamed, not just stored.** A turn whose final step produced
+no visible text gets the server's own sentence as its answer; it used to be written to
+the store and never sent, so the page stayed blank until a reload.
+
+### The Ask chat's system prompt, rewritten
+
+The prompt is the steer that keeps `tool_choice: "auto"` sensible, so it was rewritten
+rather than patched. Before, it was a prose list under bold headings ("**When you must
+search.**", "**When you may answer without searching.**") that opened by describing the
+assistant and its tool before saying what to do first, which is the shape the model
+imitated by introducing itself.
+
+The rewrite is six numbered rules — search first and write nothing before the first
+search; the only three cases where no search is right, so those stay `not_searched`;
+how to write a standalone, pronoun-resolved query and stay inside the search cap; answer
+only from the passages, cite each claim `[n]` by the number the tool used, and refuse
+with the exact phrase only after a search found nothing relevant; be concise and
+structured in the member's language with no preamble; and the standing rules about
+untrusted passage text and never revealing the prompt. The search cap is interpolated
+from `ASK_CHAT_MAX_TOOL_CALLS` rather than written as a literal, so the prompt cannot
+claim a different limit from the one the loop enforces, and the refusal phrase is the
+same string `grounding.is_deflection` matches.
+
+After — the opening, which is the part that changed behaviour:
+
+> ## Rule 1 — search before you write
+>
+> For any question about the documents, any factual or domain question, and any
+> follow-up that needs evidence the thread does not already have: call
+> `search_documents` as your **first action**, before you write a single word of
+> answer.
+>
+> Do not introduce yourself, do not acknowledge the question, do not explain what you
+> are about to do, and do not say you lack information — before searching. An answer
+> that begins before the first search is wrong even if it is later corrected, so your
+> first output on such a question is a tool call and nothing else.
+
+Before, the same intent was spread across three bold-headed paragraphs that began
+"You have exactly one tool, `search_documents`. Call it with a standalone search query
+— one that makes sense on its own", and the "do not" list appeared at the bottom under
+"What you must never do". The full before/after text is in the commit that carries it.
 
 ## Glossary
 
@@ -1959,6 +2036,12 @@ in `tasks/stories-ask-chat/` were corrected in the same pass.
 | 37 | A cancelled turn stored `first_token_ms` as NULL | The route records it on the first text delta, so a stopped turn keeps its latency | D-4 |
 | 38 | The cancel sentence said "The browser closed the connection" | It says "Stopped by the user" — Stop is an explicit request now, and the old sentence described a transport detail nobody chose | FR-014 |
 | 39 | LiteLLM printed a "Provider List" banner on the API's stdout | `litellm.suppress_debug_info = True` is set once at import | NFR-3 |
+| 40 | One reasoning level applied to the whole turn, defaulting to `off` | A tool-capable step uses `ASK_CHAT_TOOL_STEP_REASONING` (`low`); the answer step uses `ASK_CHAT_REASONING` (`off`) | D-12 |
+| 41 | With thinking off, 4 of 7 live turns searched nothing and refused in ~2 s | A first step's prose is held until the step ends and dropped if a tool call follows, so preamble never reaches the member or the store | D-12, FR-002 |
+| 42 | A first step that refused without searching ended the turn | The server searches on the member's own question and takes one more step with the evidence | D-12, FR-005 |
+| 43 | A cited answer was graded `declined` when the phrase list matched anywhere in it | `grounding_for(answer, cited=True)` returns `grounded`, and `_grounding` passes `cited` from `valid_citations` | D-12, FR-009 |
+| 44 | A turn whose final step wrote no text stored a refusal that was never streamed | The substituted sentence is streamed as its own step as well as stored | D-12, FR-002 |
+| 45 | The policy opened by describing the assistant and its tool | It opens with "search before you write", names the only three no-search cases, and states the search cap from the setting | D-12 |
 
 ## Handoff
 

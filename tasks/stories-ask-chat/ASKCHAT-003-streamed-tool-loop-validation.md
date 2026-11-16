@@ -149,3 +149,24 @@ One, and it is a budget defect rather than a correctness one: five searches and
    "no_relevant_sources"` with no passages. It is never stored — only real searches
    contribute hits — but a reader of the stream sees a result that does not fit the
    D-2 shape exactly. It is deliberately distinguishable by its `limit_reached` flag.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after a live run with reasoning off, where 4 of 7 turns searched nothing
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 2 allowed a step to write prose before it searched | AC 18a holds the first step's prose and drops it when a tool call follows | With thinking off the model opened with a refusal or role prose and sometimes stopped there. A member read a refusal the answer then contradicted, and it was stored as the answer's opening |
+| 2 | Nothing covered a first step that refused without searching | AC 18a requires the server to search on the member's own question and take one more step | That was the whole failure: a `not_searched` refusal in two seconds, from a turn that never looked |
+| 3 | A substituted answer was only stored | AC 18b requires it to be streamed too | One turn stored a 76-character fallback and streamed nothing; the page stayed blank until a reload |
+| 4 | The policy was prose under bold headings that described the assistant first | AC 18c requires the search-before-writing rule first and the search cap from the setting | The prompt's shape was imitated by the model, which introduced itself before searching |
+
+### Blockers
+
+One: the product answered 4 of 7 real questions with a refusal that never searched.
+
+### Should-fix (applied)
+
+1. Reasoning is per step. One level for the whole turn could not be right: thinking
+   off broke tool calling, and thinking on delayed the answer's first word.

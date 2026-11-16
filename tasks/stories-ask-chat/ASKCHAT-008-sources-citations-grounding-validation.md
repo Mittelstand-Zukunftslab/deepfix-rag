@@ -131,3 +131,16 @@ unreadable as evidence, which is most of them.
    after an answered question still shows the earlier answer's passages, which is
    exactly how the reported thread kept saying "Partly grounded". No new server
    field was needed.
+
+## Post-implementation validation, fifth pass (2026-11-16)
+
+- Validated: after a live turn that cited five passages was graded `declined`
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | Grounding was decided by the phrase list alone once a search had run | AC 13a: a valid citation makes the answer **Grounded**, whatever the phrase list matches | The phrase list matches substrings, so a real, cited answer that framed itself — or qualified one part of the question — was reported as a refusal. `grounding_for` now takes `cited`, and `_grounding` passes it from `valid_citations` |
+
+### Blockers
+
+One: correct answers were being reported to members as failures.

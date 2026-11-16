@@ -106,28 +106,40 @@ partial text is gone, that is a defect, not a finding. If the badge reads **Part
 **Stop is not the same as leaving the page.** A closed socket used to cancel the turn, which meant a reload mid-answer
 lost the reply; section 4 covers that, and it no longer stops the work.
 
-## 2a. How long the first word takes (AC 6b)
+## 2a. How long the first word takes, and whether it searched (AC 6b)
 
-This is the check that found the 93-second silence. Ask a question the corpus answers, with the browser's network
-panel open, and record when the first *visible character* arrives — not when the response starts.
+This is the check that found the 93-second silence, and the one that found the model refusing before it looked. Ask a
+question the corpus answers — **a long one**, since the short ones passed even when the long ones failed — with the
+browser's network panel open, and record when the first *visible character* arrives; not when the response starts.
 
 | Observation | Expected | Result |
 | :--- | :--- | :--- |
+| The first action | a `search_documents` call — no prose before it, no self-introduction, no refusal | NOT RUN |
 | Time to first visible character | a few seconds, not tens of seconds | NOT RUN |
 | **Thinking…** shown while the model is silent | yes, and it disappears when the first word arrives | NOT RUN |
 | Any silent gap longer than 15 s on the wire | none — `: keepalive` comments fill it | NOT RUN |
 | Time to the finished answer | record it | NOT RUN |
+| An answer that searched and cited | graded **Grounded**, never "Not found in the documents" | NOT RUN |
+
+Run it several times: the failure this catches was intermittent — 4 of 7 turns — and a single passing turn says
+nothing.
 
 ```bash
-# What the turn actually recorded, and how it was allowed to think.
-docker compose exec backend-api sh -c 'env | grep -E "ASK_CHAT_(REASONING|MAX_OUTPUT_TOKENS|TURN_TIMEOUT)"'
+# What the turn actually recorded, and how each step was allowed to think.
+docker compose exec backend-api sh -c 'env | grep -E "ASK_CHAT_(REASONING|TOOL_STEP_REASONING|MAX_OUTPUT_TOKENS|TURN_TIMEOUT)"'
 sqlite3 /data/product/product.db \
-  "SELECT turn_id, status, first_token_ms, error FROM ask_chat_turns ORDER BY started_at DESC LIMIT 1;"
+  "SELECT turn_id, status, grounding, first_token_ms, length(retrieval_query) AS searched, error \
+   FROM ask_chat_turns ORDER BY started_at DESC LIMIT 5;"
 ```
 
-`ASK_CHAT_REASONING=off` and `ASK_CHAT_MAX_OUTPUT_TOKENS=2048` are the defaults, and `first_token_ms` is the measured
-number to compare across a change. A gap over about 100 s would also be dropped by Cloudflare, so a long silence is both
-a latency defect and a truncated answer waiting to happen (D-12).
+`ASK_CHAT_REASONING=off` (the answer step) and `ASK_CHAT_TOOL_STEP_REASONING=low` (a step that may call the tool) are
+the defaults, with `ASK_CHAT_MAX_OUTPUT_TOKENS=2048`. A turn with `first_token_ms` far above the searches' duration, or
+`grounding` reading `declined` on an answer with citations, is the defect those settings exist to prevent. A gap over
+about 100 s would also be dropped by Cloudflare, so a long silence is both a latency defect and a truncated answer
+waiting to happen (D-12).
+
+If one step's hidden reasoning consumes the whole output budget, raise `ASK_CHAT_MAX_OUTPUT_TOKENS` — reasoning tokens
+count against it — before considering a higher reasoning level, which delays the first word instead.
 
 ## 3. A follow-up, and what the export asks (AC 5)
 

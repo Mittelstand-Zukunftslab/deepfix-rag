@@ -75,3 +75,18 @@ One: a turn could look hung for a minute and a half while a proxy prepared to dr
 1. The settings test enumerates every `ASK_CHAT_*` name, so a setting that reaches
    `Settings` but not Compose or `example.env` fails CI. It caught both new names in
    this change, which is the behaviour it exists for.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after a live run showed one reasoning level cannot serve both steps
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 1 named one reasoning setting | AC 1 names `ASK_CHAT_REASONING` (answer step, `off`) and `ASK_CHAT_TOOL_STEP_REASONING` (tool-capable step, `low`) | Thinking off made the model refuse before searching; thinking `low` on the answer step delayed the first word to ~9 s and once consumed the whole output budget. The two steps need opposite settings |
+
+### Should-fix (applied)
+
+1. The settings test enumerates every `ASK_CHAT_*` name and requires each on Settings,
+   Compose and `example.env` with matching defaults. It caught the new name here, as
+   it did the previous two.
