@@ -234,13 +234,18 @@ Set the window to about 630px wide (or 200% zoom on a 1260px window) with a thre
 | Panel header | `N passages` is not clipped | NOT RUN |
 
 Then the smallest case, which a first pass at this missed: **250% zoom on a 1280×800 window** — about 512×320 CSS
-pixels. This is where the chat column collapsed to roughly 48 px and the composer's hint drew over the sources heading.
+pixels. This is where the chat column collapsed to roughly 48 px, the composer's hint was clipped at the bottom edge,
+and the stacked sources could not be scrolled to at all.
+
+The scroll container is `AppShell`'s `<main>`, not the page and not the window: the shell is `h-screen
+overflow-hidden`, so anything the page clips itself can never be scrolled by anything. Check that the **page scrolls**
+and that the sources arrive, rather than that a window scrollbar moves.
 
 | Observation | Expected | Result |
 | :--- | :--- | :--- |
 | The chat column | keeps a usable height — the conversation and the composer both legible, not collapsed | NOT RUN |
-| The footer hint and the Regenerate link | not overlapping each other or the **Sources** heading | NOT RUN |
-| Scrolling | the **page** scrolls, so the sources are reachable below the chat rather than squeezing it | NOT RUN |
+| The footer hint and the Regenerate link | not overlapping each other or the **Sources** heading, and not clipped at the bottom edge | NOT RUN |
+| Scrolling to the bottom | the **Sources** panel and its heading come into view; the page scrolls rather than the chat being squeezed | NOT RUN |
 | A horizontal scrollbar anywhere | none | NOT RUN |
 | Inside the sources panel | only its passage list scrolls; the **Sources** heading stays visible | NOT RUN |
 
@@ -249,7 +254,7 @@ Then widen to a normal desktop width:
 | Observation | Expected | Result |
 | :--- | :--- | :--- |
 | The layout | side by side, not stacked | NOT RUN |
-| The page | does **not** scroll; the columns fill the viewport | NOT RUN |
+| The page | does **not** scroll; the columns fill the viewport and scroll internally | NOT RUN |
 | A horizontal scrollbar in the sources panel | none | NOT RUN |
 | Each card's score (`0.xxx`) | fully visible at the trailing edge | NOT RUN |
 | A long filename | ellipsised, with the full name in its `title` | NOT RUN |

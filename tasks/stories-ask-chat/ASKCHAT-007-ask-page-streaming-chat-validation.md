@@ -115,3 +115,19 @@ width, and a reload mid-answer showed a badge for an answer that was not on scre
 
 Two, both visible in the recheck: a badge that contradicted the member's own action,
 and a layout that stacked correctly but left no chat.
+
+## Post-implementation validation, fifth pass (2026-11-16)
+
+- Validated: after a browser recheck of the authenticated page at 250% zoom
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 7d did not say where the badge's text comes from | AC 7d requires it from the **newest turn's stored answer**, with the live message used only while a turn is `running` | A turn stopped before its first word seeds no assistant message, so reading the newest message found the previous answer's text and badged the empty turn "Stopped, partial answer" after a reload |
+| 2 | AC 7c said "the page scrolls", without saying which container | AC 7c names `AppShell`'s `<main>` and requires every clip in the page to be `lg:`-scoped | The page kept an unconditional `overflow-hidden`, so `<main>` had nothing to scroll and the stacked sources could never be reached. The previous pass verified this in a harness that rendered the page alone, which cannot see the shell |
+| 3 | Nothing covered the reasoning note after a stop | AC 7d requires "Thinking…" to clear when Stop is pressed | It lingered about two seconds, until the thread re-read returned |
+
+### Blockers
+
+All three were visible in the recheck; two of them were only visible because the
+recheck used the authenticated route rather than a harness.

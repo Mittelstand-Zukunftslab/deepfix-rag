@@ -799,6 +799,25 @@ turn `running`, and the badge then fell back to the grounding verdict and read
 when the turn has no verdict at all — a turn stopped before its first word has none,
 and requiring one left the header blank after a reload.
 
+Both of those are about the **newest turn**, and "newest" is the whole difficulty.
+The text a badge reads must come from the newest turn's stored answer, never from the
+newest assistant message that happens to have words in it: a turn stopped before its
+first word seeds no message, so looking for the newest message found the *previous*
+turn's answer and badged a stopped-empty turn "Stopped, partial answer" after a
+reload. The stored answer is the authority once a turn has settled; the live message
+is only used while `status` is `running`, when the store is behind it.
+
+**The page lives inside the shell, and the shell is the scroll container.** The
+authenticated layout is `AppShell`: `h-screen overflow-hidden`, a header, and a
+`<main>` that is `overflow-auto`. So an Ask page that clips its own content can never
+be scrolled by anything — `<main>` has no overflowing child to scroll. Below `lg`
+every clip in the page is `lg:`-scoped, the page grows to its content, and `<main>`
+scrolls the stacked sources into view; at `lg` and up the page takes the viewport
+height and the columns scroll internally. A layout harness that renders the page
+alone will not reproduce this, because the container is the shell — which is why the
+fix is verified through the real `AppShell` and why the chain's properties are
+asserted as source text rather than geometry.
+
 **Reasoning is per step, not per turn.** The first version of this decision set one
 level for the whole turn and shipped `off`. Live, with thinking off, 4 of 7 turns
 made **no** `search_documents` call at all and answered "I do not have enough
@@ -2053,6 +2072,9 @@ in `tasks/stories-ask-chat/` were corrected in the same pass.
 | 46 | Right after Stop the badge still read "Grounded" until a reload | The member's Stop is recorded when they press it, and the badge reads that before the store settles the row | D-10, FR-014 |
 | 47 | After a reload, a turn stopped before its first word had no badge at all | The badge is drawn from the stored status even when the turn has no verdict | D-10, FR-014 |
 | 48 | At ~512×320 the chat column shrank to ~48 px and the composer hint drew over the sources heading | The chat column keeps a minimum height and the page scrolls instead of squeezing; the stacked panel is capped, so only its list scrolls | FR-030 |
+| 49 | A turn stopped before its first word badge "Stopped, partial answer" after a reload when the previous turn was answered | The badge's text comes from the **newest turn**, from the store, not from the newest message that happens to have text | D-10, FR-014 |
+| 50 | The page kept an unconditional `overflow-hidden` in its row, so the shell's `<main>` had nothing to scroll and the stacked sources were unreachable | Every clip in the page is `lg:`-scoped, so below `lg` the page grows and `AppShell`'s `<main>` scrolls it | FR-030 |
+| 51 | "Thinking…" lingered about two seconds after Stop | The note is cleared when Stop is pressed, not when the thread re-read returns | D-12 |
 
 ## Handoff
 
