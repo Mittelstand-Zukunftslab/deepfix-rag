@@ -1965,12 +1965,18 @@
         "type": "object"
       },
       "LegacySessionRequest": {
-        "description": "One session from the browser's old localStorage sessions.",
+        "description": "One session from the browser's old localStorage sessions.\n\n``createdAt`` and ``updatedAt`` are accepted as **either** an ISO string or a\nmillisecond epoch number, because the retired page wrote ``Date.now()`` values\nand a strict string field rejected every real payload with a 422 — which reached\nthe member as \"your earlier conversations could not be carried over\". The store\nonly reads them as display timestamps, so both forms are normalised to a string.",
         "properties": {
           "createdAt": {
             "anyOf": [
               {
                 "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
               },
               {
                 "type": "null"
@@ -1999,6 +2005,12 @@
             "anyOf": [
               {
                 "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
               },
               {
                 "type": "null"

@@ -10,18 +10,23 @@ import {
 /**
  * The one badge an answer card shows.
  *
- * It is chosen by the backend's grounding value and, when that value is
- * `grounded`, by whether the answer cited a passage. `partly_grounded` is a
- * rendered state rather than a stored one (D-10): the server keeps three values.
+ * It is chosen by the backend's grounding value, and for a grounded answer by
+ * whether it cited a passage **and** whether the turn searched at all: a reused
+ * answer has no markers of its own and no search behind it, so it is not "partly
+ * grounded" — it points at evidence that is already on screen. Both are rendered
+ * states over one stored value (D-10), so the server keeps sending `grounded`.
  */
 export function GroundingBadge({
   grounding,
   citations = [],
+  searched = true,
 }: {
   grounding: Grounding;
   citations?: { marker: number; rank: number; doc_id: string }[];
+  /** Whether this turn ran a search. A reuse turn did not, so it has no passages. */
+  searched?: boolean;
 }) {
-  const state: GroundingBadgeState = badgeState(grounding, citations);
+  const state: GroundingBadgeState = badgeState(grounding, citations, searched);
   const badge = GROUNDING_BADGE[state];
   return (
     <Badge

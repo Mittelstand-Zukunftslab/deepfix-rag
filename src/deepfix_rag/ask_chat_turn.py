@@ -340,8 +340,19 @@ async def run_turn(
         at_limit = searches_run >= settings.ASK_CHAT_MAX_TOOL_CALLS
         yield chat_stream.step_start_part()
         text_id = f"step-{step_index}-text"
-        yield chat_stream.text_start(text_id)
+        # The text group is opened on the step's first prose, not here: a step that
+        # only calls a tool produces no prose, and an empty `text-start`/`text-end`
+        # pair makes the runtime draw an empty bubble under the question.
+        text_open = False
         step = _Step()
+
+        def open_text() -> dict[str, Any] | None:
+            nonlocal text_open
+            if text_open:
+                return None
+            text_open = True
+            return chat_stream.text_start(text_id)
+
         try:
             async for chunk in _step_chunks(
                 settings,
@@ -355,6 +366,9 @@ async def run_turn(
                 delta = _first_delta(chunk)
                 content = delta.get("content")
                 if isinstance(content, str) and content:
+                    opening = open_text()
+                    if opening is not None:
+                        yield opening
                     step.text += content
                     collected.append(content)
                     if first_token_ms is None:
@@ -389,7 +403,8 @@ async def run_turn(
                         "content": passage_block(call.result),
                     }
                 )
-        yield chat_stream.text_end(text_id)
+        if text_open:
+            yield chat_stream.text_end(text_id)
         yield chat_stream.step_finish_part()
         step_index += 1
 

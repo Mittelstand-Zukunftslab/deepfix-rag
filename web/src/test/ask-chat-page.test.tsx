@@ -33,6 +33,27 @@ function streamResponse(chunks: string[], gate?: Promise<void>): Response {
   return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
 }
 
+/**
+ * A stream that keeps writing after its first words and never closes — what a
+ * provider looks like while it is still answering. Stop has to cancel that from
+ * the client side, which is the case the reported bug happened in.
+ */
+function openStream(words: string[], turnId: string): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const opening = [
+        frame({ type: "start", messageId: turnId }),
+        frame({ type: "start-step" }),
+        frame({ type: "text-start", id: "s" }),
+        ...words.map((delta) => frame({ type: "text-delta", id: "s", delta })),
+      ];
+      for (const chunk of opening) controller.enqueue(encoder.encode(chunk));
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -46,6 +67,17 @@ const THREAD = {
   created_at: "2026-11-15T00:00:00+00:00",
   updated_at: "2026-11-15T00:00:01+00:00",
 };
+
+const PASSAGES = [
+  {
+    rank: 1,
+    doc_id: "doc_de_001",
+    filename: "stgb_315c.txt",
+    text: "Gemäß § 315c StGB wird die Trunkenheitsfahrt bestraft.",
+    score: 0.83,
+    truncated: false,
+  },
+];
 
 const STORED_TURN: AskTurn = {
   turn_id: "turn-1",
@@ -184,26 +216,94 @@ describe("the Ask page", () => {
     expect(await screen.findByText(/kommt/)).toBeTruthy();
   });
 
-  it("pressing Stop leaves the partial text and re-enables the composer", async () => {
-    let release: () => void = () => undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+  it("pressing Stop keeps the partial answer and the sources it had found", async () => {
+    // A real provider is still writing when Stop lands, so the stream never
+    // closes on its own — which is what leaves the answer's text part `streaming`
+    // and, before the fix, blanked the message and its evidence from the screen.
+    const stoppedTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-10",
+      status: "cancelled" as const,
+      // Deliberately not what the stream carried: the assertion below proves the
+      // text came from the store, which is the path Stop takes.
+      answer: "Ein halber Satz aus dem Speicher.",
+      grounding: "grounded" as const,
+      citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+      passages: PASSAGES,
+      retrieval_query: "Trunkenheitsfahrt",
+    };
     stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [] } }, () =>
-      streamResponse(answerFrames("turn-10", ["Ein ", "halber ", "Satz."]), gate),
+      openStream(["Ein ", "halber ", "Satz."], "turn-10"),
     );
+    // The first read is the empty thread the page opens; after the stop the store
+    // holds the cancelled turn with its partial text and passages, and that is what
+    // the page re-reads.
+    let reads = 0;
+    vi.spyOn(askChatService, "getThread").mockImplementation(async () => {
+      reads += 1;
+      return (
+        reads === 1 ? { thread: THREAD, turns: [] } : { thread: THREAD, turns: [stoppedTurn] }
+      ) as never;
+    });
     renderPage(<AskPage indexReady />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
     fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
       target: { value: "Lange Frage" },
     });
     fireEvent.submit(screen.getByRole("textbox", { name: "Ask" }).closest("form")!);
+    // The stop lands mid-answer — the reported case, not a stop before anything
+    // arrived.
+    await screen.findByText(/Ein/);
     const stop = await screen.findByRole("button", { name: "Stop generating" });
     fireEvent.click(stop);
-    release();
     // The composer is usable again and the page does not error.
     await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Stop generating" })).toBeNull();
+    // The answer the member had read is on screen from the store, and so is its
+    // evidence: the sources panel is rebuilt from the turn's passages.
+    await waitFor(() => {
+      expect(screen.getByText(/aus dem Speicher/)).toBeTruthy();
+    });
+    expect(screen.getByRole("heading", { name: "Sources" })).toBeTruthy();
+    // A cancelled turn that searched is grounded, not "Partly grounded" for an
+    // empty view: the badge says what the turn reached.
+    expect(screen.queryByText("Partly grounded")).toBeNull();
+  });
+
+  it("calls a thanks after a grounded answer reused evidence, not partly grounded", async () => {
+    // The reported thread: a grounded answer, then "Thanks!". The second turn
+    // searched nothing and cited nothing, so nothing about it is missing — but the
+    // first answer's passages are still on screen, and the thread-wide passages
+    // alone cannot tell the two turns apart.
+    const firstTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-1",
+      question: "Ist eine Trunkenheitsfahrt strafbar?",
+      answer: "Die Trunkenheitsfahrt ist strafbar [1].",
+      citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+      passages: PASSAGES,
+      retrieval_query: "Trunkenheitsfahrt strafbar",
+    };
+    const thanks = {
+      ...STORED_TURN,
+      turn_id: "turn-2",
+      seq: 2,
+      question: "Thanks!",
+      answer: "Gern geschehen.",
+      grounding: "grounded" as const,
+      citations: [],
+      passages: [],
+      retrieval_query: null,
+      interaction_id: "i2",
+    };
+    stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [firstTurn, thanks] } }, () =>
+      streamResponse(answerFrames()),
+    );
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => {
+      expect(screen.getByText("Reused earlier evidence")).toBeTruthy();
+    });
+    expect(screen.queryByText("Partly grounded")).toBeNull();
   });
 
   it("lists the server's conversations and sends rename and delete to the right routes", async () => {
@@ -337,5 +437,77 @@ describe("the Ask page", () => {
     expect(
       screen.getAllByText("The index is being prepared. Try again in a minute.").length,
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("what a reloaded or stopped answer shows", () => {
+  it("keeps a stored answer's citations clickable after a reload", async () => {
+    // A stored answer carries its own citations. Handing every message the newest
+    // verdict made an older answer's markers render as raw glyphs — the box, the
+    // number, another box — with no control to press.
+    const firstTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-1",
+      question: "Erste Frage",
+      answer: "Die erste Antwort [1].",
+      citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+      passages: PASSAGES,
+    };
+    const secondTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-2",
+      seq: 2,
+      question: "Zweite Frage",
+      answer: "Die zweite Antwort [2].",
+      citations: [{ marker: 2, rank: 2, doc_id: "doc_de_002" }],
+      passages: PASSAGES,
+    };
+    stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [firstTurn, secondTurn] } }, () =>
+      streamResponse(answerFrames()),
+    );
+    renderPage(<AskPage indexReady />);
+
+    // Both stored answers draw a citation control of their own — not just the last.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Show passage 1" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Show passage 2" })).toBeTruthy();
+    });
+    // And no marker is left as a raw private-use glyph.
+    expect(document.body.textContent).not.toMatch(/[\uE000\uE001]/);
+  });
+
+  it("names a thread from its first question once the turn is stored", async () => {
+    // A brand-new thread has no title until its first turn is stored, so the very
+    // first read returns an empty one. The server derives the title from the first
+    // question while the turn runs, and the list must pick it up rather than leave
+    // the row saying "Untitled conversation" forever.
+    vi.spyOn(askChatService, "listThreads").mockResolvedValue([{ ...THREAD, title: "" }] as never);
+    let reads = 0;
+    vi.spyOn(askChatService, "getThread").mockImplementation(async () => {
+      reads += 1;
+      // Before the turn there is nothing to name it from; after it, there is.
+      return (
+        reads === 1
+          ? { thread: { ...THREAD, title: "" }, turns: [] }
+          : {
+              thread: { ...THREAD, title: "Ist eine Trunkenheitsfahrt strafbar?" },
+              turns: [STORED_TURN],
+            }
+      ) as never;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamResponse(answerFrames("turn-1", ["Eine ", "Antwort [1]."]))),
+    );
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
+      target: { value: "Ist eine Trunkenheitsfahrt strafbar?" },
+    });
+    fireEvent.submit(screen.getByRole("textbox", { name: "Ask" }).closest("form")!);
+    await waitFor(() => {
+      const nav = screen.getByRole("navigation", { name: "Conversations" });
+      expect(nav.textContent).toContain("Ist eine Trunkenheitsfahrt strafbar?");
+    });
   });
 });

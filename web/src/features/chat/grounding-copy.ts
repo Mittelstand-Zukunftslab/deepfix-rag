@@ -4,15 +4,30 @@ import type { Grounding } from "@/client";
  * What the answer card says about its own grounding.
  *
  * The badge is the claim a member reads first, so it follows the backend's
- * `grounding` field plus, for a grounded answer, whether it cited anything: an
- * answer that had the evidence and pointed at none of it is a defect worth
- * seeing, not a success to celebrate (D-10). That is the one state this module
- * adds on top of ASK-001's three, and it adds no fourth stored value — the
- * server still sends `grounded`, `declined`, or `no_relevant_sources`.
+ * `grounding` field, and for a grounded answer, **why** it is grounded:
+ *
+ * - `grounded` with citations: **Grounded**. This answer pointed at its evidence.
+ * - `grounded` with no citations, but the turn made no search either: **Reused
+ *   earlier evidence** (`reused_evidence`). The answer reworked a passage already
+ *   cited earlier in the thread — making it shorter, translating it — so it has no
+ *   markers of its own and made no new claims. Calling that "Partly grounded"
+ *   punished the model for doing the right thing.
+ * - `grounded` with no citations after a search: **Partly grounded**
+ *   (`partly_grounded`). The evidence was there and the answer pointed at none of
+ *   it, which is the defensible defect D-10 describes.
+ *
+ * The two are told apart by `searched`, which the server already knows and the page
+ * already holds from the terminal frame: a reuse turn ran no search, so it has no
+ * passages. That is the whole discriminator, and it needs no new stored value.
  */
 
 export type GroundingBadgeState =
-  "grounded" | "partly_grounded" | "declined" | "no_relevant_sources" | "not_searched";
+  | "grounded"
+  | "partly_grounded"
+  | "reused_evidence"
+  | "declined"
+  | "no_relevant_sources"
+  | "not_searched";
 
 export const GROUNDING_BADGE: Record<GroundingBadgeState, { label: string; className: string }> = {
   grounded: {
@@ -22,6 +37,12 @@ export const GROUNDING_BADGE: Record<GroundingBadgeState, { label: string; class
   partly_grounded: {
     label: "Partly grounded",
     className: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  },
+  // The answer came from evidence already on screen. It is not a warning: nothing
+  // is missing and nothing was ignored.
+  reused_evidence: {
+    label: "Reused earlier evidence",
+    className: "border-primary/25 bg-primary/10 text-primary",
   },
   declined: {
     label: "Not found in the documents",
@@ -41,14 +62,20 @@ export const GROUNDING_BADGE: Record<GroundingBadgeState, { label: string; class
 };
 
 /**
- * The state to render: grounded only when the answer is grounded *and* it cited
- * at least one passage, which is D-10's whole rule.
+ * The state to render.
+ *
+ * `searched` is whether this turn ran a search. Omitted, it is treated as `true`,
+ * which is the pre-existing behaviour: a grounded answer with no citations after a
+ * search is what "Partly grounded" was written for.
  */
 export function badgeState(
   grounding: Grounding,
   citations: { marker: number; rank: number; doc_id: string }[],
+  searched = true,
 ): GroundingBadgeState {
-  if (grounding === "grounded" && citations.length === 0) return "partly_grounded";
+  if (grounding === "grounded" && citations.length === 0) {
+    return searched ? "partly_grounded" : "reused_evidence";
+  }
   return grounding;
 }
 

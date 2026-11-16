@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
+import { cloneElement, Fragment, isValidElement } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -68,25 +68,39 @@ export function ChatMarkdown({
 }
 
 /**
- * The shared components plus a `p` that resolves citation tokens in its text.
+ * The shared components plus a walker that resolves citation tokens in text.
  *
- * Only `p` needs the override: an answer's prose is paragraphs, and a marker in a
- * heading or a list item still renders as its characters rather than a control.
- * That is a deliberate limit — a citation belongs in a sentence, and widening it
- * would mean rewriting every block type for a case that does not occur.
+ * The tokens are private-use characters, so they must never survive to the page —
+ * a browser draws each as a hollow box, which is exactly what a member saw when a
+ * marker fell inside a bold phrase, a list item, or a heading. Overriding only `p`
+ * missed all three, because `react-markdown` renders those containers itself.
+ *
+ * So every element that can *own* prose is overridden with one walker, and the
+ * walker recurses through any host element of its own, so a marker inside a link,
+ * a blockquote, or a table cell is reached too. `p`, `li`, and the headings are
+ * listed explicitly because they are the containers an answer actually uses; a
+ * component of this module's own — `code`, say — is never rebuilt this way.
  */
 function citationComponents(
   citations: CitationTokens,
 ): React.ComponentProps<typeof ReactMarkdown>["components"] {
+  const withTokens =
+    (tag: "p" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "strong" | "em") =>
+    ({ children }: { children?: React.ReactNode }) => {
+      const Tag = tag;
+      return <Tag>{withCitations(children, citations)}</Tag>;
+    };
   return {
     ...MARKDOWN_COMPONENTS,
-    p: ({ children }: { children?: React.ReactNode }) => (
-      <p>{withCitations(children, citations)}</p>
+    ...Object.fromEntries(
+      (["p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "strong", "em"] as const).map(
+        (tag) => [tag, withTokens(tag)],
+      ),
     ),
   };
 }
 
-/** Rebuild a paragraph's children, replacing citation tokens with their controls. */
+/** Rebuild a node's children, replacing citation tokens with their controls. */
 function withCitations(node: React.ReactNode, citations: CitationTokens): React.ReactNode {
   if (typeof node === "string") return <CitationText text={node} citations={citations} />;
   if (Array.isArray(node)) {
@@ -94,7 +108,22 @@ function withCitations(node: React.ReactNode, citations: CitationTokens): React.
       <Fragment key={index}>{withCitations(child, citations)}</Fragment>
     ));
   }
+  // A nested element whose own text still carries a token: `<strong>` inside a
+  // paragraph is the common case, and its children are host nodes by now.
+  if (isElementWithChildren(node)) {
+    return cloneElement(node, { children: withCitations(node.props.children, citations) });
+  }
   return node;
+}
+
+function isElementWithChildren(
+  node: React.ReactNode,
+): node is React.ReactElement<{ children?: React.ReactNode }> {
+  return (
+    isValidElement<{ children?: React.ReactNode }>(node) &&
+    typeof node.type === "string" &&
+    node.props.children !== undefined
+  );
 }
 
 /**

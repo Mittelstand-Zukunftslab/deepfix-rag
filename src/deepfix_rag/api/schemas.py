@@ -1,8 +1,9 @@
 """Pydantic request and response models shared by public API routes."""
 
+from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from deepfix_rag.feedback import COMMENT_MAX_LENGTH, CommentReason
 from deepfix_rag.grounding import Grounding
@@ -587,17 +588,35 @@ class LegacyTurnRequest(ApiModel):
 
 
 class LegacySessionRequest(ApiModel):
-    """One session from the browser's old localStorage sessions."""
+    """One session from the browser's old localStorage sessions.
+
+    ``createdAt`` and ``updatedAt`` are accepted as **either** an ISO string or a
+    millisecond epoch number, because the retired page wrote ``Date.now()`` values
+    and a strict string field rejected every real payload with a 422 — which reached
+    the member as "your earlier conversations could not be carried over". The store
+    only reads them as display timestamps, so both forms are normalised to a string.
+    """
 
     id: str = Field(min_length=1)
     title: str = ""
-    created_at: str | None = Field(default=None, alias="createdAt")
-    updated_at: str | None = Field(default=None, alias="updatedAt")
+    created_at: str | int | float | None = Field(default=None, alias="createdAt")
+    updated_at: str | int | float | None = Field(default=None, alias="updatedAt")
     turns: list[LegacyTurnRequest] = Field(default_factory=list)
 
     model_config = ConfigDict(
         populate_by_name=True, json_schema_serialization_defaults_required=True
     )
+
+    @field_validator("created_at", "updated_at", mode="after")
+    @classmethod
+    def _timestamp_text(cls, value: str | int | float | None) -> str | None:
+        """A numeric timestamp as an ISO string; a string is kept as it is."""
+        if value is None or isinstance(value, str):
+            return value
+        try:
+            return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
 
 
 class AskChatImportRequest(ApiModel):

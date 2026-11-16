@@ -1188,12 +1188,18 @@ export type InteractionReviewResponse = {
  * LegacySessionRequest
  *
  * One session from the browser's old localStorage sessions.
+ *
+ * ``createdAt`` and ``updatedAt`` are accepted as **either** an ISO string or a
+ * millisecond epoch number, because the retired page wrote ``Date.now()`` values
+ * and a strict string field rejected every real payload with a 422 — which reached
+ * the member as "your earlier conversations could not be carried over". The store
+ * only reads them as display timestamps, so both forms are normalised to a string.
  */
 export type LegacySessionRequest = {
     /**
      * Createdat
      */
-    createdAt?: string | null;
+    createdAt?: string | number | number | null;
     /**
      * Id
      */
@@ -1209,7 +1215,7 @@ export type LegacySessionRequest = {
     /**
      * Updatedat
      */
-    updatedAt?: string | null;
+    updatedAt?: string | number | number | null;
 };
 
 /**

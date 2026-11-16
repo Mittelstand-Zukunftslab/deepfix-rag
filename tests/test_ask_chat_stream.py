@@ -450,6 +450,8 @@ def _types(frames: list[dict]) -> list[str]:
 def _ask(client: TestClient, identity: IdentityIssuer, question: str) -> tuple[str, list[dict]]:
     identity.sign_in(client, MEMBER)
     thread = client.post("/ask/chat/threads").json()["thread_id"]
+    # The app builds its index in the lifespan; a turn needs it serving.
+    client.app.state.index.wait()
     response = client.post(
         "/ask/chat/completions",
         json={"thread_id": thread, "messages": [{"role": "user", "content": question}]},
@@ -475,6 +477,13 @@ def test_a_tool_call_then_text_streams_in_order_and_stores_one_ask_row(
     assert types.index("tool-output-available") < types.index("text-delta")
     for required in ("start-step", "finish-step", "text-start", "text-end", "finish"):
         assert required in types
+    # The step that only called the tool opened no text group: an empty
+    # `text-start`/`text-end` pair made the runtime draw an empty bubble under the
+    # question, so a text group exists only where prose was actually streamed.
+    assert types.count("text-start") == types.count("text-end")
+    assert types.count("text-start") == types.count("start-step") - 1, (
+        "one step searched and emitted no prose; only the answering step opened text"
+    )
     assert types[-2:] == ["data-deepfix-turn", "finish"]
     assert "data-deepfix-grounding" in types
     # Every part is one the AI SDK's chunk schema names.

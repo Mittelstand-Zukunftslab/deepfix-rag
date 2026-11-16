@@ -340,12 +340,69 @@ describe("the sources panel", () => {
   });
 });
 
+describe("citation controls in a rendered answer", () => {
+  it("resolves a marker inside a list item, a bold phrase and a heading", async () => {
+    // The reported glyphs came from markers that were not inside a paragraph: an
+    // answer with bullet points and bold labels put them in `li`, `strong` and a
+    // heading, and only `p` was rewritten. Those containers now walk their own
+    // children, so no private-use character reaches the page.
+    const answer = [
+      "## Where it sits [1]",
+      "",
+      "- **At high temperatures** the chains loosen [2]",
+      "- **In the cold** they pack tightly [1]",
+      "",
+      "A closing sentence [2].",
+    ].join("\n");
+    vi.spyOn(askChatService, "listThreads").mockResolvedValue([THREAD] as never);
+    vi.spyOn(askChatService, "getThread").mockResolvedValue({
+      thread: THREAD,
+      turns: [
+        storedTurn({
+          answer,
+          grounding: "grounded",
+          citations: [
+            { marker: 1, rank: 1, doc_id: "doc_de_001" },
+            { marker: 2, rank: 2, doc_id: "doc_de_002" },
+          ],
+        }),
+      ],
+    } as never);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamResponse(framesFor(answer, "grounded", [], PASSAGES))),
+    );
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Where it sits/ })).toBeTruthy();
+    });
+    // Every marker resolves to a control, whichever block it landed in.
+    expect(screen.getAllByRole("button", { name: "Show passage 1" }).length).toBe(2);
+    expect(screen.getAllByRole("button", { name: "Show passage 2" }).length).toBe(2);
+    // And no private-use character survives anywhere in the rendered page.
+    expect(document.body.textContent).not.toMatch(/[\uE000\uE001]/);
+  });
+});
+
 describe("the badge rule", () => {
   it("is grounded only when there is a valid citation", () => {
     expect(badgeState("grounded", [])).toBe("partly_grounded");
     expect(badgeState("grounded", [{ marker: 1, rank: 1, doc_id: "d" }])).toBe("grounded");
     expect(badgeState("declined", [])).toBe("declined");
     expect(badgeState("no_relevant_sources", [])).toBe("no_relevant_sources");
+  });
+
+  it("calls a reused answer what it is, not Partly grounded", () => {
+    // A grounded answer with no citations says one of two very different things:
+    // the turn searched and ignored the evidence ("Partly grounded"), or it made
+    // no new claims at all and reused what was already on screen. The `searched`
+    // flag is the discriminator, and a thanks in an answered thread is the second.
+    expect(badgeState("grounded", [], true)).toBe("partly_grounded");
+    expect(badgeState("grounded", [], false)).toBe("reused_evidence");
+    render(<GroundingBadge grounding="grounded" citations={[]} searched={false} />);
+    expect(screen.getByText("Reused earlier evidence")).toBeTruthy();
+    expect(screen.queryByText("Partly grounded")).toBeNull();
+    expect(screen.queryByText("Grounded")).toBeNull();
   });
 
   it("never renders a turn that did not search as Grounded", () => {

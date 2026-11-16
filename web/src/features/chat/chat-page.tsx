@@ -77,6 +77,20 @@ type ThreadState = {
   storedAnswers: Record<string, string>;
   /** The newest stored turn's passages, read from the thread response on load. */
   storedPassages: AskPassage[];
+  /**
+   * Each stored turn's own citations, by turn id — which is the seeded assistant
+   * message's id. Handing the newest verdict to every message made a stored answer
+   * from an earlier turn render its markers as plain text, which is why only the
+   * live answer had citation controls.
+   */
+  storedCitations: Record<string, AskCitation[]>;
+  /**
+   * Whether each stored turn ran a search, by turn id. A reuse turn made no
+   * search, which is what tells "Reused earlier evidence" apart from "Partly
+   * grounded" — and it must be read per turn, because a thread that answered a
+   * question earlier still has passages on screen when a later "thanks" arrives.
+   */
+  storedSearched: Record<string, boolean>;
 };
 
 const COMPOSER_BUTTON =
@@ -137,9 +151,12 @@ export function useLegacyImport(ownerId: string | null, onError: (message: strin
     }
     const sessions = parseLegacySessions(raw);
     if (sessions.length > 0) {
-      void askChatService
-        .importSessions(sessions)
-        .catch(() => onError("Your earlier conversations could not be carried over."));
+      void askChatService.importSessions(sessions).catch(() => {
+        // Only say so when there was something to carry over. A failure with
+        // nothing to import is a no-op, and a red sentence for it would frighten a
+        // member about a history that does not exist.
+        onError("Your earlier conversations could not be carried over.");
+      });
     }
     try {
       window.localStorage.removeItem(keys.sessions);
@@ -209,6 +226,14 @@ export function AskPage({
   const [, forceRender] = useState(0);
 
   const onError = useCallback((message: string) => setListError(message), []);
+  // A new thread has no title until its first question; the server derives one and
+  // this puts it in the list without a full reload.
+  const onTitle = useCallback((threadId: string, title: string) => {
+    if (!title) return;
+    setThreads((current) =>
+      current.map((item) => (item.thread_id === threadId ? { ...item, title } : item)),
+    );
+  }, []);
   useLegacyImport(ownerId, onError);
 
   const refresh = useCallback(async () => {
@@ -230,7 +255,13 @@ export function AskPage({
       setOpening(true);
       try {
         const detail = await askChatService.getThread(threadId);
-        states.current.set(threadId, threadState(threadId, detail.turns, states, forceRender));
+        states.current.set(
+          threadId,
+          threadState(threadId, detail.turns, states, forceRender, onTitle),
+        );
+        // The detail carries the authoritative title, which the list may not have
+        // if the thread was named after the list was read.
+        onTitle(threadId, detail.thread.title);
         forceRender((value) => value + 1);
       } catch (error) {
         onError(error instanceof Error ? error.message : "Unable to open that conversation.");
@@ -238,7 +269,7 @@ export function AskPage({
         setOpening(false);
       }
     },
-    [onError],
+    [onError, onTitle],
   );
 
   // The newest thread opens on first load; a member with none sees the empty state.
@@ -261,7 +292,7 @@ export function AskPage({
       setActiveThreadId(created.thread_id);
       states.current.set(
         created.thread_id,
-        threadState(created.thread_id, [], states, forceRender),
+        threadState(created.thread_id, [], states, forceRender, onTitle),
       );
       forceRender((value) => value + 1);
       return created.thread_id;
@@ -269,7 +300,7 @@ export function AskPage({
       onError(error instanceof Error ? error.message : "Unable to start a conversation.");
       return null;
     }
-  }, [onError]);
+  }, [onError, onTitle]);
 
   const renameThread = useCallback(
     async (threadId: string, title: string) => {
@@ -350,6 +381,34 @@ export function AskPage({
   );
 }
 
+/**
+ * Re-read a thread and put its stored answers back into the live message list.
+ *
+ * Called after a turn ends *or* is stopped. A stop aborts the stream mid-part,
+ * which leaves the assistant message's text part in `state: "streaming"` — and
+ * Assistant UI does not draw an unfinished part, so the answer the server had
+ * already stored vanished from the screen along with its sources. The store is the
+ * truth here, and re-seeding it from there makes Stop keep what the member read
+ * (D-4, FR-014).
+ */
+function mergeStoredAnswers(messages: UIMessage[], turns: AskTurn[]): UIMessage[] {
+  const stored = new Map(
+    turns.filter((turn) => turn.answer).map((turn) => [turn.turn_id, turn.answer as string]),
+  );
+  return messages.map((message) => {
+    if (message.role !== "assistant") return message;
+    const text = stored.get(message.id);
+    if (!text) return message;
+    // A plain text part, with no `state`, is what a finished answer looks like —
+    // and a part left `streaming` by an abort is what Assistant UI declines to draw.
+    // Everything else the stream carried is kept: the tool parts are the sources
+    // panel's input, so dropping them would answer the question without its
+    // evidence (FR-007).
+    const other = message.parts.filter((part) => part.type !== "text");
+    return { ...message, parts: [{ type: "text" as const, text }, ...other] };
+  });
+}
+
 /** One thread's runtime, message column, and composer. */
 function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadState }) {
   const helpers = useChat<UIMessage>({ chat: state.session.chat });
@@ -373,6 +432,17 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
     setShowSources(true);
     setSelectedRank(rank);
   };
+  // Whether the turn the badge is describing ran a search. A stored turn records
+  // it as its `retrieval_query`; a live one is still in the message list, so its
+  // own tool parts answer the same question. The thread's passages cannot: they
+  // survive from an earlier answer, and a "thanks" after one still shows them.
+  const newestAnswer = [...helpers.messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  const newestSearched = newestAnswer
+    ? (state.storedSearched[newestAnswer.id] ??
+      newestAnswer.parts.some((part) => part.type === "tool-search_documents"))
+    : false;
 
   useEffect(() => {
     if (!state.session.resumeTurnId.current) return;
@@ -392,6 +462,10 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
             <GroundingBadge
               grounding={state.verdict.grounding}
               citations={state.verdict.citations}
+              // A grounded answer with no citations is "Partly grounded" when it
+              // searched and "Reused earlier evidence" when it did not. The test is
+              // the newest turn's own search, not whether the panel has passages.
+              searched={newestSearched}
             />
           ) : null}
           {sources.passages.length > 0 ? (
@@ -421,12 +495,7 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
                   </div>
                 </ThreadPrimitive.Empty>
                 <ThreadPrimitive.Messages>
-                  {() => (
-                    <MessageRow
-                      citations={latestCitations(state)}
-                      onSelectCitation={selectCitation}
-                    />
-                  )}
+                  {() => <MessageRow state={state} onSelectCitation={selectCitation} />}
                 </ThreadPrimitive.Messages>
                 <ThreadError state={state} />
               </ThreadPrimitive.Root>
@@ -459,13 +528,19 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
 }
 
 function MessageRow({
-  citations,
+  state,
   onSelectCitation,
 }: {
-  citations: AskCitation[];
+  state: ThreadState;
   onSelectCitation: (rank: number) => void;
 }) {
-  const role = useAuiState((state) => state.message.role);
+  const role = useAuiState((value) => value.message.role);
+  const id = useAuiState((value) => value.message.id);
+  const isLast = useAuiState((value) => value.message.isLast);
+  // A stored answer carries the citations its own turn recorded; the newest live
+  // one takes the verdict the stream reported. Falling back to the newest verdict
+  // for every message is what left an older answer's markers as plain text.
+  const citations = state.storedCitations[id] ?? (isLast ? (state.verdict?.citations ?? []) : []);
   return (
     <div data-role={role}>
       <MessagePrimitive.Root>
@@ -509,11 +584,6 @@ export function passagesFromMessages(messages: UIMessage[]): AskPassage[] {
     }
   }
   return latest;
-}
-
-/** The newest verdict's citations, for the answer currently on screen. */
-function latestCitations(state: ThreadState): AskCitation[] {
-  return state.verdict?.citations ?? [];
 }
 
 /**
@@ -620,6 +690,7 @@ function threadState(
   turns: AskTurn[],
   states: { current: Map<string, ThreadState> },
   forceRender: (update: (value: number) => number) => void,
+  onTitle?: (threadId: string, title: string) => void,
 ): ThreadState {
   const hooks: { current: AskChatHooks } = {
     current: {
@@ -657,7 +728,8 @@ function threadState(
       onFinished: () => {
         // A stored turn's interaction id is what a vote needs, and it only exists
         // once the server has written the row, so the thread is re-read after the
-        // stream ends. It also refreshes the stored answer text and its verdict.
+        // stream ends. It also refreshes the stored answer text, its verdict, and —
+        // for a thread's first question — the title the server derived from it.
         void askChatService
           .getThread(threadId)
           .then((detail) => {
@@ -667,6 +739,24 @@ function threadState(
               detail.turns
                 .filter((turn) => turn.interaction_id)
                 .map((turn) => [turn.turn_id, turn.interaction_id as string]),
+            );
+            entry.storedCitations = Object.fromEntries(
+              detail.turns.map((turn) => [turn.turn_id, turn.citations]),
+            );
+            entry.storedSearched = searchedByTurn(detail.turns);
+            // The store's passages for the turn that just ended, so a stopped
+            // stream's sources panel survives the abort: the tool parts are gone
+            // with the unfinished message, and these are the same hits (FR-007).
+            const storedPassages = [...detail.turns]
+              .reverse()
+              .find((turn) => turn.passages?.length)?.passages;
+            if (storedPassages?.length) entry.storedPassages = storedPassages;
+            // A stopped stream leaves the answer's text part unfinished, which the
+            // runtime will not draw. The store already holds it, so the message is
+            // rewritten from there and Stop keeps what the member read.
+            entry.session.chat.messages = mergeStoredAnswers(
+              entry.session.chat.messages,
+              detail.turns,
             );
             const newest = detail.turns[detail.turns.length - 1];
             if (newest?.grounding) {
@@ -678,6 +768,7 @@ function threadState(
               };
             }
             forceRender((value) => value + 1);
+            onTitle?.(threadId, detail.thread.title);
           })
           .catch(() => undefined);
       },
@@ -699,7 +790,27 @@ function threadState(
         .map((turn) => [turn.turn_id, turn.interaction_id as string]),
     ),
     storedPassages: [...turns].reverse().find((turn) => turn.passages?.length)?.passages ?? [],
+    storedCitations: Object.fromEntries(turns.map((turn) => [turn.turn_id, turn.citations])),
+    storedSearched: searchedByTurn(turns),
   };
+}
+
+/**
+ * Which stored turns ran a search, by turn id.
+ *
+ * A turn that searches records the standalone query it searched for, so
+ * `retrieval_query` is the store's own answer to "did this turn look anything up".
+ * Its passages corroborate it: passages exist only because a search returned them.
+ * A reuse turn — a "thanks", a "make that shorter" — has neither, and that is
+ * exactly the turn whose badge must not claim a search happened.
+ */
+function searchedByTurn(turns: AskTurn[]): Record<string, boolean> {
+  return Object.fromEntries(
+    turns.map((turn) => [
+      turn.turn_id,
+      Boolean(turn.retrieval_query) || (turn.passages?.length ?? 0) > 0,
+    ]),
+  );
 }
 
 /** The verdict the store already holds for the newest answered turn, if any. */

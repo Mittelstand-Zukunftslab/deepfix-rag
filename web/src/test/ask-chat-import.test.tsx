@@ -99,9 +99,22 @@ describe("the legacy import", () => {
   it("makes no request at all for a member whose keys were already removed", async () => {
     const importSessions = vi.spyOn(askChatService, "importSessions");
     window.localStorage.setItem(legacyStorageKeys("ada").imported, "1");
-    renderPage(<AskPage indexReady ownerId="ada" />);
+    const page = renderPage(<AskPage indexReady ownerId="ada" />);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(importSessions).not.toHaveBeenCalled();
+    // Nothing to carry over is not a failure, so nothing red appears either.
+    expect(page.queryByText(/could not be carried over/)).toBeNull();
+  });
+
+  it("stays quiet when there is nothing to import", async () => {
+    // A member with an empty or junk key is the ordinary case; a red sentence
+    // about a history that does not exist would be a lie, and it was on screen
+    // for every such member before this was checked.
+    const page = renderPage(<AskPage indexReady ownerId="ada" />);
+    await waitFor(() =>
+      expect(window.localStorage.getItem(legacyStorageKeys("ada").imported)).toBe("1"),
+    );
+    expect(page.queryByText(/could not be carried over/)).toBeNull();
   });
 
   it("removes the keys even when the import fails, and says so once", async () => {

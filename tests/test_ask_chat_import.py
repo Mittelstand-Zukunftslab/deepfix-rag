@@ -230,3 +230,42 @@ def test_an_imported_turn_can_be_opened_and_reports_its_stored_answer(
     assert turn["status"] == "completed"
     assert len(turn["passages"]) == 1
     assert ask_chat.__doc__ is not None
+
+
+def test_the_retired_page_payload_is_accepted_as_it_was_written(
+    settings: Settings, identity: IdentityIssuer
+) -> None:
+    """The browser's own payload shape must import, not be rejected with a 422.
+
+    The retired page wrote `createdAt` and `updatedAt` as `Date.now()` **numbers**.
+    A strict string field rejected every one of them, and the web app turned that
+    422 into "Your earlier conversations could not be carried over" — a scary
+    sentence for a payload the server should simply have accepted. Both shapes are
+    taken, and the numeric one is normalised to an ISO string.
+    """
+    interaction = _interaction(settings, identity, ADA, "old question")
+    payload = {
+        "sessions": [
+            {
+                "id": "local-session-1",
+                "title": "Alte Unterhaltung",
+                # Exactly what `Date.now()` produces, as a JSON number.
+                "createdAt": 1700000000000,
+                "updatedAt": 1700003600000,
+                "turns": [
+                    {"interactionId": interaction, "userQuery": "old question", "answer": "a"}
+                ],
+            }
+        ]
+    }
+    with _client(settings, identity) as client:
+        identity.sign_in(client, ADA)
+        imported = client.post("/ask/chat/threads/import", json=payload)
+        assert imported.status_code == 200, imported.text
+        assert imported.json() == {"threads_created": 1, "turns_created": 1, "turns_skipped": 0}
+        threads = client.get("/ask/chat/threads").json()
+        detail = client.get(f"/ask/chat/threads/{threads[0]['thread_id']}").json()
+    assert threads[0]["title"] == "Alte Unterhaltung"
+    # The numeric timestamp became an ISO string, and the thread keeps its age.
+    assert threads[0]["created_at"].startswith("2023-11-14T")
+    assert [turn["question"] for turn in detail["turns"]] == ["old question"]
