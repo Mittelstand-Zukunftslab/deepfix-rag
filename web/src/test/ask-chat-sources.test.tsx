@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AskPage, passagesFromMessages } from "@/features/chat/chat-page";
 import { GroundingBadge } from "@/features/chat/answer-grounding";
-import { badgeState } from "@/features/chat/grounding-copy";
+import { badgeState, groundingNote } from "@/features/chat/grounding-copy";
 import type { AskPassage, AskTurn } from "@/schemas/ask-chat";
 import { askChatService } from "@/services/ask-chat-service";
 
@@ -348,7 +348,20 @@ describe("the badge rule", () => {
     expect(badgeState("no_relevant_sources", [])).toBe("no_relevant_sources");
   });
 
-  it("labels the four rendered states", () => {
+  it("never renders a turn that did not search as Grounded", () => {
+    // `not_searched` is the server's own verdict for a turn whose answer came
+    // from no evidence: a thanks, small talk. It must pass through unchanged, and
+    // the badge must say so in words rather than borrowing another state's label.
+    expect(badgeState("not_searched", [])).toBe("not_searched");
+    render(<GroundingBadge grounding="not_searched" citations={[]} />);
+    expect(screen.getByText("Not searched")).toBeTruthy();
+    expect(screen.queryByText("Grounded")).toBeNull();
+    expect(screen.queryByText("Partly grounded")).toBeNull();
+    expect(screen.queryByText("Not found in the documents")).toBeNull();
+    expect(groundingNote("not_searched", 0)).toBe("Answered without searching");
+  });
+
+  it("labels the rendered states", () => {
     const { rerender } = render(<GroundingBadge grounding="grounded" citations={[]} />);
     expect(screen.getByText("Partly grounded")).toBeTruthy();
     rerender(

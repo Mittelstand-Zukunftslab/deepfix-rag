@@ -950,7 +950,7 @@ export type FeedbackSummaryResponse = {
  *
  * How much the corpus supports the answer that was returned.
  */
-export type Grounding = 'grounded' | 'declined' | 'no_relevant_sources';
+export type Grounding = 'grounded' | 'declined' | 'no_relevant_sources' | 'not_searched';
 
 /**
  * HTTPValidationError

@@ -12,7 +12,7 @@ import type { Grounding } from "@/client";
  */
 
 export type GroundingBadgeState =
-  "grounded" | "partly_grounded" | "declined" | "no_relevant_sources";
+  "grounded" | "partly_grounded" | "declined" | "no_relevant_sources" | "not_searched";
 
 export const GROUNDING_BADGE: Record<GroundingBadgeState, { label: string; className: string }> = {
   grounded: {
@@ -30,6 +30,13 @@ export const GROUNDING_BADGE: Record<GroundingBadgeState, { label: string; class
   no_relevant_sources: {
     label: "Not found in the documents",
     className: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  },
+  // The turn answered without looking anything up. It is not a failure and not a
+  // refusal, so it must not borrow either label: "Not found" would claim a search
+  // happened, and "Grounded" would be untrue.
+  not_searched: {
+    label: "Not searched",
+    className: "border-border bg-muted text-muted-foreground",
   },
 };
 
@@ -52,6 +59,9 @@ export function groundingNote(grounding: Grounding, sourceCount: number): string
   }
   if (grounding === "declined") {
     return "Answer declined";
+  }
+  if (grounding === "not_searched") {
+    return "Answered without searching";
   }
   return "No matching passages";
 }

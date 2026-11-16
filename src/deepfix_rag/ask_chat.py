@@ -309,7 +309,46 @@ def init_ask_chat(db_path: Path) -> None:
         columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(ask_chat_threads)")}
         if "legacy_session_id" not in columns:
             conn.execute("ALTER TABLE ask_chat_threads ADD COLUMN legacy_session_id TEXT")
+        _widen_grounding_check(conn)
         conn.executescript(_INDEXES)
+
+
+# The grounding values the `ask_chat_turns.grounding` CHECK must accept. A SQLite
+# CHECK cannot be altered in place, so a table created before a value was added is
+# rebuilt once, keeping its rows.
+_GROUNDING_VALUES: tuple[str, ...] = tuple(value.value for value in Grounding)
+
+
+def _widen_grounding_check(conn: sqlite3.Connection) -> None:
+    """Rebuild ``ask_chat_turns`` when its ``grounding`` CHECK predates a value.
+
+    ``CREATE TABLE IF NOT EXISTS`` leaves an existing table alone, so a database
+    created before ``not_searched`` existed would reject the first turn that used
+    it. The table is rebuilt only when its stored SQL does not already list every
+    current value, and the rebuild is a copy through a staging table, which is the
+    technique ``storage._rebuild_without_user_reference`` already uses.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ask_chat_turns'"
+    ).fetchone()
+    if row is None or all(f"'{value}'" in str(row["sql"]) for value in _GROUNDING_VALUES):
+        return
+    staged = "ask_chat_turns__recheck"
+    columns = ", ".join(
+        str(item["name"]) for item in conn.execute("PRAGMA table_info(ask_chat_turns)")
+    )
+    conn.execute(f"DROP TABLE IF EXISTS {staged}")
+    conn.execute(_turns_table_sql(staged))
+    conn.execute(f"INSERT INTO {staged} ({columns}) SELECT {columns} FROM ask_chat_turns")
+    conn.execute("DROP TABLE ask_chat_turns")
+    conn.execute(f"ALTER TABLE {staged} RENAME TO ask_chat_turns")
+
+
+def _turns_table_sql(name: str) -> str:
+    """The ``ask_chat_turns`` DDL, with the table renamed, taken from ``_SCHEMA``."""
+    start = _SCHEMA.index("CREATE TABLE IF NOT EXISTS ask_chat_turns")
+    end = _SCHEMA.index(");", start) + 2
+    return _SCHEMA[start:end].replace("ask_chat_turns", name, 1).replace("IF NOT EXISTS ", "")
 
 
 def title_from(message: str) -> str:

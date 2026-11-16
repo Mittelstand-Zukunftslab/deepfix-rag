@@ -58,15 +58,32 @@ ALREADY_RUNNING = "That answer is still being written."
 _CITATION = re.compile(r"\[(\d{1,2})\]")
 
 # The policy. A constant on purpose: the browser supplies no part of it, and a
-# test asserts its text never appears in a stream (FR-011, FR-013).
+# test asserts its text never appears in a stream (FR-011, FR-013). This text is
+# also the steering mechanism: no step forces a tool call (D-4a), so "when to
+# search" is decided here and nowhere else.
 _POLICY = """\
 You are the DeepFix Ask assistant. You answer questions about the documents in this server's corpus, \
 for a member who uploaded them.
 
-What you do: before you write anything, you search. You have exactly one tool, `search_documents`, \
-and you call it with a standalone search query — one that makes sense on its own, restated from the \
-conversation when the member's message refers back to an earlier turn. If the first result does not \
-answer the question, search again with better words.
+You have exactly one tool, `search_documents`. Call it with a standalone search query — one that makes \
+sense on its own, restated from the conversation when the member's message refers back to an earlier \
+turn.
+
+**When you must search.** Always call `search_documents` for any question about the documents, and for \
+any factual or domain question, including a follow-up that needs new evidence the thread does not \
+already contain. Searching first is the default and you should do it whenever there is any doubt.
+- Never answer a question about the documents from your own knowledge. If the member asks what a \
+document says, what the corpus contains, or anything factual about their subject matter, you search \
+and you answer from the passages.
+- A follow-up like "and who decides that?" needs evidence you do not have, so you search for it.
+- If the first result does not answer the question, search again with better words.
+
+**When you may answer without searching.** Only these:
+- small talk, a greeting, or a thank-you;
+- reworking your own previous answer in this thread — making it shorter, translating it, or \
+reformatting it — using only content already given in this thread.
+For a rework, use the content and the citations already in the conversation and do not invent new \
+claims. If the rework would need anything not already said, search instead.
 
 When you answer:
 - Every factual claim you draw from a passage carries a citation marker `[n]`, where n is that \
@@ -233,11 +250,44 @@ class TurnFailed(RuntimeError):
 
 
 class _Step:
-    """One model step's accumulated text and tool calls."""
+    """One model step's accumulated text and tool calls.
+
+    A provider streams one tool call as many deltas — commonly about ten — all at
+    the same ``index``. Only the first carries the ``id`` and the ``name``; the rest
+    carry fragments of the JSON arguments. So a delta is never a call of its own:
+    the step keeps the chunks and ``calls()`` assembles them once the stream has
+    ended, through LiteLLM's own ``stream_chunk_builder``. Reading each delta as a
+    fresh call is what produced ``search_documents({})`` followed by an unknown-tool
+    failure on the deployed stack.
+    """
 
     def __init__(self) -> None:
         self.text = ""
-        self.calls: list[dict[str, Any]] = []
+        self._chunks: list[Any] = []
+
+    def record(self, chunk: Any, delta: dict[str, Any]) -> None:
+        """Keep one chunk for the final assembly; forward its text as it arrives."""
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            self.text += content
+        if isinstance(delta.get("tool_calls"), list):
+            self._chunks.append(chunk)
+
+    def calls(self) -> list[dict[str, Any]]:
+        """The step's tool calls, assembled and in call order.
+
+        ``stream_chunk_builder`` is the library's own merge for exactly this: it
+        concatenates an ``index``'s argument fragments and takes the id and name
+        from the piece that carries them. It returns ``None`` for a chunk list it
+        cannot build, which means there were no usable calls.
+        """
+        if not self._chunks:
+            return []
+        built = litellm.stream_chunk_builder(self._chunks)
+        if built is None or not getattr(built, "choices", None):
+            return []
+        tool_calls = getattr(built.choices[0].message, "tool_calls", None) or []
+        return [tool_call.model_dump() for tool_call in tool_calls]
 
 
 async def run_turn(
@@ -278,9 +328,12 @@ async def run_turn(
         if is_disconnected is not None and await is_disconnected():
             raise TurnCancelled("browser closed")
 
-        # The last permitted step forces prose, which bounds the loop (FR-005).
+        # `auto` on every step. Forcing the tool is what a reasoning provider
+        # refused (D-4a), and the system prompt is the steer instead: it tells the
+        # model to search for anything about the documents and to answer without
+        # searching only for small talk or a rework of its own previous answer.
+        # The last permitted step is forced to prose, which bounds the loop.
         at_limit = searches_run >= settings.ASK_CHAT_MAX_TOOL_CALLS
-        forced = not at_limit and not searches_run
         yield chat_stream.step_start_part()
         text_id = f"step-{step_index}-text"
         yield chat_stream.text_start(text_id)
@@ -290,7 +343,6 @@ async def run_turn(
                 settings,
                 model,
                 messages,
-                forced=forced,
                 at_limit=at_limit,
             ):
                 _check_deadline(deadline)
@@ -305,69 +357,45 @@ async def run_turn(
                         first_token_ms = int((time.monotonic() - started) * 1000)
                     # Forwarded as it arrives: a step is never buffered before sending.
                     yield chat_stream.text_delta(text_id, content)
-                step.calls.extend(_delta_tool_calls(delta))
+                step.record(chunk, delta)
         except _ToolChoiceUnsupported:
-            # The provider refused the *forced* step before emitting anything. A
-            # rejection is a fact about the provider, not the member's question, so
-            # the step is retried unforced; if that is refused too, the turn falls
-            # back to the server-side search (FR-005) instead of failing.
+            # A provider that refuses even `auto`. A refusal is a fact about the
+            # provider, not about the member's question, so the turn is not failed:
+            # the server searches itself and the next step answers from that
+            # evidence (D-4a, FR-005).
             step = _Step()
-            try:
-                async for chunk in _step_chunks(
-                    settings, model, messages, forced=False, at_limit=at_limit
-                ):
-                    _check_deadline(deadline)
-                    delta = _first_delta(chunk)
-                    content = delta.get("content")
-                    if isinstance(content, str) and content:
-                        step.text += content
-                        collected.append(content)
-                        yield chat_stream.text_delta(text_id, content)
-                    step.calls.extend(_delta_tool_calls(delta))
-            except Exception as exc:
-                # An unforced step's 400 is normally a real failure, but when the
-                # provider has just refused the forced shape it is part of the same
-                # capability mismatch: leave the step empty so the server searches,
-                # rather than failing a turn the product can still answer.
-                LOGGER.warning(
-                    "The provider refused the unforced step too (%s); searching server-side",
-                    type(exc).__name__,
+            if not searches_run:
+                call = await _server_search(
+                    coordinator,
+                    settings,
+                    question,
+                    on_tool_call=on_tool_call,
+                    tool_calls=tool_calls,
                 )
-                step = _Step()
+                searches_run += 1
+                build_id = call.result.build_id or build_id
+                yield chat_stream.tool_input_start(call.call_id, call.name)
+                yield chat_stream.tool_input_available(call.call_id, call.name, call.arguments)
+                yield chat_stream.tool_output_available(call.call_id, call.result.as_dict())
+                messages.append(_assistant_tool_message("", call))
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.call_id,
+                        "content": passage_block(call.result),
+                    }
+                )
         yield chat_stream.text_end(text_id)
         yield chat_stream.step_finish_part()
         step_index += 1
 
-        if not step.calls:
-            if searches_run:
-                break
-            # FR-005: a first step with no call means the server searches itself,
-            # so no turn can answer without a retrieval having happened. This is
-            # also the path a provider takes when it refuses the forced step.
-            call = await _server_search(
-                coordinator,
-                settings,
-                question,
-                on_tool_call=on_tool_call,
-                tool_calls=tool_calls,
-                previous=build_id,
-            )
-            searches_run += 1
-            build_id = call.result.build_id or build_id
-            yield chat_stream.tool_input_start(call.call_id, call.name)
-            yield chat_stream.tool_input_available(call.call_id, call.name, call.arguments)
-            yield chat_stream.tool_output_available(call.call_id, call.result.as_dict())
-            messages.append(_assistant_tool_message("", call))
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.call_id,
-                    "content": passage_block(call.result),
-                }
-            )
-            continue
+        # The step's stream has ended, so its calls are whole: the name is checked
+        # and the arguments parsed once, here, never per delta.
+        calls = step.calls()
+        if not calls:
+            break
 
-        for raw in step.calls:
+        for raw in calls:
             name = str(raw.get("function", {}).get("name") or "")
             if name != ask_chat.TOOL_NAME:
                 raise TurnFailed(UNKNOWN_TOOL)
@@ -436,7 +464,12 @@ async def run_turn(
         answer = NO_SOURCES_ANSWER
     yield TurnOutcome(
         answer=answer,
-        grounding=_grounding(answer, passages),
+        grounding=_grounding(
+            answer,
+            passages,
+            searched=searches_run > 0,
+            reused_evidence=_has_prior_evidence(history),
+        ),
         citations=valid_citations(answer, passages),
         max_score=max((passage.score for passage in passages), default=0.0),
         cutoff=ask_chat.displayed_floor(coordinator),
@@ -455,16 +488,12 @@ async def _stream_completion(
 ) -> AsyncIterator[Any]:
     """One streamed model step, closed on the way out however it ends.
 
-    ``tool_choice: "required"`` is sent with thinking switched off. OpenRouter
-    routes ``qwen/qwen3.8-flash`` to a provider whose reasoning mode rejects a
-    forced tool choice with a 400 ("The tool_choice parameter does not support
-    being set to required or object in thinking mode"), so the two cannot be
-    combined. The flag goes in ``extra_body`` because that is what reaches the
-    provider verbatim; LiteLLM maps it to the provider's own spelling. ``auto``
-    and ``none`` are sent with the model's own default, because neither asks the
-    provider for anything it cannot do in thinking mode.
+    No step forces a tool any more, so the thinking-disabled flag that D-4a added
+    for the forced step is gone: it existed only because a reasoning provider
+    refuses ``tool_choice: "required"`` while thinking is on, and nothing now sends
+    ``"required"``. The provider recovery stays in ``_step_chunks``, because a
+    provider that rejects even ``"auto"`` must still not fail the turn.
     """
-    forced = tool_choice == "required"
     stream = await litellm.acompletion(
         model=model,
         api_base=settings.LLM_BASE_URL,
@@ -476,11 +505,10 @@ async def _stream_completion(
         tool_choice=tool_choice,
         stream=True,
         # One attempt is one HTTP call. LiteLLM's default retries a request it has
-        # already been told is invalid, which would send a refused `required` call
-        # three times and delay this module's own recovery by the backoff; the
-        # recovery below is the retry policy.
+        # already been told is invalid, which would send a refused call three times
+        # and delay this module's own recovery by the backoff; that recovery is the
+        # retry policy.
         num_retries=0,
-        **({"extra_body": {"reasoning": {"enabled": False}}} if forced else {}),
     )
     try:
         async for chunk in stream:
@@ -510,25 +538,27 @@ async def _step_chunks(
     model: str,
     messages: list[dict[str, Any]],
     *,
-    forced: bool,
     at_limit: bool,
 ) -> AsyncIterator[Any]:
-    """One step's chunks, with a provider's ``tool_choice`` refusal typed.
+    """One step's chunks.
 
-    A 400 raised while *opening* the step, before any chunk arrived, means the
-    provider rejected the request shape. Only a forced step can be refused this
-    way, so only a forced step is retried; a 400 on an unforced step is a real
-    failure and is re-raised.
+    Every step is sent with ``tool_choice: "auto"`` — the model decides whether to
+    search, and the system prompt is what steers it. The last permitted step is
+    ``"none"``, which forces prose and terminates the loop.
+
+    The provider handling from D-4a is kept: a 400 raised while *opening* the step
+    whose message names ``tool_choice`` is a capability mismatch rather than a
+    defect in the member's question, so it is typed as ``_ToolChoiceUnsupported``
+    and the route retries once before falling back to the server's own search.
     """
-    choice = "none" if at_limit else ("required" if forced else "auto")
+    choice = "none" if at_limit else "auto"
     try:
         async for chunk in _stream_completion(settings, model, messages, tool_choice=choice):
             yield chunk
     except Exception as exc:
-        if forced and _is_tool_choice_rejection(exc):
+        if _is_tool_choice_rejection(exc):
             LOGGER.warning(
-                "The provider refused tool_choice=required (%s); retrying unforced",
-                type(exc).__name__,
+                "The provider refused tool_choice=%s (%s); recovering", choice, type(exc).__name__
             )
             raise _ToolChoiceUnsupported(str(exc)) from exc
         raise
@@ -555,13 +585,13 @@ async def _server_search(
     *,
     on_tool_call: Callable[[list["ToolCall"]], None] | None,
     tool_calls: list["ToolCall"],
-    previous: str | None,
 ) -> "ToolCall":
     """Run the one tool on the member's own message, as the server's fallback.
 
-    FR-005 requires this: a first step that arrives without a tool call — whether
-    the model ignored the hint or the provider refused the forced step — still
-    ends in a retrieval, so the grounding verdict always has evidence to judge.
+    It is used when the provider refuses even ``auto``, which is the one case the
+    product cannot get an answer without searching (D-4a). A model that simply
+    chooses not to search on a small-talk turn is *not* routed here: that turn
+    answers without evidence and is reported ``not_searched``.
     """
     search_started = time.monotonic()
     result = await ask_chat.search_documents(
@@ -581,7 +611,6 @@ async def _server_search(
     tool_calls.append(call)
     if on_tool_call is not None:
         on_tool_call(tool_calls)
-    del previous
     return call
 
 
@@ -608,11 +637,48 @@ def _assistant_tool_message(text: str, call: ToolCall) -> dict[str, Any]:
     }
 
 
-def _grounding(answer: str, passages: Sequence[ask_chat.Passage]) -> str:
-    """The landed classifier, plus the "nothing survived the floor" case."""
+def _grounding(
+    answer: str,
+    passages: Sequence[ask_chat.Passage],
+    *,
+    searched: bool,
+    reused_evidence: bool,
+) -> str:
+    """The verdict for one turn's answer.
+
+    Four outcomes, and the distinction the task is about:
+
+    * no search in this turn **and** no reuse of evidence already in the thread:
+      ``not_searched``. The model answered from its own knowledge — small talk, a
+      thanks, or a rework it should not have needed to search for — and calling that
+      "grounded" would be a lie about the corpus;
+    * no search but the answer reworks evidence already given in this thread:
+      ``grounded``, because the content did come from the corpus, and the citations
+      from the earlier answer still resolve;
+    * a search that returned nothing: ``no_relevant_sources``;
+    * otherwise the landed classifier, which separates ``declined`` from
+      ``grounded``.
+    """
+    if not searched and not reused_evidence:
+        return Grounding.NOT_SEARCHED.value
     if not passages:
         return Grounding.NO_RELEVANT_SOURCES.value
     return grounding_for(answer).value
+
+
+def _has_prior_evidence(history: Sequence[ask_chat.Turn]) -> bool:
+    """True when an earlier turn in this thread already grounded an answer.
+
+    That is what makes "rework your previous answer" legitimate without a new
+    search: the content the model is reworking came from the corpus, and its
+    citations are already in the thread. A thread whose earlier turns never
+    searched has no such evidence to reuse.
+    """
+    return any(
+        turn.grounding in {Grounding.GROUNDED.value, Grounding.DECLINED.value}
+        and bool(turn.answer)
+        for turn in history
+    )
 
 
 def _first_delta(chunk: Any) -> dict[str, Any]:
@@ -629,33 +695,6 @@ def _first_delta(chunk: Any) -> dict[str, Any]:
         "content": getattr(delta, "content", None),
         "tool_calls": getattr(delta, "tool_calls", None),
     }
-
-
-def _delta_tool_calls(delta: dict[str, Any]) -> list[dict[str, Any]]:
-    """Tool-call fragments from one delta, in OpenAI's call shape."""
-    found = delta.get("tool_calls")
-    if not isinstance(found, list):
-        return []
-    calls: list[dict[str, Any]] = []
-    for item in found:
-        function = (
-            item.get("function") if isinstance(item, dict) else getattr(item, "function", None)
-        )
-        if isinstance(function, dict):
-            name = function.get("name")
-            arguments = function.get("arguments")
-        else:
-            name = getattr(function, "name", None)
-            arguments = getattr(function, "arguments", None)
-        call_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
-        calls.append(
-            {
-                "id": call_id,
-                "type": "function",
-                "function": {"name": name, "arguments": arguments},
-            }
-        )
-    return calls
 
 
 def _arguments(call: dict[str, Any]) -> dict[str, Any]:

@@ -1557,7 +1557,8 @@
         "enum": [
           "grounded",
           "declined",
-          "no_relevant_sources"
+          "no_relevant_sources",
+          "not_searched"
         ],
         "title": "Grounding",
         "type": "string"

@@ -24,6 +24,11 @@ class Grounding(StrEnum):
     GROUNDED = "grounded"
     DECLINED = "declined"
     NO_RELEVANT_SOURCES = "no_relevant_sources"
+    # The turn answered without searching at all — a thanks, a small talk reply,
+    # or a rework of the assistant's own previous answer from content already in
+    # the thread. It is not "not found": nothing was looked for, so there is
+    # nothing to have failed to find. Never rendered as grounded.
+    NOT_SEARCHED = "not_searched"
 
 
 DEFLECTION_PHRASES = (

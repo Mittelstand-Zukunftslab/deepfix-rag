@@ -11,7 +11,7 @@ import { z } from "zod";
  * where it arrives rather than rendering as `undefined`.
  */
 
-export const askGrounding = z.enum(["grounded", "declined", "no_relevant_sources"]);
+export const askGrounding = z.enum(["grounded", "declined", "no_relevant_sources", "not_searched"]);
 export type AskGrounding = z.infer<typeof askGrounding>;
 
 export const askTurnStatus = z.enum(["running", "completed", "failed", "cancelled"]);

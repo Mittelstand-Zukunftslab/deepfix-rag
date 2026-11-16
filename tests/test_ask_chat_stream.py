@@ -142,6 +142,12 @@ class Endpoint(BaseHTTPRequestHandler):
         if self.state.mode == "reject_required":
             self._tool_call("call-1", '{"query": "Trunkenheitsfahrt"}')
             return self._end()
+        if self.state.mode == "fragmented_tool" and not has_tool_result:
+            self._tool_call_fragmented("call-1", '{"query": "Trunkenheitsfahrt"}')
+            return self._end()
+        if self.state.mode == "fragmented_tool":
+            self._text("Die Trunkenheitsfahrt ist nach § 315c StGB strafbar [1].")
+            return self._end()
         if self.state.mode == "tool_then_text" and not has_tool_result:
             self._tool_call("call-1", '{"query": "Trunkenheitsfahrt"}')
             return self._end()
@@ -149,15 +155,24 @@ class Endpoint(BaseHTTPRequestHandler):
             self._text("Die Trunkenheitsfahrt ist nach § 315c StGB strafbar [1].")
             return self._end()
         if self.state.mode == "no_tool_call":
-            # A provider that ignores tool_choice: text with no call on step one.
-            self._text("Die Antwort ist [1].")
+            # A model that chooses not to search, which `auto` now permits: this is
+            # a small-talk turn, and the turn must be reported `not_searched`.
+            self._text("Gern geschehen!")
             return self._end()
         if self.state.mode == "empty_result":
+            # Searches first, then refuses — the floor dropped everything, so the
+            # turn is `no_relevant_sources`, not `not_searched`.
+            if not has_tool_result:
+                self._tool_call("call-1", '{"query": "bootspreis"}')
+                return self._end()
             self._text(
                 "I do not have enough information in these documents to answer that question."
             )
             return self._end()
         if self.state.mode == "injection":
+            if not has_tool_result:
+                self._tool_call("call-1", '{"query": "Führerschein"}')
+                return self._end()
             self._text("Der Führerschein wird entzogen [1].")
             return self._end()
         if self.state.mode == "unknown_tool":
@@ -227,6 +242,64 @@ class Endpoint(BaseHTTPRequestHandler):
                 ],
             }
         )
+
+    def _tool_call_fragmented(self, call_id: str, arguments: str) -> None:
+        """One call streamed as many deltas, the way the deployed provider sends it.
+
+        Every piece is at ``index: 0``. Only the first carries the ``id`` and the
+        ``name``, with an empty argument string; the rest carry ``name: None`` and a
+        slice of the JSON. This is the shape that produced
+        ``search_documents({})`` followed by an unknown-tool failure, and it is the
+        reason a delta must never be treated as a call of its own.
+        """
+        pieces = [arguments[i : i + 3] for i in range(0, len(arguments), 3)]
+        self._send(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "model": MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": call_id,
+                                    "type": "function",
+                                    "function": {"name": "search_documents", "arguments": ""},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        )
+        for piece in pieces:
+            self._send(
+                {
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion.chunk",
+                    "model": MODEL,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": None,
+                                        "type": "function",
+                                        "function": {"name": None, "arguments": piece},
+                                    }
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
 
     def _end(self) -> None:
         self._send(
@@ -397,23 +470,57 @@ def test_a_tool_call_then_text_streams_in_order_and_stores_one_ask_row(
     assert tool_out["passages"][0]["truncated"] is True
 
 
-def test_a_first_step_with_no_tool_call_still_searches(
+def test_a_turn_that_does_not_search_is_never_labelled_grounded(
     tmp_path: Path, endpoint: State, identity: IdentityIssuer
 ) -> None:
-    """AC 7: the server runs the tool itself, so no turn answers unretrieved."""
+    """A `thanks` turn makes no search and is `not_searched`, never Grounded.
+
+    `tool_choice` is `auto` on every step, so the model decides whether to search
+    and the system prompt steers that decision. When it answers without searching
+    and the thread has no evidence to reuse, the turn must not claim the corpus
+    supported it: the grounding is `not_searched`, the badge the browser draws is
+    "Not searched", and no citations are invented.
+    """
     endpoint.mode = "no_tool_call"
     settings = _settings(tmp_path, endpoint)
     with _client(settings, identity) as client:
-        _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+        _, frames = _ask(client, identity, "Danke, das hilft!")
+
+    # Every step was sent unforced, and the model made no tool call.
+    assert endpoint.requests
+    assert all(request.get("tool_choice") == "auto" for request in endpoint.requests)
     types = _types(frames)
-    # The server's own search appears as a tool call the browser can render.
-    assert "tool-output-available" in types
-    server_call = next(f for f in frames if f["type"] == "tool-input-start")
-    assert server_call["toolCallId"] == "server"
-    assert server_call["toolName"] == ask_chat.TOOL_NAME
-    # The first upstream request asked for a required tool; the second carried it.
-    assert endpoint.requests[0]["tool_choice"] == "required"
-    assert any(message.get("role") == "tool" for message in endpoint.requests[1]["messages"])
+    assert "tool-input-start" not in types
+    assert "tool-output-available" not in types
+
+    grounding = next(f for f in frames if f["type"] == "data-deepfix-grounding")["data"]
+    assert grounding["grounding"] == "not_searched"
+    assert grounding["citations"] == []
+    turn = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
+    assert turn["status"] == "completed"
+    assert turn["grounding"] == "not_searched"
+
+    # Nothing was retrieved, so the interaction holds no hits — and no vote can be
+    # cast on a passage that was never shown.
+    with connect(settings.product_db_path) as conn:
+        rows = conn.execute("SELECT interaction_id FROM interactions").fetchall()
+        hits = conn.execute("SELECT COUNT(*) FROM interaction_hits").fetchone()[0]
+    assert len(rows) == 1
+    assert hits == 0
+
+    # And a real question in the same deployment still searches and grounds.
+    endpoint.mode = "tool_then_text"
+    endpoint.requests.clear()
+    with _client(settings, identity) as client:
+        _, answered = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+    assert any(
+        message.get("role") == "tool"
+        for request in endpoint.requests
+        for message in request.get("messages", [])
+    )
+    grounded = next(f for f in answered if f["type"] == "data-deepfix-grounding")["data"]
+    assert grounded["grounding"] == "grounded"
+    assert grounded["citations"], "a grounded answer cites the passage it used"
 
 
 def test_an_empty_result_refuses_with_the_deflection_phrase(
@@ -546,74 +653,43 @@ def test_a_request_that_is_not_the_members_question_or_has_no_index_is_refused(
         assert unsigned.status_code == 401
 
 
-def test_a_provider_that_refuses_the_forced_tool_step_still_answers(
+def test_a_provider_that_refuses_auto_is_recovered_from(
     tmp_path: Path, endpoint: State, identity: IdentityIssuer
 ) -> None:
-    """The deployed 400 is recovered from, not surfaced as a failed turn.
+    """A provider that refuses `tool_choice` must not turn a question into a failure.
 
-    On 2026-11-15 every Ask turn failed at step 0 because OpenRouter routed
-    `LLM_MODEL` to a provider that answers 400 "The tool_choice parameter does not
-    support being set to required or object in thinking mode". Two recoveries are
-    asserted here against a real socket, because both are needed:
+    No step forces a tool any more (D-4), so the shape a provider sees is `auto`
+    or `none`. The D-4a handling is kept because a provider can still refuse the
+    request outright: when it answers a 400 whose message names `tool_choice`
+    before emitting anything, the server searches itself and the turn answers from
+    that evidence rather than failing (FR-005).
 
-    * with thinking switched off for the forced step, the provider accepts it and
-      the model calls the tool — the normal path, and what the fix sends;
-    * a provider that refuses *everything* still leaves a completed turn, because
-      the turn falls back to the server's own search (FR-005) rather than failing.
-
-    The first request's body is also asserted: `reasoning.enabled is False` must
-    be present only on the forced step, and the retry must be unforced.
+    Two providers are exercised over a real socket: one that refuses only while
+    thinking is on (which must still produce a normal tool-then-answer turn) and
+    one that refuses every pre-retrieval step (which must fall back).
     """
-    # Path 1: the forced step carries reasoning disabled and is accepted, so the
-    # model makes the tool call itself and the answer is its own.
-    # Path 1: the deployed shape. The forced step carries thinking disabled; the
-    # provider may still refuse it, and either recovery is acceptable — what must
-    # not happen is a failed turn.
     endpoint.mode = "reject_required"
     settings = _settings(tmp_path, endpoint)
     with _client(settings, identity) as client:
         _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
     assert endpoint.requests, "the provider was never called"
-    first = endpoint.requests[0]
-    # The forced step is what the product sends, and it asks the provider to skip
-    # thinking — the flag that makes a forced tool choice legal there.
-    print(
-        "SEQ",
-        [
-            (
-                r.get("tool_choice"),
-                bool(r.get("reasoning")),
-                any(m.get("role") == "tool" for m in r.get("messages", [])),
-            )
-            for r in endpoint.requests
-        ],
-    )
-    print("ERRTEXT", [f.get("errorText") for f in frames if f["type"] == "error"])
-    assert first["tool_choice"] == "required"
-    assert first["reasoning"] == {"enabled": False}
-    types = _types(frames)
-    assert types[-2:] == ["data-deepfix-turn", "finish"]
+    # Every step is unforced now, and none carries a reasoning flag.
+    assert all(request.get("tool_choice") in {"auto", "none"} for request in endpoint.requests)
+    assert all("reasoning" not in request for request in endpoint.requests)
     terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
     assert terminal["status"] == "completed"
-    # The turn retrieved, whichever path did it: the model's call or the server's.
     tool_in = next(f for f in frames if f["type"] == "tool-input-start")
     assert tool_in["toolName"] == ask_chat.TOOL_NAME
     stored = next(f for f in frames if f["type"] == "tool-output-available")["output"]
     assert stored["passages"], "the tool's passages still reached the browser"
 
-    # Path 2: a provider that refuses every forced *and* unforced step. The turn
-    # must not fail: the server searches, and the member gets an answer.
+    # A provider that refuses every step before a tool result exists: the server
+    # searches, and the member still gets an answer.
     endpoint.mode = "always_reject"
     endpoint.requests.clear()
     settings = _settings(tmp_path / "second", endpoint)
     with _client(settings, identity) as client:
         _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
-    # The forced step, its unforced retry, and then the step that answers with the
-    # server's search in the conversation.
-    assert len(endpoint.requests) >= 3
-    assert endpoint.requests[0]["tool_choice"] == "required"
-    assert endpoint.requests[1]["tool_choice"] == "auto"
-    types = _types(frames)
     terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
     assert terminal["status"] == "completed"
     server_call = next(f for f in frames if f["type"] == "tool-input-start")
@@ -626,3 +702,57 @@ def test_a_provider_that_refuses_the_forced_tool_step_still_answers(
             ]
             == 0
         )
+
+
+def test_a_tool_call_streamed_as_many_deltas_is_assembled_not_split(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """One call arriving as ~10 deltas must become one call with its full arguments.
+
+    The deployed provider streams a single tool call as many chunks, all at
+    ``index: 0``: the first carries the id and ``name='search_documents'`` with an
+    empty argument string, and the rest carry ``name=None`` and a fragment of the
+    JSON. Treating each delta as a call made the first one
+    ``search_documents({})`` — the tool refuses an empty query — and the second
+    raise the unknown-tool error, so the live stream showed a
+    ``tool-input-available`` with ``input: {}`` followed by an error part.
+
+    The fix accumulates by ``index`` across the step and parses once the step's
+    stream has ended. This test drives that exact shape over a real socket.
+    """
+    endpoint.mode = "fragmented_tool"
+    settings = _settings(tmp_path, endpoint)
+    with _client(settings, identity) as client:
+        _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+
+    types = _types(frames)
+    # One call, announced and delivered once — not once per delta.
+    assert types.count("tool-input-start") == 1
+    assert types.count("tool-input-available") == 1
+    assert types.count("tool-output-available") == 1
+    assert "error" not in types
+
+    # The assembled call carries the whole query, not an empty object.
+    available = next(f for f in frames if f["type"] == "tool-input-available")
+    assert available["toolName"] == ask_chat.TOOL_NAME
+    assert available["input"] == {"query": "Trunkenheitsfahrt"}
+
+    # The tool ran on that query and its passages reached the browser.
+    stored = next(f for f in frames if f["type"] == "tool-output-available")["output"]
+    assert stored["query"] == "Trunkenheitsfahrt"
+    assert stored["passages"], "the assembled query was searched"
+    assert stored["grounding"] == "grounded"
+
+    # The turn completed, grounded, and stored one interaction with hits.
+    turn = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
+    assert turn["status"] == "completed"
+    grounding = next(f for f in frames if f["type"] == "data-deepfix-grounding")["data"]
+    assert grounding["grounding"] == "grounded"
+    assert grounding["citations"], "the answer cited the passage it used"
+    with connect(settings.product_db_path) as conn:
+        hits = conn.execute("SELECT COUNT(*) FROM interaction_hits").fetchone()[0]
+        failed = conn.execute(
+            "SELECT COUNT(*) FROM ask_chat_turns WHERE status = 'failed'"
+        ).fetchone()[0]
+    assert hits >= 1
+    assert failed == 0
