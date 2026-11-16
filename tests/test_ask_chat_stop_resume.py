@@ -123,7 +123,91 @@ class Endpoint(BaseHTTPRequestHandler):
             self._done()
             return
         if not has_tool:
+            if self.state.mode == "refuse_before_search":
+                # The reported first step: the model refuses without ever calling the
+                # tool. Live, that turn answered nothing useful — so the server must
+                # search on the member's behalf and take one more step (D-12).
+                self._text("I do not have enough information to answer that question.")
+                self._done()
+                return
+            if self.state.mode == "refuse_then_search":
+                # The other reported first step: refusal prose, then the tool call in
+                # the same step. The prose must never reach the member or the stored
+                # answer, and the citations that follow must win its grading.
+                self._text("I do not have enough information about that yet. ")
+                self._tool_call("call-1", '{"query": "Trunkenheitsfahrt"}')
+                self._done()
+                return
             self._tool_call("call-1", '{"query": "Trunkenheitsfahrt"}')
+            self._done()
+            return
+        if self.state.mode == "reasoning_only_after_tool" and has_tool:
+            # The reported turn after the searches: the final step spends its whole
+            # output budget on hidden reasoning and writes no visible text, and the
+            # provider ends the step anyway. The turn must still end honestly, and
+            # whatever sentence the server substitutes must reach the page rather
+            # than existing only in the store (D-12).
+            for piece in ["Let me ", "consider ", "the passages ", "at length."]:
+                self._send(
+                    {
+                        "id": "c",
+                        "object": "chat.completion.chunk",
+                        "model": MODEL,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"reasoning_content": piece},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+            self._send(
+                {
+                    "id": "c",
+                    "object": "chat.completion.chunk",
+                    "model": MODEL,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}],
+                }
+            )
+            self._done()
+            return
+        if self.state.mode == "cited_answer_with_preamble" and has_tool:
+            # The Calvin shape: a real, cited answer that opens by framing itself and
+            # contains a refusal-shaped qualifier about part of the question. Live,
+            # that answer was graded `declined` even though it cited five passages —
+            # the phrase list matched a substring and outvoted the citations.
+            self._text("# The Calvin Cycle: Step-by-Step Breakdown\n\n")
+            self._text("Based on the documents, the cycle has three phases. ")
+            self._text(
+                "The documents do not contain any information about the enzyme's industrial use. "
+            )
+            self._text("First, carbon fixation by RuBisCO [1]. ")
+            self._text("Then reduction [2], and finally regeneration of RuBP [1].")
+            self._send(
+                {
+                    "id": "c",
+                    "object": "chat.completion.chunk",
+                    "model": MODEL,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                }
+            )
+            self._done()
+            return
+        if self.state.mode == "slow_after_tool" and has_tool:
+            # The stream stays open and sends nothing for longer than the keep-alive
+            # interval. This is the shape a silent provider produces, and it is what
+            # Cloudflare would drop if no bytes moved (D-12).
+            time.sleep(self.state.pause or 1.5)
+            self._text("Die Trunkenheitsfahrt ist strafbar [1].")
+            self._send(
+                {
+                    "id": "c",
+                    "object": "chat.completion.chunk",
+                    "model": MODEL,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                }
+            )
             self._done()
             return
         if self.state.mode == "stall_after_tool" and has_tool:
@@ -229,6 +313,17 @@ class Endpoint(BaseHTTPRequestHandler):
             except OSError:
                 return True
         return False
+
+    def _text(self, content: str) -> None:
+        """One prose delta, as a provider sends it."""
+        self._send(
+            {
+                "id": "c",
+                "object": "chat.completion.chunk",
+                "model": MODEL,
+                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
+            }
+        )
 
     def _send(self, payload: dict) -> None:
         self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
@@ -1083,12 +1178,36 @@ def test_each_step_carries_the_reasoning_control_and_the_output_cap(
     )
     from deepfix_rag.ask_chat_turn import reasoning_kwargs
 
-    assert reasoning_kwargs(settings) == {"extra_body": {"reasoning": {"enabled": False}}}
-    low = settings.model_copy(update={"ASK_CHAT_REASONING": "low"})
-    assert reasoning_kwargs(low) == {"extra_body": {"reasoning": {"effort": "low"}}}
+    # The two steps want opposite things, and each has its own setting (D-12).
+    off_answers = settings.model_copy(
+        update={"ASK_CHAT_REASONING": "off", "ASK_CHAT_TOOL_STEP_REASONING": "low"}
+    )
+    assert reasoning_kwargs(off_answers, tool_step=False) == {
+        "extra_body": {"reasoning": {"enabled": False}}
+    }, "the answer step thinks as little as possible"
+    assert reasoning_kwargs(off_answers, tool_step=True) == {
+        "extra_body": {"reasoning": {"effort": "low"}}
+    }, "a step that may call the tool keeps room to decide"
+    # Both off, and both high, are honoured per step rather than globally.
+    both_off = settings.model_copy(
+        update={"ASK_CHAT_REASONING": "off", "ASK_CHAT_TOOL_STEP_REASONING": "off"}
+    )
+    assert reasoning_kwargs(both_off, tool_step=True) == {
+        "extra_body": {"reasoning": {"enabled": False}}
+    }
+    both_high = settings.model_copy(
+        update={"ASK_CHAT_REASONING": "high", "ASK_CHAT_TOOL_STEP_REASONING": "medium"}
+    )
+    assert reasoning_kwargs(both_high, tool_step=True) == {
+        "extra_body": {"reasoning": {"effort": "medium"}}
+    }
+    assert reasoning_kwargs(both_high, tool_step=False) == {
+        "extra_body": {"reasoning": {"effort": "high"}}
+    }
     # A non-OpenRouter endpoint must not be sent a field its schema does not have.
     other = settings.model_copy(update={"LLM_BASE_URL": "https://api.example.com/v1"})
-    assert reasoning_kwargs(other) == {"extra_body": {}}
+    assert reasoning_kwargs(other, tool_step=True) == {"extra_body": {}}
+    assert reasoning_kwargs(other, tool_step=False) == {"extra_body": {}}
 
 
 def test_the_reasoning_control_does_not_break_tool_calling(
@@ -1116,6 +1235,10 @@ def test_the_reasoning_control_does_not_break_tool_calling(
     # Every step carries the output cap, which is standard and always sent.
     assert endpoint.requests, "the provider was called"
     assert all(body.get("max_tokens") == 256 for body in endpoint.requests)
+    # And each step's tool_choice decides its reasoning level: the step that could
+    # call the tool asks for effort, the forced answer step asks for none. The host
+    # here is the fake endpoint, so the field is correctly omitted — the level split
+    # itself is asserted on `reasoning_kwargs` above and through the next test.
     types = [f["type"] for f in frames]
     assert "tool-output-available" in types, "the tool ran"
     assert types.index("tool-output-available") < types.index("text-delta")
@@ -1123,3 +1246,205 @@ def test_the_reasoning_control_does_not_break_tool_calling(
     assert turn["status"] == "completed"
     assert turn["passages"], "the search's evidence is stored"
     assert "strafbar" in (turn["answer"] or "")
+
+
+def test_refusal_prose_then_a_tool_call_never_reaches_the_member_or_the_store(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-12: pre-search prose is preamble, and preamble is not the answer.
+
+    Live with thinking off, a first step wrote "I do not have enough information…"
+    and *then* called the tool. The refusal was never what the member asked for, and
+    streaming it left them reading a refusal that the answer then contradicted. The
+    first step's prose is held until the step ends: a tool call discards it.
+    """
+    endpoint.mode = "refuse_then_search"
+    settings = _settings(tmp_path, endpoint)
+    with _client(settings, identity) as client:
+        thread_id, _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+        detail = client.get(f"/ask/chat/threads/{thread_id}").json()
+
+    streamed = "".join(f["delta"] for f in frames if f["type"] == "text-delta")
+    # The refusal prefix is gone from the stream entirely.
+    assert "do not have enough information" not in streamed
+    assert "Trunkenheitsfahrt ist strafbar" in streamed
+    # And the member sees the tool working before any prose, so the order is the
+    # order the answer was built in.
+    types = [f["type"] for f in frames]
+    assert types.index("tool-output-available") < types.index("text-delta")
+
+    turn = detail["turns"][-1]
+    assert turn["status"] == "completed"
+    assert "do not have enough information" not in (turn["answer"] or "")
+    # The answer that survived cites its evidence, so its grading is grounded —
+    # the refusal phrase that used to prefix it must not win (D-12).
+    assert turn["citations"], "the stored answer keeps its citations"
+    assert turn["grounding"] == "grounded", "a cited answer is grounded, not declined"
+
+
+def test_a_first_step_that_refuses_without_searching_is_searched_for(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-12: the server searches when the model declines before looking.
+
+    This is the failure that made 4 of 7 live turns answer "I do not have enough
+    information" in two seconds: no search, so nothing was ever looked at. The turn
+    must not end on that refusal — the server runs the member's own question through
+    the tool and takes one more step with the evidence.
+    """
+    endpoint.mode = "refuse_before_search"
+    settings = _settings(tmp_path, endpoint)
+    with _client(settings, identity) as client:
+        thread_id, _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+        detail = client.get(f"/ask/chat/threads/{thread_id}").json()
+
+    types = [f["type"] for f in frames]
+    # The server's own search happened, and its output reached the page.
+    assert "tool-output-available" in types, f"no search ran: {types}"
+    turn = detail["turns"][-1]
+    assert turn["passages"], "the server's search is stored as the turn's evidence"
+    assert turn["retrieval_query"], "and its query is recorded"
+    # The refusal that opened the turn is not what was stored.
+    assert "do not have enough information" not in (turn["answer"] or "").lower()
+    assert turn["status"] == "completed"
+
+
+def test_a_final_step_that_only_reasons_still_gives_the_member_its_sentence(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-12: substituted text is the answer, so it is streamed as well as stored.
+
+    Live, a turn searched for 10 s and then streamed nothing at all: the final step
+    spent its whole output budget on hidden reasoning and ended. The server stored a
+    refusal and the page stayed blank, because the fallback was written to the store
+    and never sent. A member must not have to reload to find out what happened.
+    """
+    endpoint.mode = "reasoning_only_after_tool"
+    settings = _settings(tmp_path, endpoint)
+    with _client(settings, identity) as client:
+        thread_id, _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+        detail = client.get(f"/ask/chat/threads/{thread_id}").json()
+
+    streamed = "".join(f["delta"] for f in frames if f["type"] == "text-delta")
+    turn = detail["turns"][-1]
+    # What the member read is what was stored — the fallback is in both.
+    assert streamed.strip(), "the turn streamed no text at all"
+    assert streamed == turn["answer"]
+    assert "do not have enough information" in streamed.lower()
+    # The step is well-formed: a text group that opened is closed.
+    types = [f["type"] for f in frames]
+    assert types.count("text-start") == types.count("text-end")
+    assert turn["status"] == "completed"
+    # The reasoning that consumed the budget is never shown.
+    assert "consider" not in streamed.lower()
+
+
+def test_a_cited_answer_that_opens_with_framing_is_grounded_not_declined(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-12: a citation the model actually wrote outranks the refusal phrase list.
+
+    The reported Calvin turn was a real, cited answer — "The Calvin Cycle:
+    Step-by-Step Breakdown … Based on the documents …" with five valid citations —
+    graded ``declined`` because the phrase list matched a refusal-shaped substring
+    somewhere in it. A member who got a correct answer was told it had failed.
+    """
+    endpoint.mode = "cited_answer_with_preamble"
+    settings = _settings(tmp_path, endpoint)
+    with _client(settings, identity) as client:
+        thread_id, _, frames = _ask(client, identity, "Explain the Calvin cycle.")
+        detail = client.get(f"/ask/chat/threads/{thread_id}").json()
+
+    turn = detail["turns"][-1]
+    assert turn["status"] == "completed"
+    assert len(turn["citations"]) >= 2, "the answer cites its evidence"
+    assert turn["grounding"] == "grounded"
+    # The heading the model wrote survived to the page; it is prose, not preamble
+    # before a search, so the hold rule must not touch it.
+    streamed = "".join(f["delta"] for f in frames if f["type"] == "text-delta")
+    assert "Calvin Cycle" in streamed
+
+
+def test_a_slow_but_live_turn_sends_keepalive_comments_on_the_wire(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-12: the keep-alive as a member's proxy sees it, not just as a helper.
+
+    A reasoning step can leave the connection silent for longer than Cloudflare will
+    hold it, so the relay writes an SSE comment whenever its queue has been empty for
+    the interval. This drives the real app over a real socket with a provider that
+    goes quiet after the search, and reads the raw body: the comment must actually be
+    on the wire, between the tool output and the text that follows it.
+
+    The interval is shortened for the run. It is the same code path either way — a
+    test that waited the production 15 s would only be slower.
+    """
+    from deepfix_rag.api import chat_stream
+
+    endpoint.mode = "slow_after_tool"
+    endpoint.pause = 1.5
+    settings = _settings(tmp_path, endpoint)
+    app = create_app(
+        settings, embed_model=MockEmbedding(embed_dim=16), token_verifier=identity.verifier()
+    )
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on")
+    )
+    loop_thread = threading.Thread(target=server.run, daemon=True)
+    original = chat_stream.KEEPALIVE_SECONDS
+    chat_stream.KEEPALIVE_SECONDS = 0.2
+    loop_thread.start()
+    try:
+        _await_server(server)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        base = f"http://127.0.0.1:{port}"
+        headers = {"Authorization": f"Bearer {identity.token(MEMBER)}"}
+        with httpx.Client(timeout=60) as client:
+            thread_id = client.post(f"{base}/ask/chat/threads", headers=headers).json()[
+                "thread_id"
+            ]
+            with client.stream(
+                "POST",
+                f"{base}/ask/chat/completions",
+                headers=headers,
+                json={
+                    "thread_id": thread_id,
+                    "messages": [
+                        {"role": "user", "content": "Ist eine Trunkenheitsfahrt strafbar?"}
+                    ],
+                },
+            ) as response:
+                assert response.status_code == 200
+                body = "".join(response.iter_text())
+    finally:
+        chat_stream.KEEPALIVE_SECONDS = original
+        server.should_exit = True
+        loop_thread.join(timeout=15)
+
+    # The comment is a real line in the body, not a data part the client must parse.
+    comments = [line for line in body.splitlines() if line.strip() == ": keepalive"]
+    assert comments, f"no keep-alive comment in the stream:\n{body[:2000]}"
+    # It arrives while nothing else is being sent, so the connection never goes idle
+    # for the whole pause — and the answer still completes after it.
+    assert body.index(": keepalive") < body.index("text-delta")
+    assert "strafbar" in body
+
+
+def test_the_policy_states_the_deployment_cap_and_puts_searching_first() -> None:
+    """D-12: the prompt is the steer, so its shape is worth asserting.
+
+    Two things in it are load-bearing and invisible in a passing turn: the search
+    limit must be the number the loop enforces (a model told "3" while the server
+    allows 2 argues with a limit it cannot see), and the search-before-writing rule
+    must come before anything the model could imitate as an opening — the earlier
+    prompt described the assistant and its tool first, and the model introduced
+    itself before searching.
+    """
+    from deepfix_rag.ask_chat_turn import system_prompt
+
+    text = system_prompt(2)
+    assert "at most 2 searches" in text
+    assert "{max_tool_calls}" not in text
+    assert text.index("Rule 1") < text.index("Rule 2")
+    # The refusal phrase the prompt asks for is the one the classifier matches.
+    assert "i do not have enough information" in text.lower()

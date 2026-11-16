@@ -227,6 +227,7 @@ def test_every_setting_the_loop_reads_is_on_settings_compose_and_example_env() -
         "ASK_CHAT_MAX_PASSAGE_CHARS",
         "ASK_CHAT_TURN_TIMEOUT_SECONDS",
         "ASK_CHAT_REASONING",
+        "ASK_CHAT_TOOL_STEP_REASONING",
         "ASK_CHAT_MAX_OUTPUT_TOKENS",
     }
     compose = (REPO / "docker-compose.yml").read_text(encoding="utf-8")

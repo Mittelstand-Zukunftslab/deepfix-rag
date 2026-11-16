@@ -241,6 +241,7 @@ services:
       # reasoning model left to its provider default streams nothing but hidden
       # thinking, which reads as a hung page.
       ASK_CHAT_REASONING: ${ASK_CHAT_REASONING:-off}
+      ASK_CHAT_TOOL_STEP_REASONING: ${ASK_CHAT_TOOL_STEP_REASONING:-low}
       ASK_CHAT_MAX_OUTPUT_TOKENS: ${ASK_CHAT_MAX_OUTPUT_TOKENS:-2048}
     volumes:
       - api_data:/data

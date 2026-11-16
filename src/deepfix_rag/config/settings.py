@@ -142,7 +142,17 @@ class Settings(BaseSettings):
     # one turn — so this is a latency control, not a quality knob. "off" sends the
     # provider's own disable flag; the other values pass the effort level through.
     # It is a setting because a deployment may genuinely want the reasoning.
+    #
+    # This is the level for the **answer** step. A step that may call a tool uses
+    # ASK_CHAT_TOOL_STEP_REASONING instead: with thinking off, the model was
+    # observed opening with a refusal or role prose before any tool call in 4 of 7
+    # live turns, so the searching steps keep a little room to reason (D-12).
     ASK_CHAT_REASONING: Literal["off", "low", "medium", "high"] = "off"
+    # How much a step that may call `search_documents` may think. `low` is the
+    # measured setting: six of six live first steps called the tool cleanly with no
+    # prose first, in 1.1–2.2 s. Off is not the default here because it makes the
+    # model answer before it looks.
+    ASK_CHAT_TOOL_STEP_REASONING: Literal["off", "low", "medium", "high"] = "low"
     # Most tokens one step may produce. Reasoning tokens count against it, which is
     # why an uncapped reasoning step produced no visible text at all: the whole
     # budget went to the hidden part. Bounded so a runaway step fails fast instead
