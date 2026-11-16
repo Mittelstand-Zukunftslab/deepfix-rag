@@ -66,19 +66,18 @@ services:
     # (backend-api, hermes, diagnostic-agent) reaches it at
     # MLFLOW_TRACKING_URI=http://mlflow:5000 over the Compose network.
     #
-    # A human reads the UI through exactly one router defined here, which
-    # terminates TLS and requires the `deepfix-mlflow-auth` basic-auth
-    # middleware. The router lives in this file rather than in Dokploy so the
-    # middleware cannot be detached by a redeploy.
+    # A human reads the UI through the two routers defined here: the `web`
+    # entrypoint redirects to HTTPS, and the `websecure` one terminates TLS and
+    # requires the `deepfix-mlflow-auth` basic-auth middleware. Both are labels
+    # in this file rather than a Dokploy Domain entry, so a redeploy cannot
+    # detach the middleware.
     #
-    # Remove the Dokploy Domain entry for the `mlflow` service: it would create a
-    # second, unauthenticated router for the same Host. The priority below keeps
-    # that failure safe instead of silent, because this router wins the tie and
-    # the request is still challenged, but a lone authenticated router is the
-    # intended state.
+    # Remove the Dokploy Domain entry for `mlflow`. A leftover entry creates a
+    # second router for the same Host; the priority below keeps this one winning,
+    # so the request is still challenged, but a single router is the intent.
     #
     # Because Dokploy only attaches a service to dokploy-network when that
-    # service has a Domain, and this router replaces the Domain, the service
+    # service has a Domain, and these routers replace the Domain, the service
     # joins the network itself below. `traefik.docker.network` says which of its
     # two networks Traefik should dial, so the router cannot resolve the
     # container's `default`-network address instead.
@@ -86,21 +85,25 @@ services:
     # Two values fail closed. Empty MLFLOW_BASIC_AUTH_USERS is never read as
     # "no auth": with no entries nobody authenticates, so Traefik refuses every
     # request to the router. An unset MLFLOW_PUBLIC_HOST leaves the rule on the
-    # reserved `mlflow.invalid`, which matches no real request. Either way the
-    # UI does not open. backend-api, hermes, and diagnostic-agent are unaffected
-    # because they use mlflow:5000 inside the Compose network. Set both
-    # variables and redeploy to open the UI.
+    # reserved `deepfix-mlflow.invalid`, which matches no real request. Either
+    # way the UI does not open. backend-api, hermes, and diagnostic-agent are
+    # unaffected because they use mlflow:5000 inside the Compose network.
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=dokploy-network"
-      - "traefik.http.services.mlflow.loadbalancer.server.port=5000"
-      - "traefik.http.routers.deepfix-mlflow.rule=Host(`${MLFLOW_PUBLIC_HOST:-mlflow.invalid}`)"
+      - "traefik.http.services.deepfix-mlflow.loadbalancer.server.port=5000"
+      - "traefik.http.routers.deepfix-mlflow.rule=Host(`${MLFLOW_PUBLIC_HOST:-deepfix-mlflow.invalid}`)"
+      - "traefik.http.routers.deepfix-mlflow.entrypoints=web"
+      - "traefik.http.routers.deepfix-mlflow.middlewares=redirect-to-https@file,deepfix-mlflow-auth"
+      - "traefik.http.routers.deepfix-mlflow.service=deepfix-mlflow"
       - "traefik.http.routers.deepfix-mlflow.priority=1000"
-      - "traefik.http.routers.deepfix-mlflow.service=mlflow"
-      - "traefik.http.routers.deepfix-mlflow.entrypoints=websecure"
-      - "traefik.http.routers.deepfix-mlflow.tls=true"
-      - "traefik.http.routers.deepfix-mlflow.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.deepfix-mlflow.middlewares=deepfix-mlflow-auth"
+      - "traefik.http.routers.deepfix-mlflow-tls.rule=Host(`${MLFLOW_PUBLIC_HOST:-deepfix-mlflow.invalid}`)"
+      - "traefik.http.routers.deepfix-mlflow-tls.entrypoints=websecure"
+      - "traefik.http.routers.deepfix-mlflow-tls.tls=true"
+      - "traefik.http.routers.deepfix-mlflow-tls.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.deepfix-mlflow-tls.middlewares=deepfix-mlflow-auth"
+      - "traefik.http.routers.deepfix-mlflow-tls.service=deepfix-mlflow"
+      - "traefik.http.routers.deepfix-mlflow-tls.priority=1000"
       - "traefik.http.middlewares.deepfix-mlflow-auth.basicauth.users=${MLFLOW_BASIC_AUTH_USERS:-}"
     networks:
       - default
@@ -187,15 +190,32 @@ services:
       dockerfile: Dockerfile
     image: deepfix-api
     container_name: deepfix-api
-    # No published port. Traefik reaches this container on 8000 over its own
-    # Docker network, so nothing on the host can reach the API except through a
-    # router that terminates TLS and authenticates. The load-balancer port is a
-    # label because there is no published port for Traefik to infer it from.
-    # Dokploy supplies the router and its `Host` rule; see "Published ports" in
-    # README.md before re-adding a port mapping.
+    # No published port. Traefik reaches this container on 8000 over
+    # dokploy-network, so nothing on the host can reach the API except through a
+    # router that terminates TLS. Both routers are declared here, with the API's
+    # own host from DEEPFIX_API_HOST, so routing survives a redeploy that drops
+    # Dokploy's Domain-injected labels. `traefik.docker.network` picks
+    # dokploy-network over `default`, where no Traefik listens.
+    #
+    # Remove any Dokploy Domain entry for `backend-api`: it would add a second
+    # router for the same Host. See "Published ports" in README.md before
+    # re-adding a port mapping.
     labels:
       - "traefik.enable=true"
-      - "traefik.http.services.backend-api.loadbalancer.server.port=8000"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.services.deepfix-api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.deepfix-api.rule=Host(`${DEEPFIX_API_HOST:-deepfix-api.invalid}`)"
+      - "traefik.http.routers.deepfix-api.entrypoints=web"
+      - "traefik.http.routers.deepfix-api.middlewares=redirect-to-https@file"
+      - "traefik.http.routers.deepfix-api.service=deepfix-api"
+      - "traefik.http.routers.deepfix-api-tls.rule=Host(`${DEEPFIX_API_HOST:-deepfix-api.invalid}`)"
+      - "traefik.http.routers.deepfix-api-tls.entrypoints=websecure"
+      - "traefik.http.routers.deepfix-api-tls.tls=true"
+      - "traefik.http.routers.deepfix-api-tls.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.deepfix-api-tls.service=deepfix-api"
+    networks:
+      - default
+      - dokploy-network
     environment:
       WEB_ORIGIN: ${WEB_ORIGIN:-http://web:8080}
       AUTH_JWKS_URL: ${AUTH_JWKS_URL:-http://web:8080/api/auth/jwks}
@@ -279,14 +299,30 @@ services:
       context: ./web
     image: deepfix-web
     container_name: deepfix-web
-    # No published port: the public domain terminates at Traefik, which proxies
-    # to this container on 8080 over its own Docker network. The load-balancer
-    # port is a label because there is no published port to infer it from.
-    # Dokploy supplies the router and its `Host` rule; see "Published ports" in
-    # README.md.
+    # No published port: Traefik terminates TLS and proxies to this container on
+    # 8080 over dokploy-network. Both routers are declared here, with the app's
+    # own host from DEEPFIX_WEB_HOST, so routing survives a redeploy that drops
+    # Dokploy's Domain-injected labels. `traefik.docker.network` picks
+    # dokploy-network over `default`, where no Traefik listens.
+    #
+    # Remove any Dokploy Domain entry for `web`: it would add a second router for
+    # the same Host. See "Published ports" in README.md.
     labels:
       - "traefik.enable=true"
-      - "traefik.http.services.web.loadbalancer.server.port=8080"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.services.deepfix-web.loadbalancer.server.port=8080"
+      - "traefik.http.routers.deepfix-web.rule=Host(`${DEEPFIX_WEB_HOST:-deepfix.invalid}`)"
+      - "traefik.http.routers.deepfix-web.entrypoints=web"
+      - "traefik.http.routers.deepfix-web.middlewares=redirect-to-https@file"
+      - "traefik.http.routers.deepfix-web.service=deepfix-web"
+      - "traefik.http.routers.deepfix-web-tls.rule=Host(`${DEEPFIX_WEB_HOST:-deepfix.invalid}`)"
+      - "traefik.http.routers.deepfix-web-tls.entrypoints=websecure"
+      - "traefik.http.routers.deepfix-web-tls.tls=true"
+      - "traefik.http.routers.deepfix-web-tls.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.deepfix-web-tls.service=deepfix-web"
+    networks:
+      - default
+      - dokploy-network
     environment:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
       BETTER_AUTH_URL: ${WEB_ORIGIN:-http://localhost:8080}
