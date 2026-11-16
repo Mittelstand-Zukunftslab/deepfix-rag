@@ -201,20 +201,28 @@ docker compose exec backend-api printenv | grep '^ASK_CHAT_' | sort
 A fifth concurrent turn should answer `429` with the "busy" sentence rather than the member's own budget. Record what
 it said.
 
-## 8. Does the model honour `tool_choice` (AC 10)
+## 8. Does the model search when it should (AC 10)
 
-This closes the R-2 assumption one way or the other. Ask a question and read the trace for that turn in the
-`deepfix_product` experiment:
+This is where D-4b's rule is checked on the real stack, because the decision now
+lives in the system prompt and only a live model can show whether it obeys. Ask both
+kinds of turn and read each one's trace in the `deepfix_product` experiment:
 
 | Observation | Expected | Result |
 | :--- | :--- | :--- |
-| Did the model call `search_documents` on its **first** step? | record `yes` or `no` | NOT RUN |
-| If no: did the server's own search happen, and did the answer still retrieve? | yes | NOT RUN |
+| A real question: did the model call `search_documents`? | `yes` | NOT RUN |
+| A real question: was the badge **Grounded** with at least one citation? | `yes` | NOT RUN |
+| "Thanks": did the turn make any tool call? | `no` | NOT RUN |
+| "Thanks": was the badge **Not searched** with "Answered without searching"? | `yes` | NOT RUN |
+| "Make that shorter": did the turn answer without a new search, and render **Grounded**? | `yes` | NOT RUN |
+| Every step's `tool_choice` on the wire | `auto`, with `none` only on the last permitted step | NOT RUN |
 | Trace name and tags | `ask_chat`, tagged `interaction_id`, `thread_id`, `turn_id`, `grounding`, `status` | NOT RUN |
 | Child spans for a turn with one search | one `search_documents` span carrying `query`, `passage_count`, `max_score`, `duration_ms` | NOT RUN |
 
-A `no` is a **finding, not a failure**: FR-005's server-side fallback means the turn still retrieved, and the model
-may simply need a different `LLM_MODEL`. Record what the model actually did rather than what was hoped.
+A "thanks" that searches is a **finding**: the prompt is not steering the model,
+and the fix is the prompt or a different `LLM_MODEL`, not a return to forcing the
+tool. A real question that answers as **Not searched** is a worse finding, because
+it means an answer about the corpus came from the model's own knowledge; record the
+question and the model id with it.
 
 ## 9. What a stopped turn cost (AC 11)
 

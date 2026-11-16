@@ -4,7 +4,8 @@
 Feature
 
 ## Status
-Implemented — `09cd26f`, revised by `3b5d24f` on `feat/ask-chat-streaming`
+Implemented — `09cd26f`, revised by `3b5d24f` and again by the `tool_choice: auto`
+revision on `feat/ask-chat-streaming`
 
 ## Summary
 A member's question is answered by a loop that searches the corpus first and then writes, and the writing arrives as it is produced. The route speaks the Vercel AI SDK's UI message stream, so the browser's existing Assistant UI runtime renders the text and the tool calls without a second protocol. The turn is stored as one `interactions` row so votes, history, and the optimizer keep working.
@@ -25,14 +26,15 @@ A member's question is answered by a loop that searches the corpus first and the
 
 1. Given `POST /ask/chat/completions` (`operation_id="ask_chat_completion"`) with `{thread_id, messages}`, when a signed-in member calls it, then it returns a `StreamingResponse` with `media_type="text/event-stream"` and the header `x-vercel-ai-ui-message-stream: v1`, and the response body is a sequence of `data: {json}` frames ending with `data: [DONE]`.
 2. Given that stream, when the parts are read in order, then it carries `start`, then **per model step** a `start-step`, that step's `text-start`/`text-delta`*/`text-end` group, and a `finish-step`; a tool call's `tool-input-start`, `tool-input-available`, and `tool-output-available` arrive between one step's `finish-step` and the next step's `start-step`, because they are the boundary between steps; then one `data-deepfix-grounding`, one `data-deepfix-turn`, and `finish`. Any other part type is a failure, asserted by parsing every frame through the AI SDK's chunk schema. A two-step turn therefore carries **two** `start-step`/`finish-step` pairs — the first draft's single linear list was not emittable.
+2a. Given a provider that streams **one** tool call as many deltas — all at the same `index`, the first carrying the `id` and `name` with an empty argument string and the rest carrying `name: null` and a fragment of the JSON — then the step accumulates the fragments by `index` and emits exactly one `tool-input-available` whose `input` is the parsed whole object, and exactly one `tool-input-start` and one `tool-output-available`. The name check and the argument parsing run once, when the step's stream has ended, never per delta. `litellm.stream_chunk_builder` performs the merge.
 3. Given the same route, when an unauthenticated caller calls it, then 401; another member's `thread_id`, then 404; a request over a limit, then 429 from ASKCHAT-005; no serving index, then 503 with the existing "being prepared" sentence.
 4. Given a streamed turn, when a `text-delta` is produced by the model, then it is forwarded without waiting for the next one — the route does not buffer the reply.
 
 **The loop**
 
 5. Given the loop, when it is read, then it is `litellm.acompletion(model=…, messages=…, tools=[search_documents], tool_choice=…, stream=True)` with `num_retries=0`, and the model comes from `require_model("LLM_MODEL")` through `resolve_litellm_model(...)` — the two calls `RAGWorkflow._get_llm` makes. There is no second model setting, no literal, and no default; a missing `LLM_MODEL` fails naming the variable. `drop_params` is the process-wide flag `deepfix_rag.llm` sets **once at import**; the loop does not re-set it per step, because a global side effect inside a request races every other request in the process.
-6. Given the first step, when it is sent, then `tool_choice` is `"required"` **and** `extra_body` carries `{"reasoning": {"enabled": False}}`, because a reasoning provider refuses a forced tool choice with a 400 while thinking is on. `auto` and `none` steps send no such flag.
-6a. Given a provider that answers a `400` naming `tool_choice` before the first step produces anything, then the step is retried with `tool_choice: "auto"`, and if that is refused too the server runs `search_documents` itself and continues, so the turn still answers (FR-005). A refusal must never surface as a failed turn. `tests/test_ask_chat_stream.py` covers both recoveries against a real socket, and asserts the exact wire body of the forced step.
+6. Given any step, when it is sent, then `tool_choice` is `"auto"`, and the last permitted step is `"none"`. No step is forced to call a tool: the system prompt decides when a search is needed (D-4b), so no step carries a provider-specific reasoning flag.
+6a. Given a provider that answers a `400` naming `tool_choice` before a step produces anything, then the server runs `search_documents` itself and continues, so the turn still answers rather than failing. `tests/test_ask_chat_stream.py` covers this against a real socket, and asserts that no step is forced.
 7. Given a first step that ends with no tool call, when the turn has made none, then the server runs `search_documents` itself with the user's message, appends the result to the conversation, and continues the loop, so no turn answers without a retrieval having happened.
 8. Given a turn that has made `ASK_CHAT_MAX_TOOL_CALLS` calls, when the next step is sent, then `tool_choice` is `"none"`, so the turn ends in prose and cannot loop.
 9. Given the model emits a `toolName` other than `search_documents`, when the loop sees it, then the turn ends with an `error` part and is never executed.
@@ -54,7 +56,7 @@ A member's question is answered by a loop that searches the corpus first and the
 
 **The required test**
 
-19. Given `tests/test_ask_chat_stream.py`, when it runs against a real `uvicorn` fake OpenAI-compatible endpoint on a loopback port with `LLM_BASE_URL` pointed at it, and against the real sample index, then it asserts over a real socket: (a) tool call → text, in that part order; (b) no tool call on step 1 → the server searched → text; (c) an empty tool result → a refusal containing a `DEFLECTION_PHRASES` phrase and `no_relevant_sources`; (d) a passage containing an injection instruction → not followed, and the system prompt absent from the stream. No mocks.
+19. Given `tests/test_ask_chat_stream.py`, when it runs against a real `uvicorn` fake OpenAI-compatible endpoint on a loopback port with `LLM_BASE_URL` pointed at it, and against the real sample index, then it asserts over a real socket: (a) tool call → text, in that part order; (b) a turn that does not search → no tool part, `not_searched`, and never Grounded, and a real question in the same deployment still searches and grounds; (c) an empty tool result → a refusal containing a `DEFLECTION_PHRASES` phrase and `no_relevant_sources`; (d) a passage containing an injection instruction → not followed, and the system prompt absent from the stream; (e) **one tool call streamed as many deltas assembled into one call**, with the full `input` and no error part. No mocks. Case (e) exists because every other fixture sends a whole call in one chunk, which is why the deployed provider's fragmented stream broke a test suite that was otherwise green.
 
 **Contract upkeep**
 

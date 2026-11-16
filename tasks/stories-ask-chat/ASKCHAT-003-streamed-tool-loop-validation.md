@@ -81,3 +81,41 @@ with an integration test that reproduces the exact 400 over a socket.
    a tool result already in the conversation. That is the correct behaviour and is
    tested, but it is worth watching in the trace: a high rate of it would mean the
    served provider needs replacing via `LLM_MODEL`, not another workaround.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after the `tool_choice: auto` change and the fragmented-tool-call fix
+- Verdict: **Pass with actions, all applied**
+
+Two live defects forced changes to this story after it was first marked
+implemented. Both were invisible to the suite as written, which is the finding
+worth recording.
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 6 forced a tool call on the first step, with a provider-specific reasoning flag | AC 6 says every step is `auto` and only the last is `none`, with no reasoning flag | Forcing was the wrong rule: it broke on reasoning providers and made every "thanks" search. D-4b moves the decision into the system prompt |
+| 2 | `_delta_tool_calls` mapped each delta's `tool_calls` to a whole call | AC 2a requires accumulating fragments by `index` across the step, then parsing once | The deployed provider sends one call as ~10 deltas at `index: 0`; per-delta mapping produced `search_documents({})` and then an unknown-tool error |
+| 3 | AC 19's test list assumed a model that ignores `tool_choice` should trigger a server search | AC 19(b) asserts a non-searching turn is `not_searched` and is never Grounded | The old criterion described behaviour the product no longer wants: a legitimate small-talk turn must not be forced into a search |
+| 4 | AC 5's `drop_params` handling was per call | Unchanged, and still correct: `llm.py` sets it once at import | Verified again while rewriting the call |
+
+### Blockers
+
+Both defects were blockers in shipped code and are fixed. The second is the more
+instructive: **every fixture in this file sent a complete tool call in one chunk**,
+so a suite that exercised the loop end to end could not distinguish "assembles a
+call" from "treats each delta as a call". AC 19(e) is that missing fixture.
+
+### Should-fix (applied)
+
+1. The assembly uses `litellm.stream_chunk_builder`, the library's own merge for
+   exactly this shape, rather than the hand-rolled accumulator first written for
+   it. The repository's rule is to reach for the established dependency first, and
+   this is a case where the dependency is doing real work: it takes the id and name
+   from the piece that carries them and concatenates the argument fragments.
+
+### Nice-to-have
+
+1. A provider could in principle split one call across two different `index`
+   values, which would be a protocol violation. `stream_chunk_builder` would build
+   two calls and the loop would run two searches, which is harmless but wasteful.
+   Not worth defending against.

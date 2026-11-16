@@ -55,11 +55,18 @@ order below is a topological sort of the dependencies; there are no cycles.
 **Every story above is implemented and its tests are green.** ASKCHAT-011 is not code: `docs/ask-chat-verification.md`
 is a runbook an operator executes, and every result in it reads `NOT RUN`.
 
-One commit after the series, `3b5d24f`, fixes a defect the deployed stack exposed in ASKCHAT-003: OpenRouter routed
-`LLM_MODEL` to a provider that refuses `tool_choice: "required"` while its reasoning mode is on, so **every** Ask turn
-failed at step 0. The forced step now sends thinking disabled, a refusal is retried unforced and then falls back to the
-server's search, and a failed turn no longer misreports its cutoff, its grounding, its trace state, or its place in the
-feedback export. The PRD's D-4a records the measurement; each story's `-validation.md` records what it corrected.
+Three commits after the series fix defects the deployed stack exposed in ASKCHAT-003:
+
+- `3b5d24f` — OpenRouter routed `LLM_MODEL` to a provider that refuses
+  `tool_choice: "required"` while its reasoning mode is on, so **every** Ask turn failed at step 0. It also fixed a
+  failed turn misreporting its cutoff, its grounding, its trace state, and its place in the feedback export.
+- `cadf518` — the documentation pass that made the PRD and these stories describe what was built.
+- the `tool_choice: auto` revision — no step forces a tool call any more. The system prompt steers when to search, a
+  turn that answers without searching is the new `not_searched` grounding state and is never Grounded, and a tool call
+  streamed as many deltas is assembled into one call rather than read as several.
+
+The PRD's D-4a and D-4b record both measurements; each story's `-validation.md` records what it corrected, including the
+fixtures that let the second defect through.
 
 ASKCHAT-009 is the only Should story and is ordered ninth rather than last because it depends on the client layer, not
 on tracing. If it is cut, the fallback is in the PRD's D-5: delete the legacy keys with a one-time notice, so no member

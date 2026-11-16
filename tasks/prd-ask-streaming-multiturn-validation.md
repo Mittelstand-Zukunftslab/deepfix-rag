@@ -195,3 +195,45 @@ with its mitigation stated as the code that shipped.
 **Pass.** No blocker, no open question, and the three should-fix items are closed
 in this pass. Feasibility moves to Green because the one behaviour that was
 asserted from documentation is now measured and handled in code.
+
+## Sixth pass: `tool_choice` becomes auto (2026-11-16)
+
+Validated after the product owner replaced the forced-tool rule (**D-4b**) and after
+a second live defect was found in the same area (a tool call streamed as many
+deltas). Both were confirmed on the deployed stack, not in review.
+
+| Dimension | Status | Notes |
+|-----------|--------|-------|
+| Completeness | Green | D-4b added with the four-cell verdict table and the reason the rule changed; D-4a marked partly superseded; the correction table grows to seventeen rows; FR-005 and FR-009 rewritten around "the model decides, the server never claims". |
+| Consistency | Green | D-3 no longer says the enum is never widened — it says the one widening, `not_searched`, and why the three landed values cannot express it. FR-016's "a turn that never searched carries none" became `not_searched`, because carrying none is no longer a state the product has. |
+| Testability | Green | FR-005 names `auto`/`none` and the recovery; FR-009 names the four-cell rule and the badge copy; FR-002 and FR-005 require one assembled `tool-input-available` per call. Each has a test, including the fragmented-delta fixture that the suite previously lacked. |
+| Traceability | Green | D-4b is cited from FR-005, FR-009, R-2 and ASKCHAT-003/008; no FR lost a goal link. |
+| Feasibility | Green | The measured provider behaviour is unchanged; what changed is that the product no longer sends the request shape that provider refuses. |
+| Security & privacy | Green | Unaffected: no new route, no new credential, no change to per-owner scoping. |
+
+### Blockers
+
+One was found again, and it is the more interesting of the two: **the test suite
+could not have caught the fragmented-delta bug**, because every fixture sent a whole
+tool call in a single chunk. The fix is not only in the loop but in the fixture —
+AC 19(e) of ASKCHAT-003 now reproduces the provider's real stream shape.
+
+### Should-fix (applied)
+
+1. D-4a's first bullet (thinking disabled on the forced step) is now dead. Rather
+   than deleting the decision, it is marked superseded by D-4b and the unused flag
+   was removed from the code, so a reader can see what was tried and why it went.
+2. `not_searched` is a widening of a landed enum, which the PRD previously forbade
+   outright. D-3 now states the exception and its cost (a guarded one-time rebuild
+   of the `grounding` CHECK) instead of quietly contradicting itself.
+
+### Nice-to-have
+
+1. The `not_searched` rate is a useful prompt-quality signal and is recorded as a
+   Success Metric; a rise on real questions means the prompt needs work, not that
+   the rule is wrong.
+
+## Verdict
+
+**Pass.** No blocker, no open question; the two should-fix items are closed in this
+pass.

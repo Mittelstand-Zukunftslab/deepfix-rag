@@ -5,8 +5,16 @@
 > not been run.** Drafted against the tree at `642f720`, re-reviewed at `223a122`
 > on `feat/hermes-optimizer`, 15 November 2026, after ASK-001, ASK-002 and
 > ASK-006 landed. All decisions are settled: **D-1 … D-6 and D-8** while the
-> document was written, **D-7 and D-9 … D-11** by the product owner on
-> 2026-11-15.
+> document was written, **D-7 … D-11** by the product owner on 2026-11-15, and
+> **D-4a / D-4b** after the deployed stack showed every turn failing and then
+> showed that forcing a tool call was the wrong rule.
+>
+> **D-4b is the current rule for when the model searches.** No step forces a tool
+> call: every step is `tool_choice: "auto"` and the system prompt is the steer. A
+> turn that answers without searching and without reusing evidence already in the
+> thread is `not_searched`, a new and honest grounding value, and is never
+> Grounded. D-4a's provider handling is kept; its thinking-disabled flag was
+> removed with the forced step it existed for.
 >
 > **This revision is the post-implementation correction pass.** It describes what
 > was actually built rather than what was planned, and it fixes the fifteen places
@@ -220,12 +228,20 @@ read cannot be two different things.
   `INDEX_PREPARING`, so the tool can reuse the product's one definition of "how
   many passages a member sees" without the domain layer importing from the HTTP
   layer. `POST /retrieval`, `POST /ask`, and the tool all read that same function.
-- **A turn always retrieves.** The first model step is made with
-  `tool_choice: "required"`. If that step still ends without a tool call — a
-  provider that ignores the hint, a malformed frame — **the server executes
-  `search_documents` itself** with the user's message as the query, appends the
-  result, and continues the loop. So "no retrieval happened" is not a state the
-  product can be in, and the grounding verdict always has evidence to judge.
+- **The model decides when to search, and the prompt is the steer.** Every step
+  is sent with `tool_choice: "auto"`; nothing forces a tool call. The system
+  prompt is what makes a question about the documents search first, and what makes
+  a thanks or a rework of the assistant's own answer legitimate without one
+  (D-4b). Forcing the tool was what a reasoning provider refused (D-4a), and it
+  also forced a search on every "thanks", which is a tool call nobody wanted.
+- **The server still searches when the provider refuses.** If a provider rejects
+  the request outright with a 400 that names `tool_choice`, before emitting
+  anything, the server executes `search_documents` itself with the member's
+  message and continues, so the turn answers rather than failing.
+- **A turn that did not search is never labelled Grounded.** The verdict comes from
+  whether this turn searched and whether the thread already held evidence, not from
+  the answer's shape. `not_searched` is the state for an answer produced from no
+  evidence at all (D-4b), and the badge says so in words.
 - **At most `ASK_CHAT_MAX_TOOL_CALLS` (default 3) calls per turn.** The last
   permitted step is made with `tool_choice: "none"`, which forces prose. That
   bounds both latency and cost, and it makes a tool-obsessed model terminate.
@@ -254,15 +270,20 @@ ASK-001 and ASK-002 **landed** on `feat/hermes-optimizer` at `97aef60` and
   implementation, called by the rerank step and by `QueryService._search_split`,
   so eval and the live routes agree.
 
-This PRD consumes that enum and **does not add a value to it**, because a wider
-enum would collide with the code that now derives and stores it.
+This PRD consumes that enum. **D-4b adds one value to it, `not_searched`**, and
+that is the only widening this feature makes: a turn that answered without
+searching and without reusing evidence has no honest value among the three. The
+three the ASK- work landed keep their meaning exactly, and no second phrase list
+or classifier is introduced. Widening the enum needs a one-time rebuild of
+`ask_chat_turns`' `grounding` CHECK, which is done by a guarded migration rather
+than a table rebuild on every start.
 
-Instead, a turn persists two things:
+A turn persists two things:
 
 | Field | Values | Meaning |
 | :--- | :--- | :--- |
-| `grounding` | `grounded`, `no_relevant_sources`, `declined` | `grounded` requires at least one passage at or above `rerank.min_relevance_score` to have been delivered to the model. `no_relevant_sources` means the floor dropped everything. `declined` means passages were available and `grounding.grounding_for(answer)` matches a `DEFLECTION_PHRASES` entry or one of its `DEFLECTION_PATTERNS`. |
-| `citations` | `[{ marker, rank, doc_id }]`, validated | The `[n]` markers the answer actually used, each resolved to a delivered passage at or above the cutoff. A marker that resolves to nothing, or to a filtered-out passage, is dropped and counted. |
+| `grounding` | `grounded`, `no_relevant_sources`, `declined`, `not_searched` | `grounded` requires at least one passage at or above `rerank.min_relevance_score` to have been delivered to the model — or, for a rework turn, evidence already delivered in this thread. `no_relevant_sources` means a search ran and the floor dropped everything. `declined` means passages were available and `grounding.grounding_for(answer)` matches a `DEFLECTION_PHRASES` entry or one of its `DEFLECTION_PATTERNS`. `not_searched` means the turn answered without searching and the thread held no evidence to reuse (D-4b). |
+| `citations` | `[{ marker, rank, doc_id }]`, validated | The `[n]` markers the answer actually used, each resolved to a delivered passage at or above the cutoff. A marker that resolves to nothing, or to a filtered-out passage, is dropped and counted. A `not_searched` turn has none. |
 
 The table's meaning column is this PRD's reading of what the ASK- statuses mean
 for a tool-using turn. If the ASK- implementation defines `declined` differently
@@ -274,8 +295,9 @@ The badge rule, which is what the member sees: **"Grounded" only when
 `grounding == "grounded"` and `citations` is non-empty.** `grounded` with no
 valid citation renders as "Partly grounded" in the warning style, because an
 answer that had the evidence and did not point at it is a defect worth seeing,
-not a success to celebrate. This satisfies "Grounded only when the answer uses
-passages that pass the cutoff" without touching the ASK- enum.
+not a success to celebrate. `not_searched` renders as **Not searched** with the
+note "Answered without searching" (D-4b); it is neither a success nor a failure,
+and it must not borrow either of the other states' labels.
 
 ### D-4: Stop cancels the model stream, keeps the text, and keeps the evidence
 
@@ -363,6 +385,83 @@ The rule, which is a capability statement rather than a preference:
 
 This is the only place a provider's *shape* is worked around. The request is never
 downgraded to a non-tool answer, and no second model setting exists (D-7).
+
+D-4a's first bullet is **superseded by D-4b**: the forced step it describes no
+longer exists, so the thinking-disabled flag it added was removed with it. Its
+second and third bullets stand — a refusal is still recovered from, and one
+attempt is still one HTTP call.
+
+### D-4b: `tool_choice` is `auto` everywhere, the prompt steers, and a turn that did not search is `not_searched`
+
+Decided by the product owner on **2026-11-15**. This replaces the "a turn always
+retrieves" rule from D-2 and the forced first step from D-4/D-4a.
+
+**Why the rule changed.** Forcing the tool was doing three things at once: it
+guaranteed a retrieval, it broke on reasoning providers (D-4a), and it forced a
+search on turns that had nothing to search for. A member who types "thanks" got a
+tool call, a retrieval, passages, and a badge claiming the corpus supported the
+word "thanks". The guarantee was in the wrong layer: what the product needs is
+not "every turn searches" but "no answer is *claimed* to be grounded without
+evidence", and that is enforceable after the fact.
+
+**The rule, in three parts.**
+
+1. **Every step is `tool_choice: "auto"`**, except the last permitted one, which
+   is `"none"` to bound the loop. Nothing forces a call. With no forced step, the
+   thinking-disabled flag D-4a added for it is unused and was removed.
+2. **The system prompt is the steer.** It must say, in substance: always call
+   `search_documents` for any question about the documents, and for any factual or
+   domain question, including a follow-up that needs new evidence the thread does
+   not already contain; answer without searching **only** for small talk, a
+   greeting, a thanks, or reworking the assistant's own previous answer (shorter,
+   translate, reformat) using only content already given in this thread; never
+   answer a question about the documents from its own knowledge. The prompt is the
+   only place "when to search" is decided, so a later change to that decision is a
+   change to the prompt, not to the loop.
+3. **A turn that did not search is never labelled Grounded.** The verdict is a
+   function of two facts about the turn, not of the answer's wording:
+
+   | Searched this turn? | Evidence already in the thread? | Verdict |
+   | :--- | :--- | :--- |
+   | yes, and passages survived | — | the landed classifier: `grounded` or `declined` |
+   | yes, and nothing survived the floor | — | `no_relevant_sources` |
+   | no | yes | `grounded` — a rework of an answer the corpus already backed |
+   | no | no | **`not_searched`** |
+
+   `not_searched` is a new value on the landed `Grounding` enum, and it is the
+   honest answer to "was this supported by the corpus?" when nothing was looked up.
+   It is not `no_relevant_sources`: that says a search found nothing, and this says
+   there was no search. The badge renders it as **Not searched** with the note
+   "Answered without searching", in a neutral style rather than a warning, because a
+   thanks is not a problem.
+
+**The safety net that remains.** A provider that refuses the request outright — a
+400 naming `tool_choice` before it emits anything — is still recovered from: the
+server searches with the member's message and the turn continues. That is the one
+case where the product cannot get an answer without searching, and it is the only
+case where the server searches on its own initiative now.
+
+**A tool call arrives in pieces, and the pieces are not calls.** The deployed
+provider streams one call as about ten deltas, all at `index: 0`: the first carries
+the `id` and `name='search_documents'` with an empty argument string, and the rest
+carry `name: None` and a fragment of the JSON arguments. A deltas-to-calls mapping
+is therefore wrong in a way that looks right on a whole-call fixture — it produced
+`search_documents({})` from the first piece and an unknown-tool failure from the
+second, which is what the live stream showed. The step must accumulate fragments by
+`index` and run the name check and argument parsing only once its stream has ended,
+emitting one `tool-input-available` with the whole input. LiteLLM's
+`stream_chunk_builder` is the merge for exactly this shape and is what the
+implementation uses.
+
+**What this gives up.** The old rule made "no retrieval happened" unrepresentable.
+The new rule makes it representable and *visible*: a turn can now answer without
+searching, and the badge says exactly that. What cannot happen is a turn answering
+without searching and being called Grounded — which is the property that matters,
+and it is asserted by a test.
+
+**Reopens if** a `not_searched` rate on real questions is high enough to mean the
+prompt is not steering the model well. The answer then is a prompt change, or a
+different `LLM_MODEL`, not a return to forcing the tool.
 
 ### D-5: Threads are server-side, per member; localStorage is imported once
 
@@ -770,21 +869,21 @@ may slip one release), or **Could** (nice, unplanned).
 | ID | Requirement | Priority | Rationale |
 | :--- | :--- | :--- | :--- |
 | FR-001 | The agent loop must run in deepfix-api. The browser must reach it only through the same-origin `/api/ask/chat/*` path on the existing BFF proxy, must receive no model key and no model id, and must receive the AI SDK UI message stream (`x-vercel-ai-ui-message-stream: v1`) as `src/deepfix_rag/api/chat_stream.py` already emits it. | Must | G7, D-1. One credential holder; the admin chat proves the protocol works through this proxy. |
-| FR-002 | The stream must carry these parts, in **this** grammar: `start` once; then, **per model step**, `start-step`, a `text-start`/`text-delta`*/`text-end` group for whatever prose that step produced, and `finish-step`; a tool call's `tool-input-start`, `tool-input-available`, and `tool-output-available` are emitted between one step's `finish-step` and the next step's `start-step`, because they belong to the boundary between steps; then one `data-deepfix-grounding`, one `data-deepfix-turn`, `finish`, and `data: [DONE]`. `error` may appear in place of the per-step prose when a step fails. Nothing is buffered: the first delta reaches the browser when the model produced it. | Must | G1, D-1. The AI SDK's parser and Assistant UI's message parts are what render this; anything else needs a hand-written renderer. A two-step turn emits **two** `start-step`/`finish-step` pairs, so the sequence is a grammar rather than one fixed list — the first draft's single linear order was not emittable. |
+| FR-002 | The stream must carry these parts, in **this** grammar: `start` once; then, **per model step**, `start-step`, a `text-start`/`text-delta`*/`text-end` group for whatever prose that step produced, and `finish-step`; a tool call's `tool-input-start`, `tool-input-available`, and `tool-output-available` are emitted between one step's `finish-step` and the next step's `start-step`, because they belong to the boundary between steps, and are emitted **once per call** after that step's stream has ended and its argument fragments have been assembled — a provider may send one call as many deltas; then one `data-deepfix-grounding`, one `data-deepfix-turn`, `finish`, and `data: [DONE]`. `error` may appear in place of the per-step prose when a step fails. Nothing is buffered: the first delta reaches the browser when the model produced it. | Must | G1, D-1. The AI SDK's parser and Assistant UI's message parts are what render this; anything else needs a hand-written renderer. A two-step turn emits **two** `start-step`/`finish-step` pairs, so the sequence is a grammar rather than one fixed list — the first draft's single linear order was not emittable. |
 | FR-003 | `POST /ask/chat/completions` must accept `{thread_id, messages}` for a signed-in member, rebuild the conversation from the store, and answer 401 unsigned, 404 for another member's thread, 429 over a limit, and 503 while the index is preparing, each with a sentence the UI shows. | Must | G4, G7. Same contract the admin chat's route already has, with the member's role instead of admin. |
 | FR-004 | `search_documents` must be the only tool, must run on the serving index through `QueryService.retrieve` with the champion config, must return only what survives the landed `rerank.min_relevance_score` floor (which that path already applies — the tool reports, it does not re-filter), and must return the passage shape in D-2. Its depth must come from the existing `displayed_limit(config, MAX_DISPLAYED_HITS)` helper — `rerank.top_n` when rerank is on, `retrieval.top_k` otherwise, then the display cap — and a requested `top_k` must be clamped into `[1, displayed_limit(...)]`, never widening what the single-turn product would show. | Must | G3, D-2, G6. The floor is the grounding decision and it already lives in one place; the tool's window must be the product's window, not a second one. |
-| FR-005 | Every turn must retrieve. The first model step must be sent with `tool_choice: "required"` and with the provider's thinking mode disabled for that step (`extra_body={"reasoning": {"enabled": False}}`), because a reasoning provider rejects a forced tool choice with a 400. If that step ends with no tool call, **or the provider refuses the forced step with a 400 whose message names `tool_choice`**, the step must be retried unforced and, if it is still refused, the server must execute `search_documents` itself with the user's message, append the result, and continue. A turn must make at most `ASK_CHAT_MAX_TOOL_CALLS` tool calls and the last permitted step must be sent with `tool_choice: "none"`. An unknown `toolName` must be rejected, not executed. One step attempt must be one HTTP call (`num_retries=0`), so a refusal costs one round trip rather than three. | Must | G3, D-2. Otherwise "no retrieval happened" is representable, and the grounding verdict becomes a guess. The recovery exists because on 2026-11-15 every deployed turn failed at step 0 for exactly this reason. |
+| FR-005 | The model decides when to search. Every step must be sent with `tool_choice: "auto"` except the last permitted one, which is `"none"` to bound the loop; no step forces a tool call (D-4b). The system prompt must instruct the model to call `search_documents` for any question about the documents and for any factual or domain question, including a follow-up that needs new evidence, and to answer without searching only for small talk, a greeting, a thanks, or a reworking of its own previous answer from content already in the thread. If a provider refuses the request with a 400 that names `tool_choice` before emitting anything, the server must execute `search_documents` itself with the member's message and continue, so a refusal cannot fail the turn (D-4a). A turn must make at most `ASK_CHAT_MAX_TOOL_CALLS` tool calls. An unknown `toolName` must be rejected, not executed. One step attempt must be one HTTP call (`num_retries=0`). | Must | G3, D-2, D-4b. Forcing the tool broke on reasoning providers and forced a retrieval on a "thanks"; the guarantee the product needs is not that every turn searches but that no answer is claimed to be grounded without evidence, which FR-009 enforces. |
 | FR-006 | The passages a turn's tool returned must be persisted as that turn's `interaction_hits`, ranked in tool order, so `POST /feedback` with `target: "passage"` and a rank keeps working with no new endpoint, and so reloading the thread restores the panel from the store. The **full** passage text must be stored even when the text sent to the model was truncated at `ASK_CHAT_MAX_PASSAGE_CHARS`, because `passage_key` is a hash of the text and `build_questions` groups on it: storing the truncated text would give a chat passage a different key from the same chunk's single-turn passage, and the two votes would never combine. | Must | G5, D-5. Votes are keyed on `(interaction_id, rank)`, so the ranks must be the ones the member sees, and the passage identity must be the one the optimizer already knows. |
 | FR-007 | The sources panel must be rendered from the `tool-output-available` parts of the message, never from parsing the answer's prose, and must survive a reload by being rebuilt from the stored message parts. | Must | G3. A prose parser breaks on the first table or footnote and would disagree with what the model saw. |
 | FR-008 | The system prompt must require `[n]` citation markers for every factual claim drawn from a passage; the server must validate each marker against the passages delivered in that turn, keep only markers that resolve to a passage at or above the cutoff, persist them in `ask_chat_turns.citations`, and emit them in `data-deepfix-grounding`. | Must | G3, D-3. A citation is only meaningful if it resolves to something the model was given. |
-| FR-009 | Each turn must persist `grounding` using the landed `Grounding` enum (`grounded`, `declined`, `no_relevant_sources`) and classify with the landed `grounding.grounding_for(answer)` — never a second phrase list. `grounded` requires at least one passage at or above `rerank.min_relevance_score` to have been delivered to the model; `no_relevant_sources` when the floor dropped everything. The badge must extend the landed `GROUNDING_BADGE` / `groundingNote` pair with exactly one new state: **Grounded** only when `grounding == "grounded"` **and** `citations` is non-empty; **Partly grounded** when grounded without a citation; the landed "Not found in the documents" badge with its landed note ("Answer declined" / "No matching passages") for the other two. | Must | G3, D-3, D-10. The enum, the classifier and the badge copy are ASK-001's, so this feature derives and labels grounding the same way `POST /ask` does. |
+| FR-009 | Each turn must persist `grounding` using the `Grounding` enum and classify with `grounding.grounding_for(answer)` for the wording — never a second phrase list — **plus** two facts about the turn itself: whether it searched, and whether the thread already held evidence. A turn that did not search and had no evidence to reuse is **`not_searched`**, and must never be `grounded`. A turn that did not search but reuses an earlier grounded answer is `grounded`. `no_relevant_sources` when a search ran and the floor dropped everything. The badge must render `not_searched` as **Not searched** with the note "Answered without searching", in a neutral style, never as Grounded and never as "Not found in the documents" — that copy would claim a search happened. The four rendered states of D-10 (`grounded`, `partly_grounded`, `declined`, `no_relevant_sources`) are unchanged. | Must | G3, D-3, D-4b, D-10. A badge that says Grounded for an answer nothing supported is the one lie this feature must not tell. |
 | FR-010 | Threads must be server-side and per member: `GET /ask/chat/threads` (newest first, limit 50, no pagination beyond it), `POST /ask/chat/threads`, `GET /ask/chat/threads/{thread_id}` (thread, turns with their grounding and citations, and each turn's stored passages), `PATCH /ask/chat/threads/{thread_id}` (rename; the **trimmed** title must be 1–120 characters, and a title empty after trimming is 400), `DELETE /ask/chat/threads/{thread_id}` (hard delete of turns and thread in one transaction; the `interactions` rows and their votes are kept, because they are the member's feedback history and the optimizer's dataset). `DELETE` is **idempotent for the owner**: a thread the member already deleted answers 204 again, while a thread that is not theirs — or never existed — answers 404, so the idempotence does not leak existence. Any other member's thread id must answer 404 on every route. There must be no retention window and no prune job on these tables. | Must | G4, G5, D-5, D-9, D-11. Deleting a conversation must not delete evidence the optimizer already ingested; 50 is a display cap rather than a lifecycle rule; and a client that retries a dropped delete must not be told a request that succeeded failed. |
 | FR-011 | The upstream conversation must be built from the store, never from the client's array: the system prompt, then the last `ASK_CHAT_MAX_HISTORY_MESSAGES` stored messages, then the new user message. A request whose last message is not a user message must be 400. | Must | G2, G7. The client cannot rewrite the policy or claim a history that never happened. |
 | FR-012 | A follow-up must be retrievable: the tool's own `query` argument is what is searched, and it must be stored as `ask_chat_turns.retrieval_query` while `interactions.query` keeps the member's literal message. No separate query-rewriting model call is added in this release. | Must | G2, G5, D-6. The model already has the history; a second rewrite call would add a model hop and a second thing to evaluate. |
 | FR-013 | Each passage delivered to the model must be wrapped in explicit delimiters and labelled as untrusted corpus text whose instructions must not be followed, and the system prompt must say so. | Must | G7. Members upload the corpus, so a document can contain an instruction. |
 | FR-014 | A browser abort must cancel the retrieval and the model stream (closing the async generator, not merely abandoning the wait), store the partial assistant text, keep the tool results already obtained, mark the turn `cancelled` with `ended_at`, and still emit a terminal `data-deepfix-turn`. | Must | G1, D-4. Stop must stop the work and the spend, and a stopped answer must be readable. |
 | FR-015 | A regenerate must replace the newest answered or cancelled turn in place, keeping its `turn_id`; the previous answer's text must not remain beside the new one; and votes on the replaced answer and its passages must be cleared by writing the existing `clear` action through `record_vote`, which deletes the mirrored MLflow assessment. No new vote action and no `CHECK` change. | Must | G3, D-4. The admin chat settled in-place replacement (CHAT-014); an orphaned assessment is worse than no assessment, and `feedback_events.action` already permits `clear`. |
-| FR-016 | `GET /ask/chat/turns/{turn_id}/stream` must replay the stored text and close with the stored status when the turn is not live in this process, and must replay then tail when it is. A resumed turn reports the deployment's configured `rerank.min_relevance_score` as its `cutoff`, never a placeholder zero, and reports a grounding verdict only when the turn actually reached one — a turn that never searched carries none rather than claiming "no relevant sources". Another member's turn id must be 404. | Must | G4, D-4. A reload mid-answer must not lose it; `chat_turns.py` already implements this shape. |
+| FR-016 | `GET /ask/chat/turns/{turn_id}/stream` must replay the stored text and close with the stored status when the turn is not live in this process, and must replay then tail when it is. A resumed turn reports the deployment's configured `rerank.min_relevance_score` as its `cutoff`, never a placeholder zero, and reports the verdict the turn reached — a turn that never searched reports `not_searched`, never `no_relevant_sources`, because that copy would claim a search happened (D-4b). Another member's turn id must be 404. | Must | G4, D-4. A reload mid-answer must not lose it; `chat_turns.py` already implements this shape. |
 | FR-017 | A turn interrupted by an API restart must be settled `failed` at startup with a readable reason, and no `ask_chat_turns` row may stay `running`. | Must | G4. Mirrors `fail_interrupted_chat_turns`; a stuck row is a lie about state. |
 | FR-018 | Errors must be distinct: a pre-stream failure is a JSON status with a sentence; a mid-stream failure is an `error` part followed by a terminal `data-deepfix-turn` with `status: "failed"`; the UI must offer regenerate for a failed turn and must not offer it for a `no_relevant_sources` answer. A failed turn's `interactions` row has no answer, so it must be excluded from the feedback export (`build_questions` and the downvote rows) and its trace must be marked `ERROR` rather than left as a healthy trace. | Must | G1. A blank stream and a refused question must not look the same. |
 | FR-019 | Each assistant turn must write exactly one `interactions` row with `kind='ask'`, `thread_id`, `turn_id`, the answer, the grounding status, and its hits; `interaction_hits` must hold the tool's passages. The `kind` CHECK constraint must not be changed. | Must | G5, D-5. This is what keeps votes, history, the assessment mirror, and `export_feedback` working with no new path. |
@@ -938,12 +1037,13 @@ No FR is unlinked to a goal (see Traceability), and no FR contradicts a non-goal
   ASKCHAT-002 consumes the setting as-is.
 - **(measured, 2026-11-15)** `qwen/qwen3.8-flash` advertises `tools` and
   `tool_choice`, but through OpenRouter it routes to a **reasoning** provider that
-  refuses a forced tool choice with a 400 unless thinking is disabled. Measured on
-  the deployment: `required` gives 400; `required` with `reasoning` disabled calls
-  the tool; `auto` works; `enable_thinking: false` still gives 400. This is D-4a,
-  and it replaces the earlier assumption that the hint was honoured as sent. A
-  provider that refuses the unforced call too still degrades to "the server
-  searched anyway", not to a failed turn.
+  refuses a **forced** tool choice with a 400 unless thinking is disabled.
+  Measured on the deployment: `required` gives 400; `required` with `reasoning`
+  disabled calls the tool; `auto` works; `enable_thinking: false` still gives 400.
+  D-4a worked around this by disabling thinking on the forced step; D-4b removed
+  the forced step, so `auto` is what the provider now sees and the workaround is
+  gone. A provider that refuses even `auto` still degrades to "the server searched
+  anyway", not to a failed turn.
 - **(assumption)** `litellm.acompletion(stream=True)` closes the upstream
   connection when the async generator is closed, so Stop stops the spend. If it
   does not, the turn timeout bounds it and R-2 records the residual cost.
@@ -966,7 +1066,7 @@ No FR is unlinked to a goal (see Traceability), and no FR contradicts a non-goal
 | # | Risk | Impact | Mitigation |
 | :--- | :--- | :--- | :--- |
 | R-1 | **Stop does not stop the spend.** The current `CustomLiteLLM.achat` runs the call in a thread, so cancelling the task abandons the wait, not the request; a stopped turn keeps billing to `max_tokens`. | Cost grows with how often members change their mind, invisible to them. | FR-014 requires the loop to use `litellm.acompletion(stream=True)` and close the generator on cancel; `ASK_CHAT_TURN_TIMEOUT_SECONDS` bounds the worst case; ASKCHAT-004's test closes a real local connection and asserts the fake server saw its stream closed, not merely that the client stopped reading. |
-| R-2 | **A provider refuses the forced tool step.** Measured on the deployed stack on 2026-11-15: OpenRouter routed `LLM_MODEL` to a provider that answers 400 "The tool_choice parameter does not support being set to required or object in thinking mode", which failed **every** Ask turn at step 0. | No answers at all — the worst failure mode, and it was silent until a turn was attempted. | **Occurred and fixed** (D-4a): a forced step sends `reasoning` disabled, which that provider accepts; a refusal is retried unforced and then falls back to the server's search, so a turn still answers. Covered by an integration test that reproduces the 400 over a real socket. Reopens if a provider refuses the unforced call too, in which case the answer is a different `LLM_MODEL`. |
+| R-2 | **A provider refuses the tool request.** Measured on the deployed stack on 2026-11-15: OpenRouter routed `LLM_MODEL` to a provider that answers 400 "The tool_choice parameter does not support being set to required or object in thinking mode", which failed **every** Ask turn at step 0. | No answers at all — the worst failure mode, and it was silent until a turn was attempted. | **Occurred and fixed** (D-4a, then D-4b). D-4a first disabled thinking on the forced step; D-4b removed the forced step entirely, so the request is now `auto` and that specific refusal cannot occur. The recovery is kept regardless: a 400 naming `tool_choice` makes the server search and continue, so a turn still answers. Covered by an integration test that reproduces the refusal over a real socket. Reopens if a provider refuses `auto` too — the answer is then a different `LLM_MODEL`. |
 | R-3 | **Two generation paths drift.** Eval and generation metrics score `RAGWorkflow` + `SimpleSummarize`; members are served by the tool loop. A prompt or model change could improve one and hurt the other. | The optimizer reports a faithful number for a pipeline nobody sees. | D-6 keeps retrieval identical (FR-024's parity test) and the gate retrieval-only, so the *promoted* quantity is shared. The divergence is documented in the PRD and the story notes; a conversation-level eval is an explicit non-goal and a follow-up project. |
 | R-4 | **Multi-turn queries pollute the feedback dataset.** "And who voted against it?" is unusable as a dev question and would be scored as a retrieval miss. | The optimizer would chase a phantom regression, and the holdout would accumulate unanswerable rows. | FR-021 exports `retrieval_query` (the standalone tool query) as the question text, keeps the raw message as `query`, and leaves the holdout hash on normalized text unchanged. ASKCHAT-010 asserts a follow-up turn's exported question is standalone. |
 | R-5 | **A member's thread is another member's data.** A missing `owner_id` predicate in one of six routes leaks conversations. | Privacy breach, and the worst possible one for a product whose pitch is a private shared corpus. | FR-010 scopes every route; ASKCHAT-001 tests isolation across two members on **every** route, with a 404 rather than a 403; ASKCHAT-005 repeats it for the stream and resume routes, which are the two that a naive implementation forgets. |
@@ -1587,8 +1687,10 @@ Each fact below is cited by file, because the stories assume them.
   whose `retrieval_query` differs from the raw message is observable per thread,
   and a spot check of ten follow-ups reads correctly.
 - Every answer's badge matches its data: zero turns labelled Grounded without a
-  valid citation, and the partly-grounded rate is readable from
-  `ask_chat_turns.citations` so a rise is noticed rather than argued about (D-10).
+  valid citation and zero turns labelled Grounded that did not search, and the
+  partly-grounded rate is readable from `ask_chat_turns.citations` and the
+  not-searched rate from `ask_chat_turns.grounding`, so a rise is noticed rather
+  than argued about (D-10, D-4b).
 - Zero 500s from the ask-chat routes in a week of pilot use, and zero `running`
   rows after any restart.
 - The optimizer's dev set grows with standalone questions: no exported question
@@ -1752,6 +1854,8 @@ in `tasks/stories-ask-chat/` were corrected in the same pass.
 | 13 | The import payload's casing was unspecified | snake_case is canonical; the request accepts the retired page's camelCase as aliases | D-5, FR-033 |
 | 14 | `trace_request` could carry per-call child spans | MLflow nests by ambient context, so `turn_trace` is a context manager held open for the turn | D-4a, FR-020 |
 | 15 | ASKCHAT-011 was a story like the others | It is an operator runbook, prepared and not run | ASKCHAT-011 |
+| 16 | Every turn forced a tool call with `tool_choice: "required"`, so "no retrieval happened" was unrepresentable | No step forces a tool: every step is `auto` and the system prompt steers. A turn that answers without searching and without reusing evidence is `not_searched`, and is never Grounded | D-4b, FR-005, FR-009 |
+| 17 | One delta's `tool_calls` was treated as a whole call, which every test's fixture happened to satisfy | A step accumulates fragments by `index` and assembles them once its stream ends, through `litellm.stream_chunk_builder`; the name check and argument parsing run once, and `tool-input-available` is emitted once with the full input | D-4b, FR-002, FR-005 |
 
 ## Handoff
 

@@ -64,3 +64,24 @@ None.
    control.** Only paragraphs are rewritten. A citation belongs in a sentence, and
    widening it would mean overriding every block type for a case that does not
    occur; the limit is stated in the code.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after the `not_searched` grounding state was added with D-4b
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | The badge had four rendered states over three stored values | Five states over four stored values: `not_searched` is a stored value now, not a rendering of one | A turn that answers without searching needs a verdict of its own. Rendering it as "Partly grounded" would claim evidence existed and was ignored; rendering it as "Not found in the documents" would claim a search failed |
+| 2 | AC 15 called `no_relevant_sources` the only no-evidence state | AC 15 distinguishes them: `no_relevant_sources` means a search ran and found nothing, `not_searched` means nothing was looked for | The two are different facts and a member can act on the difference |
+| 3 | Nothing said what a rework turn without a search renders | It is `grounded` when the thread already held grounded evidence, and the citation markers from the earlier answer still resolve | "Make that shorter" is a legitimate no-search turn whose content did come from the corpus |
+
+### Blockers
+
+None.
+
+### Should-fix (applied)
+
+1. The badge copy for `not_searched` is **Not searched** with the note "Answered
+   without searching", in a neutral style. A warning style would read as a defect,
+   and a thanks is not a defect.

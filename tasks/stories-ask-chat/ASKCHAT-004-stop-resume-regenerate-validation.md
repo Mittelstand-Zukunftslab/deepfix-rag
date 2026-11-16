@@ -69,3 +69,20 @@ existed; that test is now AC 18a.
    token. On the deployment that is a few hundred small writes per answer; it is
    acceptable at this scale and is what makes a resume exact. Batching would trade
    that exactness for write volume, and is not worth it until a measurement says so.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after the `tool_choice: auto` change
+- Verdict: **Pass**
+
+One consequence to record, because it changes what a stopped or failed turn can
+look like. With no forced search, a turn that answers without searching is a
+normal outcome rather than a bug, so `cancelled` and `failed` are no longer the
+only statuses that can follow a turn which never retrieved. AC 18's failure cases
+still hold: a failed turn reports the configured cutoff, claims no verdict it did
+not reach, is marked `ERROR` in its trace, and leaves no answerless interaction in
+the export.
+
+### Blockers
+
+None.
