@@ -8,7 +8,8 @@
 #   HERMES_S3_ACCESS_KEY_ID, HERMES_S3_SECRET_ACCESS_KEY
 #   MLFLOW_BACKEND_STORE_URI,
 #   MLFLOW_SERVER_ALLOWED_HOSTS, MLFLOW_SERVER_CORS_ALLOWED_ORIGINS
-#   MLFLOW_EXPERIMENT_ID, MLFLOW_DEV_RAG_EXPERIMENT
+#   MLFLOW_PUBLIC_HOST, MLFLOW_BASIC_AUTH_USERS
+#   MLFLOW_DEV_RAG_EXPERIMENT
 #   RUSTFS_CONSOLE_ENABLE
 #   DEEPFIX_SERVER_DATABASE_URL
 #   BETTER_AUTH_SECRET, WEB_ORIGIN, API_INTERNAL_URL, AUTH_JWKS_URL, ALLOWED_EMAIL_DOMAINS
@@ -63,10 +64,47 @@ services:
     # No published port. MLflow has no authentication of its own, so the only
     # safe way to run it is to keep it off the internet. Every machine caller
     # (backend-api, hermes, diagnostic-agent) reaches it at
-    # MLFLOW_TRACKING_URI=http://mlflow:5000 over the Compose network. A human
-    # reads the UI through the single Dokploy domain kept in front of it, which
-    # must carry a Traefik basicAuth middleware; see the "MLflow and RustFS
-    # lockdown" section of README.md.
+    # MLFLOW_TRACKING_URI=http://mlflow:5000 over the Compose network.
+    #
+    # A human reads the UI through exactly one router defined here, which
+    # terminates TLS and requires the `deepfix-mlflow-auth` basic-auth
+    # middleware. The router lives in this file rather than in Dokploy so the
+    # middleware cannot be detached by a redeploy.
+    #
+    # Remove the Dokploy Domain entry for the `mlflow` service: it would create a
+    # second, unauthenticated router for the same Host. The priority below keeps
+    # that failure safe instead of silent, because this router wins the tie and
+    # the request is still challenged, but a lone authenticated router is the
+    # intended state.
+    #
+    # Because Dokploy only attaches a service to dokploy-network when that
+    # service has a Domain, and this router replaces the Domain, the service
+    # joins the network itself below. `traefik.docker.network` says which of its
+    # two networks Traefik should dial, so the router cannot resolve the
+    # container's `default`-network address instead.
+    #
+    # Two values fail closed. Empty MLFLOW_BASIC_AUTH_USERS is never read as
+    # "no auth": with no entries nobody authenticates, so Traefik refuses every
+    # request to the router. An unset MLFLOW_PUBLIC_HOST leaves the rule on the
+    # reserved `mlflow.invalid`, which matches no real request. Either way the
+    # UI does not open. backend-api, hermes, and diagnostic-agent are unaffected
+    # because they use mlflow:5000 inside the Compose network. Set both
+    # variables and redeploy to open the UI.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.services.mlflow.loadbalancer.server.port=5000"
+      - "traefik.http.routers.deepfix-mlflow.rule=Host(`${MLFLOW_PUBLIC_HOST:-mlflow.invalid}`)"
+      - "traefik.http.routers.deepfix-mlflow.priority=1000"
+      - "traefik.http.routers.deepfix-mlflow.service=mlflow"
+      - "traefik.http.routers.deepfix-mlflow.entrypoints=websecure"
+      - "traefik.http.routers.deepfix-mlflow.tls=true"
+      - "traefik.http.routers.deepfix-mlflow.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.deepfix-mlflow.middlewares=deepfix-mlflow-auth"
+      - "traefik.http.middlewares.deepfix-mlflow-auth.basicauth.users=${MLFLOW_BASIC_AUTH_USERS:-}"
+    networks:
+      - default
+      - dokploy-network
     volumes:
       - mlflow_artifacts:/opt/mlflow/data
     environment:
@@ -149,8 +187,15 @@ services:
       dockerfile: Dockerfile
     image: deepfix-api
     container_name: deepfix-api
-    ports:
-      - "8000:8000"
+    # No published port. Traefik reaches this container on 8000 over its own
+    # Docker network, so nothing on the host can reach the API except through a
+    # router that terminates TLS and authenticates. The load-balancer port is a
+    # label because there is no published port for Traefik to infer it from.
+    # Dokploy supplies the router and its `Host` rule; see "Published ports" in
+    # README.md before re-adding a port mapping.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.backend-api.loadbalancer.server.port=8000"
     environment:
       WEB_ORIGIN: ${WEB_ORIGIN:-http://web:8080}
       AUTH_JWKS_URL: ${AUTH_JWKS_URL:-http://web:8080/api/auth/jwks}
@@ -170,7 +215,6 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-rustfsadmin}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-rustfsadmin}
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
-      MLFLOW_EXPERIMENT_ID: ${MLFLOW_EXPERIMENT_ID:-}
       MLFLOW_DEV_RAG_EXPERIMENT: ${MLFLOW_DEV_RAG_EXPERIMENT:-dev_rag_experiment}
       DEEPFIX_SERVER_URL: ${DEEPFIX_SERVER_URL:-http://diagnostic-agent:8844}
       LLM_API_KEY: ${LLM_API_KEY:-}
@@ -235,8 +279,14 @@ services:
       context: ./web
     image: deepfix-web
     container_name: deepfix-web
-    ports:
-      - "8080:8080"
+    # No published port: the public domain terminates at Traefik, which proxies
+    # to this container on 8080 over its own Docker network. The load-balancer
+    # port is a label because there is no published port to infer it from.
+    # Dokploy supplies the router and its `Host` rule; see "Published ports" in
+    # README.md.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.web.loadbalancer.server.port=8080"
     environment:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
       BETTER_AUTH_URL: ${WEB_ORIGIN:-http://localhost:8080}
@@ -261,3 +311,12 @@ volumes:
   deepfix_server_data:
   web_auth:
   api_data:
+
+# Dokploy's Traefik lives on this network. Only `mlflow` joins it explicitly,
+# because its router is declared here rather than created from a Dokploy
+# Domain. Every other service is attached by Dokploy itself when an operator
+# gives it a Domain. `external: true` means Compose expects the network to
+# exist already, which it does on a Dokploy host.
+networks:
+  dokploy-network:
+    external: true
