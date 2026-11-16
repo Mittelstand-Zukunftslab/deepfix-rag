@@ -142,6 +142,22 @@ class Endpoint(BaseHTTPRequestHandler):
         if self.state.mode == "reject_required":
             self._tool_call("call-1", '{"query": "Trunkenheitsfahrt"}')
             return self._end()
+        if self.state.mode == "parallel_tools":
+            # Every step issues three parallel searches, and the cap is three, so
+            # the turn must run three and refuse the rest rather than running six.
+            if self._searches_seen(messages) < 6:
+                self._tool_call_many(
+                    [
+                        (
+                            f"call-{self._searches_seen(messages)}-{n}",
+                            json.dumps({"query": f"q{len(messages)}-{n}"}),
+                        )
+                        for n in range(3)
+                    ]
+                )
+                return self._end()
+            self._text("Die Trunkenheitsfahrt ist strafbar [1].")
+            return self._end()
         if self.state.mode == "fragmented_tool" and not has_tool_result:
             self._tool_call_fragmented("call-1", '{"query": "Trunkenheitsfahrt"}')
             return self._end()
@@ -183,6 +199,11 @@ class Endpoint(BaseHTTPRequestHandler):
             return self._end()
         self._text("ok")
         self._end()
+
+    @staticmethod
+    def _searches_seen(messages: list[dict]) -> int:
+        """How many tool results the conversation already carries."""
+        return sum(1 for message in messages if message.get("role") == "tool")
 
     def _status(self, status: int, message: str) -> None:
         """A provider refusal, as the OpenAI-compatible error body."""
@@ -235,6 +256,36 @@ class Endpoint(BaseHTTPRequestHandler):
                                     "type": "function",
                                     "function": {"name": name, "arguments": arguments},
                                 }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        )
+
+    def _tool_call_many(self, calls: list[tuple[str, str]]) -> None:
+        """Several tool calls in one step, the way a model can issue them in parallel."""
+        self._send(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "model": MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": index,
+                                    "id": call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": "search_documents",
+                                        "arguments": arguments,
+                                    },
+                                }
+                                for index, (call_id, arguments) in enumerate(calls)
                             ]
                         },
                         "finish_reason": None,
@@ -756,3 +807,128 @@ def test_a_tool_call_streamed_as_many_deltas_is_assembled_not_split(
         ).fetchone()[0]
     assert hits >= 1
     assert failed == 0
+
+
+def test_parallel_tool_calls_cannot_exceed_the_search_cap(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """`ASK_CHAT_MAX_TOOL_CALLS` counts individual searches, not steps.
+
+    Live testing found a model issuing two searches in one step and the cap being
+    checked only between steps, so a question ran five searches against a cap of
+    three. The model here asks for three parallel searches on every step, which is
+    the worst case a per-step check cannot see: the whole step is one step.
+
+    With the cap at four, exactly four searches run. Every call past it is refused
+    with a short tool result that says the limit was reached, so the model still
+    answers rather than the turn failing, and the last permitted step cannot run a
+    search of its own.
+    """
+    endpoint.mode = "parallel_tools"
+    settings = _settings(tmp_path, endpoint).model_copy(update={"ASK_CHAT_MAX_TOOL_CALLS": 4})
+    with _client(settings, identity) as client:
+        _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+
+    # Every tool call was announced, so the browser's transcript matches what the
+    # model asked for, but only four produced a real search result.
+    started = [f for f in frames if f["type"] == "tool-input-start"]
+    outputs = [f for f in frames if f["type"] == "tool-output-available"]
+    assert len(started) == len(outputs), "every announced call gets a result"
+    assert len(outputs) > 4, "the model asked for more searches than the cap"
+
+    real = [o["output"] for o in outputs if "limit_reached" not in o["output"]]
+    refused = [o["output"] for o in outputs if o["output"].get("limit_reached")]
+    assert len(real) == 4, "the cap counts searches, not steps"
+    assert refused, "the calls past the cap must be refused, not silently dropped"
+    assert all("limit" in output["message"].lower() for output in refused)
+    assert all(output["passages"] == [] for output in refused)
+
+    # The refuse-then-answer path works: the turn completed with text.
+    terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
+    assert terminal["status"] == "completed"
+    assert "".join(f.get("delta", "") for f in frames if f["type"] == "text-delta").strip()
+    # The last step was sent with `none`, so it could not have run a tool itself.
+    assert endpoint.requests[-1]["tool_choice"] == "none"
+    with connect(settings.product_db_path) as conn:
+        hits = conn.execute("SELECT COUNT(DISTINCT rank) FROM interaction_hits").fetchone()[0]
+    assert hits <= 4 * settings.MAX_DISPLAYED_HITS, "only real searches stored hits"
+
+
+def test_a_thanks_after_a_grounded_turn_reuses_that_evidence(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """A "thanks" in a thread that already has grounded answers is `grounded`.
+
+    The verdict is ordered by the facts: first *did this turn search*, then what
+    that search found. A turn that did not search has no passages of its own, so a
+    "no passages" check placed before the reuse rule labels every such turn
+    `no_relevant_sources` — which claims a search ran and failed, and is what the
+    live stack reported for "Thanks!" in an answered thread.
+
+    Both halves are asserted, because the ordering is the whole bug: the same
+    question in a thread with no evidence is `not_searched`, never grounded.
+    """
+    endpoint.mode = "tool_then_text"
+    settings = _settings(tmp_path, endpoint)
+    with _client(settings, identity) as client:
+        client.app.state.index.wait()
+        identity.sign_in(client, MEMBER)
+        thread = client.post("/ask/chat/threads").json()["thread_id"]
+
+        # First turn: a real question, which searches and grounds.
+        first = client.post(
+            "/ask/chat/completions",
+            json={
+                "thread_id": thread,
+                "messages": [{"role": "user", "content": "Ist eine Trunkenheitsfahrt strafbar?"}],
+            },
+        )
+        first_frames = _frames(first.text)
+        first_grounding = next(f for f in first_frames if f["type"] == "data-deepfix-grounding")[
+            "data"
+        ]
+        assert first_grounding["grounding"] == "grounded"
+
+        # Second turn: "thanks", answered without a search, in that thread.
+        endpoint.mode = "no_tool_call"
+        endpoint.requests.clear()
+        second = client.post(
+            "/ask/chat/completions",
+            json={
+                "thread_id": thread,
+                "messages": [{"role": "user", "content": "Thanks!"}],
+            },
+        )
+        second_frames = _frames(second.text)
+
+    # It did not search: no tool part, and every step was unforced.
+    assert "tool-input-start" not in _types(second_frames)
+    assert all(request.get("tool_choice") in {"auto", "none"} for request in endpoint.requests)
+
+    # And it is grounded, because the evidence it is reusing is already in the
+    # thread — not `no_relevant_sources`, and not `not_searched`.
+    second_grounding = next(f for f in second_frames if f["type"] == "data-deepfix-grounding")[
+        "data"
+    ]
+    assert second_grounding["grounding"] == "grounded"
+    terminal = next(f for f in second_frames if f["type"] == "data-deepfix-turn")["data"]
+    assert terminal["grounding"] == "grounded"
+
+    # A thanks in a thread with no evidence is the other side of the rule.
+    with _client(settings, identity) as client:
+        client.app.state.index.wait()
+        identity.sign_in(client, MEMBER)
+        empty_thread = client.post("/ask/chat/threads").json()["thread_id"]
+        lonely = client.post(
+            "/ask/chat/completions",
+            json={
+                "thread_id": empty_thread,
+                "messages": [{"role": "user", "content": "Thanks!"}],
+            },
+        )
+        lonely_frames = _frames(lonely.text)
+    lonely_grounding = next(f for f in lonely_frames if f["type"] == "data-deepfix-grounding")[
+        "data"
+    ]
+    assert lonely_grounding["grounding"] == "not_searched"
+    assert lonely_grounding["citations"] == []

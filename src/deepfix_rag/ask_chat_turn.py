@@ -399,32 +399,58 @@ async def run_turn(
         if not calls:
             break
 
-        for raw in calls:
+        # One assistant message carries every call this step made, before any of
+        # them runs, because a provider may issue several in parallel and the next
+        # step must see the same call set it produced.
+        prepared: list[tuple[str, str, dict[str, Any]]] = []
+        for position, raw in enumerate(calls):
             name = str(raw.get("function", {}).get("name") or "")
             if name != ask_chat.TOOL_NAME:
                 raise TurnFailed(UNKNOWN_TOOL)
-            call_id = str(raw.get("id") or f"call-{len(tool_calls)}")
-            arguments = _arguments(raw)
+            prepared.append(
+                (
+                    str(raw.get("id") or f"call-{step_index}-{position}"),
+                    name,
+                    _arguments(raw),
+                )
+            )
+        messages.append(
+            {
+                "role": "assistant",
+                "content": step.text or None,
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": json.dumps(arguments, ensure_ascii=False),
+                        },
+                    }
+                    for call_id, name, arguments in prepared
+                ],
+            }
+        )
+
+        for call_id, name, arguments in prepared:
             yield chat_stream.tool_input_start(call_id, name)
             yield chat_stream.tool_input_available(call_id, name, arguments)
-            # The model's own call goes back upstream verbatim, so the next step
-            # sees what it actually asked for rather than a reconstruction.
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": step.text or None,
-                    "tool_calls": [
-                        {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": name,
-                                "arguments": json.dumps(arguments, ensure_ascii=False),
-                            },
-                        }
-                    ],
-                }
-            )
+            # The cap counts **individual searches across the turn**, not steps. A
+            # step may issue several in parallel, so the check belongs here: a call
+            # past the limit is never run, and the model gets a short result saying
+            # so, which is what lets a step with a parallel burst still end in an
+            # answer instead of a failure (FR-027).
+            if searches_run >= settings.ASK_CHAT_MAX_TOOL_CALLS:
+                limit_note = _limit_result(settings.ASK_CHAT_MAX_TOOL_CALLS)
+                yield chat_stream.tool_output_available(call_id, limit_note)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": limit_note["message"],
+                    }
+                )
+                continue
             search_started = time.monotonic()
             try:
                 result = await ask_chat.search_documents(
@@ -650,24 +676,96 @@ def _grounding(
 ) -> str:
     """The verdict for one turn's answer.
 
-    Four outcomes, and the distinction the task is about:
+    The order matters, and it is the order the facts have: **did this turn search**
+    first, then what that search found.
 
-    * no search in this turn **and** no reuse of evidence already in the thread:
-      ``not_searched``. The model answered from its own knowledge — small talk, a
-      thanks, or a rework it should not have needed to search for — and calling that
-      "grounded" would be a lie about the corpus;
-    * no search but the answer reworks evidence already given in this thread:
-      ``grounded``, because the content did come from the corpus, and the citations
-      from the earlier answer still resolve;
-    * a search that returned nothing: ``no_relevant_sources``;
-    * otherwise the landed classifier, which separates ``declined`` from
+    * **No search this turn**, but the answer reworks evidence already given in the
+      thread: ``grounded``. The content did come from the corpus, and the citations
+      from the earlier answer still resolve. This is the ``thanks``-after-a-grounded
+      -answer case, and it must be checked *before* the empty-passage rule — a turn
+      that did not search has no passages of its own, so testing "no passages" first
+      would label every such turn ``no_relevant_sources`` and claim a search failed
+      that never ran.
+    * **No search this turn and no evidence to reuse**: ``not_searched``. The model
+      answered from its own knowledge — small talk, a thanks — and calling that
+      grounded would be a lie about the corpus.
+    * **A search ran and returned nothing**: ``no_relevant_sources``. Only this case
+      says a search found nothing.
+    * Otherwise the landed classifier, which separates ``declined`` from
       ``grounded``.
     """
-    if not searched and not reused_evidence:
-        return Grounding.NOT_SEARCHED.value
+    if not searched:
+        return Grounding.GROUNDED.value if reused_evidence else Grounding.NOT_SEARCHED.value
     if not passages:
         return Grounding.NO_RELEVANT_SOURCES.value
     return grounding_for(answer).value
+
+
+def partial_grounding(
+    tool_calls: Sequence["ToolCall"],
+    history: Sequence[ask_chat.Turn],
+    answer: str,
+) -> str:
+    """The verdict a turn would report if it settled right now.
+
+    Used for a turn that is cancelled or fails after some searches have run: the
+    evidence it gathered is real, so recording it is honest, and a resume or a later
+    vote should see the same state a completed turn would have.
+
+    The wording is deliberately not consulted until there is an answer to read. A
+    turn stopped mid-answer has passages but no finished prose, and classifying that
+    empty string would report ``no_relevant_sources`` — claiming the search found
+    nothing when it found exactly what the member had already been shown. So with
+    evidence and no answer yet the verdict is ``grounded``: the corpus supported the
+    turn, whatever the last token was.
+    """
+    passages = [passage for call in tool_calls for passage in call.result.passages]
+    if not tool_calls:
+        return (
+            Grounding.GROUNDED.value
+            if _has_prior_evidence(history)
+            else Grounding.NOT_SEARCHED.value
+        )
+    if not answer.strip():
+        return Grounding.GROUNDED.value if passages else Grounding.NO_RELEVANT_SOURCES.value
+    return _grounding(
+        answer,
+        passages,
+        searched=True,
+        reused_evidence=_has_prior_evidence(history),
+    )
+
+
+def last_query(tool_calls: Sequence["ToolCall"]) -> str | None:
+    """The most recent standalone query this turn searched for, if any.
+
+    It is what a cancelled turn records as its ``retrieval_query``: the standalone
+    question the evidence it kept was found with.
+    """
+    return tool_calls[-1].result.query if tool_calls else None
+
+
+def _limit_result(limit: int) -> dict[str, Any]:
+    """The tool output for a call made past the turn's search cap.
+
+    It is a normal, short tool result rather than an error part: the model asked
+    for more evidence than the turn allows, so it is told the limit was reached and
+    answers from what it already has. Failing the turn here would punish the member
+    for the model's burst of parallel calls.
+    """
+    message = (
+        f"The search limit for this question is {limit}, and it has been reached. "
+        "Answer from the passages already returned, and if they do not cover the "
+        "question, say that you do not have enough information."
+    )
+    return {
+        "query": "",
+        "grounding": Grounding.NO_RELEVANT_SOURCES.value,
+        "passages": [],
+        "max_score": 0.0,
+        "limit_reached": True,
+        "message": message,
+    }
 
 
 def _has_prior_evidence(history: Sequence[ask_chat.Turn]) -> bool:

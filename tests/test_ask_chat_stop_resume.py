@@ -543,16 +543,26 @@ def test_a_browser_abort_cancels_the_turn_and_keeps_what_was_read(
             assert state["status"] == "cancelled"
             assert state["ended_at"]
             with connect(settings.product_db_path) as conn:
-                answer = conn.execute(
-                    "SELECT answer FROM interactions WHERE turn_id = ?", (turn_id,)
-                ).fetchone()["answer"]
+                row = conn.execute(
+                    "SELECT i.answer, t.retrieval_query, t.grounding "
+                    "FROM ask_chat_turns AS t LEFT JOIN interactions AS i "
+                    "ON i.turn_id = t.turn_id WHERE t.turn_id = ?",
+                    (turn_id,),
+                ).fetchone()
                 hits = conn.execute(
                     "SELECT COUNT(*) FROM interaction_hits h JOIN interactions i "
                     "ON i.interaction_id = h.interaction_id WHERE i.turn_id = ?",
                     (turn_id,),
                 ).fetchone()[0]
+            answer = row["answer"]
             assert answer, "a stopped answer keeps the text the member had read"
             assert hits >= 1, "a stopped turn keeps the passages it already found"
+            # A stopped turn that had already searched keeps what it learned: the
+            # standalone query it ran and the verdict its evidence supports. Leaving
+            # both null made a stopped turn look like one that never retrieved, so a
+            # reload or a later vote could not tell what had been found (FR-006).
+            assert row["retrieval_query"], "a stopped turn keeps the query it searched"
+            assert row["grounding"] == "grounded", "and the verdict its evidence supports"
 
             # AC 6: a resume of that stopped turn replays the stored text once.
             resumed = client.get(f"{base}/ask/chat/turns/{turn_id}/stream", headers=headers)

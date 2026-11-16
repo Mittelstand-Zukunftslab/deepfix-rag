@@ -451,6 +451,12 @@ async def _relay_body(
     failure: str | None = None
     seen_text: list[str] = []
     trace_id = trace.trace_id
+    # The searches this turn has completed so far, and the verdict and query they
+    # imply. A cancelled or failed turn records these, so the evidence it kept is
+    # readable the same way a completed turn's is (D-4, FR-006).
+    live_calls: list[ask_chat_turn.ToolCall] = []
+    live_grounding: list[str | None] = [None]
+    live_query: list[str | None] = [None]
 
     def store_hits(calls: list[ask_chat_turn.ToolCall]) -> None:
         """Persist the hits as each search completes, so a stop keeps the evidence."""
@@ -480,6 +486,11 @@ async def _relay_body(
             max_score=latest.result.max_score,
             duration_ms=latest.duration_ms,
         )
+        # Remember what the searches found, so a turn that is cancelled or fails
+        # from here records the same verdict and query a completed one would.
+        live_calls[:] = calls
+        live_grounding[0] = ask_chat_turn.partial_grounding(calls, history, "".join(seen_text))
+        live_query[0] = ask_chat_turn.last_query(calls)
 
     yield chat_stream.sse(chat_stream.start_part(turn_id))
     try:
@@ -535,6 +546,8 @@ async def _relay_body(
             partial="".join(seen_text),
             trace_id=trace_id,
             trace=trace,
+            live_grounding=live_grounding[0],
+            live_query=live_query[0],
         )
         registry_for(request.app.state).close(turn_id)
     grounding = stored.grounding or Grounding.NO_RELEVANT_SOURCES.value
@@ -575,6 +588,8 @@ def _settle(
     partial: str,
     trace_id: str | None,
     trace: TurnTrace,
+    live_grounding: str | None = None,
+    live_query: str | None = None,
 ) -> ask_chat.Turn:
     """Finish the turn's one ``interactions`` row and its terminal state.
 
@@ -595,22 +610,24 @@ def _settle(
         )
         update_answer(settings.product_db_path, interaction_id, outcome.answer)
     else:
-        # A turn with no outcome keeps the question and whatever text was read.
+        # A turn with no outcome keeps the question, whatever text was read, and —
+        # if it managed any searches before it stopped — the passages they found.
+        # The evidence is real, so a resume and a later vote see what a completed
+        # turn would have seen (FR-006, D-4).
         update_answer(settings.product_db_path, interaction_id, partial)
-        # Its trace id is recorded too, so a failed or stopped turn can be found
-        # from its interaction rather than only from the MLflow experiment.
         set_trace_id(settings.product_db_path, interaction_id, trace_id)
     # The trace's terminal half: what it produced and how it ended, so a cancelled
     # or failed turn is accounted for too (FR-020, AC 5).
+    grounding = outcome.grounding if outcome else live_grounding
     trace.outputs(
         {
             "status": status,
             "answer": outcome.answer if outcome else partial,
-            "grounding": outcome.grounding if outcome else None,
+            "grounding": grounding,
         }
     )
     trace.tag("status", status)
-    trace.tag("grounding", outcome.grounding if outcome else None)
+    trace.tag("grounding", grounding)
     if status == "failed":
         # The trace's own state, not just a tag: a failed turn must not read as a
         # healthy trace when a reviewer filters by state.
@@ -621,9 +638,9 @@ def _settle(
         user.id,
         status=status,
         error=failure,
-        grounding=None if outcome is None else outcome.grounding,
+        grounding=outcome.grounding if outcome else live_grounding,
         citations=None if outcome is None else _citations(outcome),
-        retrieval_query=None if outcome is None else outcome.retrieval_query,
+        retrieval_query=outcome.retrieval_query if outcome else live_query,
         first_token_ms=None if outcome is None else outcome.first_token_ms,
     )
 
