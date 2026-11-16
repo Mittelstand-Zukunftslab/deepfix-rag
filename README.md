@@ -211,7 +211,7 @@ Every subcommand accepts `--json`: the payload goes to stdout, logs and progress
 | `deepfix schema` | Prints the schema version, the index-time keys, and the top-level fields. |
 | `deepfix run-diagnostic` | `[--dataset <d>] [--config <yaml>] [--server-url <url>] [--limit N]`. Needs a reachable analysis server. |
 
-`--retrieval-only` scores nDCG, recall, and precision and calls neither the generation model nor the judge. `--seed` with `--limit` draws a deterministic sample instead of taking the first rows. `deepfix hpo` reads `configs/hpo_retrieval_small.yaml` by default: rerank on/off with `top_n` 5 or 10, `top_k` 10/20/50, query expansion 1 to 3, and the fusion modes that read their weights. A pruned duplicate parameter set does not shorten the budget, and a trial in which every case errored is recorded `FAIL` rather than scored `0.0`.
+`--retrieval-only` scores nDCG, recall, and precision and calls neither the generation model nor the judge. `--seed` with `--limit` draws a deterministic sample instead of taking the first rows. `deepfix hpo` defaults to `--config configs/hpo.yaml`; `configs/hpo_retrieval_small.yaml` is the shipped query-time space an optimization round uses — twelve trials on 20 seeded questions over `top_k` 10/20/50, rerank off or on with `top_n` 5 or 10, query expansion 1 to 3, and fusion modes `reciprocal_rerank`, `relative_score`, and `dist_based_score` (with dense weights 0.3/0.5/0.7 under the two that read them). `simple` and every chunking key are out of the space on purpose. A pruned duplicate parameter set does not shorten the budget, and a trial in which every case errored is recorded `FAIL` rather than scored `0.0`.
 
 ---
 
