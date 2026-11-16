@@ -46,10 +46,18 @@ bun run dev        # http://localhost:8080
 From the repository root, set `BETTER_AUTH_SECRET` in `.env` (see `../example.env`), then:
 
 ```sh
-docker compose up --build web   # http://localhost:8080
+docker compose up --build web
 ```
 
-`API_INTERNAL_URL` defaults to `http://backend-api:8000`, the FastAPI service in Compose (`docker compose up --build backend-api`, published on the host at http://localhost:8000). `BETTER_AUTH_URL` is `WEB_ORIGIN` and must match. SQLite auth data is stored in the `web_auth` volume (`AUTH_DATABASE_PATH=/data/auth.db`).
+The `web` and `backend-api` services publish no host port: in a deployment, Traefik proxies to them on `8080` and `8000`. To reach them from this machine, either publish a loopback-only port for the duration of the check (`ports: ["127.0.0.1:8080:8080"]` on the service you need, never a bare `8080:8080`) or run the API and the app directly, as in Development above. Do not commit a published port; see "Published ports" in `../README.md`.
+
+The Compose file declares `dokploy-network` as external (the `mlflow` router joins it), so create it once before the first local `docker compose up`:
+
+```sh
+docker network create dokploy-network
+```
+
+`API_INTERNAL_URL` defaults to `http://backend-api:8000`, the FastAPI service in Compose (`docker compose up --build backend-api`). `BETTER_AUTH_URL` is `WEB_ORIGIN` and must match. SQLite auth data is stored in the `web_auth` volume (`AUTH_DATABASE_PATH=/data/auth.db`).
 
 Build the image on its own with `docker build -t deepfix-web web`.
 

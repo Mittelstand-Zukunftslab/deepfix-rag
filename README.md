@@ -43,10 +43,10 @@ flowchart TB
 
 | Service | Role | Published port |
 | :--- | :--- | :--- |
-| `web` (container `deepfix-web`) | TanStack Start app. Owns sign-in and sessions with Better Auth; proxies every other `/api/*` call to FastAPI with a short-lived identity token. Admin section at `/admin`. | `8080` |
-| `backend-api` (container `deepfix-api`) | FastAPI product API: documents, index, retrieval, ask, feedback, history, the optimization job API, and the admin Hermes chat routes. One uvicorn worker, because SQLite, the index writer, and the APScheduler instance assume one process. | `8000` |
+| `web` (container `deepfix-web`) | TanStack Start app. Owns sign-in and sessions with Better Auth; proxies every other `/api/*` call to FastAPI with a short-lived identity token. Admin section at `/admin`. | none; Traefik proxies to `8080` |
+| `backend-api` (container `deepfix-api`) | FastAPI product API: documents, index, retrieval, ask, feedback, history, the optimization job API, and the admin Hermes chat routes. One uvicorn worker, because SQLite, the index writer, and the APScheduler instance assume one process. | none; Traefik proxies to `8000` |
 | `hermes` | The optimization sandbox. Its API server takes one run at a time and streams step events. A second, standalone chat profile can be started on `8643`. No Docker socket, no dashboard. | none |
-| `mlflow` | Experiment tracking and the trace sink for `eval` and for the Hermes agent. No authentication of its own. | none |
+| `mlflow` | Experiment tracking and the trace sink for `eval` and for the Hermes agent. It has no authentication of its own, so a Traefik router with a basic-auth middleware is the only way in. | none |
 | `rustfs` | S3-compatible object store: the index cache and the per-run bundles under `optimization/runs/<run_id>/`. | none |
 | `diagnostic-agent` | Optional DeepFix analysis server (`deepfix-server`) used only by `deepfix run-diagnostic`. | `8844` |
 | `memgraph`, `falkordb` | Optional graph stores for the manual `graph` backend. Included by `compose.graphdb.yml`. The promotion gate rejects `graph` and `mixed`. | `7687`, `6379` |
@@ -323,11 +323,10 @@ Names and purpose only; `example.env` carries the values and one comment per gro
 | `MLFLOW_TRACKING_URI` | Tracking server for every machine caller. Internal Compose name in the deployment. |
 | `MLFLOW_DEV_RAG_EXPERIMENT` | Experiment `deepfix eval` logs to. |
 | `MLFLOW_ENABLE_ASYNC_TRACE_LOGGING` | Enables MLflow's async trace flush. |
-| `MLFLOW_EXPERIMENT_ID` | Set in `example.env` and passed to `backend-api`, but nothing in this package reads it. The Hermes trace experiment is resolved by name instead (`MLFLOW_DEV_RAG_EXPERIMENT` for eval, `deepfix_hermes` and `MLFLOW_HERMES_CHAT_EXPERIMENT` for traces). Leave it unset. |
 | `MLFLOW_BACKEND_STORE_URI` | SQLite store for the `mlflow` service. |
+| `MLFLOW_PUBLIC_HOST` | Host the `mlflow` service's Traefik router matches. Must also appear in `MLFLOW_SERVER_ALLOWED_HOSTS`. |
+| `MLFLOW_BASIC_AUTH_USERS` | htpasswd user list for the `deepfix-mlflow-auth` Traefik middleware in front of the MLflow UI. A secret: generate with `htpasswd -nbB user pass`. Empty fails closed. |
 | `MLFLOW_SERVER_ALLOWED_HOSTS`, `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS` | `Host` allow-list and CORS origins for the `mlflow` service. MLflow 3.x matches `Host` exactly, so `host` and `host:port` are separate entries. |
-
-`MLFLOW_ALLOWED_HOSTS` and `MLFLOW_CORS_ALLOWED_ORIGINS` still appear in `example.env`, but nothing reads them: the `mlflow` service is configured through the `MLFLOW_SERVER_*` pair above. Leave them unset.
 
 **Models and reranking**
 
@@ -576,6 +575,39 @@ Product search, ask, and feedback also trace to `deepfix_product` and `deepfix_p
 
 ---
 
+## Published ports
+
+`docker-compose.yml` publishes **no** host port for `web`, `backend-api`, `mlflow`, or `rustfs`. Every one of them is reachable only through the Traefik instance Dokploy runs, which attaches to the Compose network and proxies to the container port:
+
+| Service | Container port | Published | How traffic arrives |
+| :--- | :--- | :--- | :--- |
+| `web` | `8080` | none | Traefik router from Dokploy's domain setting |
+| `backend-api` | `8000` | none | Traefik router from Dokploy's domain setting, if one exists |
+| `mlflow` | `5000` | none | The one router declared in `docker-compose.yml`, behind basic auth |
+| `rustfs` | `9000`, `9001` | none | Compose network only; the console stays off |
+
+Because a container has no published port for Traefik to infer, each service that a router can reach declares its backend port itself:
+
+```yaml
+labels:
+  - "traefik.enable=true"
+  - "traefik.http.services.<name>.loadbalancer.server.port=<port>"
+```
+
+The `web` and `backend-api` routers and their `Host` rules come from Dokploy's domain settings; compose only supplies the load-balancer port, under the same name Dokploy derives from the compose service (`web`, `backend-api`). The `mlflow` router is declared in `docker-compose.yml`, because its basic-auth middleware must be version-controlled rather than a manual edit that a redeploy can lose; that service therefore also declares `dokploy-network` itself, since Dokploy only attaches a service to it when the service has a Domain.
+
+Nothing in this repository binds a host port for these four services. Local work uses `uv run uvicorn` and the Vite dev server directly, not the Compose stack; if a deployment genuinely needs host access for a debugger or a probe, bind it to loopback (`127.0.0.1:8000:8000`) so it is not reachable from outside the machine.
+
+`docker-compose.yml` declares `dokploy-network` as an external network because the `mlflow` router joins it. A laptop that runs the Compose stack instead of the dev servers needs that network to exist first:
+
+```bash
+docker network create dokploy-network   # once, on a host that is not Dokploy
+```
+
+`diagnostic-agent` (`8844`) and the optional `memgraph` / `falkordb` (`7687`, `6379`) still publish. They are optional, off the public path, and out of scope for this lockdown.
+
+---
+
 ## MLflow and RustFS lockdown
 
 MLflow has no authentication of its own, and the RustFS console has no IAM policy in front of it, so neither is published. `docker-compose.yml` declares no `ports:` entry for `mlflow` or `rustfs`, and `RUSTFS_CONSOLE_ENABLE` defaults to `false`.
@@ -586,7 +618,11 @@ MLflow has no authentication of its own, and the RustFS console has no IAM polic
 | RustFS S3 API | none | `S3_ENDPOINT_URL` on the Compose network | `backend-api`, `hermes`, LanceDB in both |
 | RustFS console | none | not started | nothing in this repository |
 
-Machine-to-machine traffic never leaves the host. A human reads the MLflow UI through one Dokploy domain with a Traefik `basicAuth` middleware; that router terminates TLS and proxies to the container over the Compose network, so no `ports:` entry is needed. Keep that domain's `Host` in `MLFLOW_SERVER_ALLOWED_HOSTS` and its origin in `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS`, or MLflow rejects the request before the UI loads.
+Machine-to-machine traffic never leaves the host. A human reads the MLflow UI through the `mlflow` service's own Traefik router, which terminates TLS and requires the `deepfix-mlflow-auth` basic-auth middleware; both are labels in `docker-compose.yml`. Keep that domain's `Host` in `MLFLOW_SERVER_ALLOWED_HOSTS` and its origin in `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS`, or MLflow rejects the request before the UI loads.
+
+The middleware's user list is `MLFLOW_BASIC_AUTH_USERS`, a deployment secret. Generate it with `htpasswd -nbB user pass` and set the output verbatim: a value passed as an environment variable must **not** have its `$` characters doubled. Doubling is only for a literal pasted into a Compose file or an expanding shell. Empty fails closed: a user list with no entries authenticates nobody, so the UI refuses to open rather than opening unprotected.
+
+The router is declared here, not in Dokploy, so a redeploy cannot drop the middleware. `mlflow` therefore has **no Dokploy Domain entry**: remove one if it exists, or two routers claim the same `Host` and which one answers is undefined.
 
 `mlflow_run_url()` builds the admin *open run* link from `MLFLOW_TRACKING_URI`. With an internal host it returns nothing and the admin table shows a dash instead of an unopenable link. `S3_URI`, `S3_REGION`, and the IAM keys do not depend on the endpoint: the URI names a bucket and key, not a host.
 

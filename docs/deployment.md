@@ -70,9 +70,11 @@ Two keys are required for the stack to boot at all: `API_SERVER_KEY` and `HERMES
 
 ## Domains
 
-- The web app has one public domain on `web:8080`.
+Nothing in the Compose stack publishes a host port, so every public route is a Traefik router that proxies to the container port named in that service's `traefik.http.services.<name>.loadbalancer.server.port` label. See "Published ports" in `README.md`.
+
+- The web app has one public domain on `web:8080`. Dokploy supplies the router and `Host` rule.
 - The API has one public domain on `backend-api:8000` only if a browser or an external tool must reach it directly. The web app proxies `/api/*` itself, so the common deployment does not need one.
-- MLflow keeps **one** domain with a Traefik `basicAuth` middleware, and that hostname must stay in `MLFLOW_SERVER_ALLOWED_HOSTS` with its origin in `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS`. See "MLflow and RustFS lockdown" in `README.md`.
+- MLflow keeps **one** router, declared in `docker-compose.yml` with the `deepfix-mlflow-auth` basic-auth middleware attached. It is not a Dokploy Domain entry: remove one if it exists. The host comes from `MLFLOW_PUBLIC_HOST` and must also stay in `MLFLOW_SERVER_ALLOWED_HOSTS`, with its origin in `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS`. `MLFLOW_BASIC_AUTH_USERS` holds the htpasswd list and fails closed when empty. See "MLflow and RustFS lockdown" in `README.md`.
 - RustFS has no domain. The console stays off.
 
 Never put a real hostname, IP address, or credential in a document in this repository.
