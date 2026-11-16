@@ -412,21 +412,50 @@ describe("the sources panel's layout", () => {
     expect(column.className).toContain("lg:w-96");
     expect(column.className).toContain("border-t");
     expect(column.className).toContain("lg:border-s");
-    // Nothing in the chain may refuse to shrink, or the chat column is squeezed
-    // to nothing at a narrow width.
-    expect(column.className.split(/\s+/)).not.toContain("shrink-0");
-    expect(column.className.split(/\s+/)).toContain("lg:shrink-0");
+    // Stacked, it is capped and does not shrink, so a short viewport keeps a
+    // usable chat instead of splitting the space between the two.
+    expect(column.className).toContain("max-h-72");
+    expect(column.className).toContain("lg:max-h-none");
+    expect(column.className.split(/\s+/)).toContain("shrink-0");
     // The panel itself takes the column's width instead of demanding its own.
     expect(panel.className).toContain("min-w-0");
     expect(panel.className).not.toMatch(/(^|\s)lg:w-96/);
-    // No horizontal scrolling anywhere in the panel.
-    expect(column.className).toContain("overflow-x-hidden");
 
     // The card's name group can shrink, so a long filename ellipsises rather
     // than pushing the score out of the card.
     const name = screen.getByText("stgb_315c.txt");
     expect(name.className).toContain("truncate");
     expect(name.parentElement!.className).toContain("min-w-0");
+  });
+
+  it("keeps a usable chat column when the viewport is very short", async () => {
+    // The reported defect: at ~512x320 the chat column shrank to about 48 px, and
+    // the composer's hint drew over the sources heading. Layout is not measurable in
+    // jsdom, so this asserts the two decisions that fix it: the chat column has a
+    // floor, and the page scrolls rather than squeezing the column.
+    vi.spyOn(askChatService, "listThreads").mockResolvedValue([THREAD] as never);
+    vi.spyOn(askChatService, "getThread").mockResolvedValue({
+      thread: THREAD,
+      turns: [storedTurn({ citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }] })],
+    } as never);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamResponse(framesFor("Eine Antwort [1].", "grounded", [], PASSAGES))),
+    );
+    renderPage(<AskPage indexReady />);
+    const panel = await screen.findByRole("complementary", { name: "Sources" });
+    const column = panel.parentElement!;
+    // The chat column — the panel's previous sibling — has a minimum height, and
+    // that minimum is dropped once the layout is side by side.
+    const chatColumn = column.previousElementSibling as HTMLElement;
+    expect(chatColumn.className).toContain("min-h-[19rem]");
+    expect(chatColumn.className).toContain("lg:min-h-0");
+    // The row does not clip below `lg`, so the shell's `<main>` can scroll the
+    // whole page instead of the column being squeezed.
+    const row = column.parentElement!;
+    expect(row.className).not.toMatch(/(^|\s)overflow-hidden(\s|$)/);
+    expect(row.className).toContain("lg:overflow-hidden");
+    expect(row.className).toContain("lg:flex-row");
   });
 });
 

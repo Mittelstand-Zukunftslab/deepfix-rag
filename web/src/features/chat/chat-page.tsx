@@ -107,6 +107,16 @@ type ThreadState = {
   newestStoredStatus: AskTurn["status"] | null;
   /** The newest stored turn's answer text, so "stopped before answering" is decidable. */
   newestStoredAnswer: string;
+  /**
+   * Set the moment the member presses Stop, before the server has settled the row.
+   *
+   * Cancel is a request, and the turn's stream closes locally at once — so
+   * `onFinished`'s re-read can land while the server still calls the turn
+   * `running`. The badge then fell back to the grounding verdict and read
+   * "Grounded", and only a later reload showed the stopped state. The intent is
+   * known here, so it is recorded here (D-10, FR-014).
+   */
+  stopped: boolean;
 };
 
 const COMPOSER_BUTTON =
@@ -367,8 +377,8 @@ export function AskPage({
   const active = activeThreadId ? states.current.get(activeThreadId) : null;
 
   return (
-    <div className="mx-auto flex h-[calc(100vh-4.25rem)] w-full max-w-[96rem] flex-1 overflow-hidden px-2 py-3 sm:px-4 lg:px-6">
-      <div className="relative flex flex-1 gap-4 overflow-hidden">
+    <div className="mx-auto flex min-h-[calc(100vh-4.25rem)] w-full max-w-[96rem] flex-1 px-2 py-3 sm:px-4 lg:h-[calc(100vh-4.25rem)] lg:overflow-hidden lg:px-6">
+      <div className="relative flex min-h-0 flex-1 gap-4 overflow-hidden">
         <AskThreadSidebar
           threads={threads}
           activeThreadId={activeThreadId}
@@ -378,7 +388,7 @@ export function AskPage({
           onRename={renameThread}
           onDelete={deleteThread}
         />
-        <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/80 bg-background/50 shadow-sm backdrop-blur-sm">
+        <section className="flex min-w-0 flex-1 flex-col overflow-visible rounded-2xl border border-border/80 bg-background/50 shadow-sm backdrop-blur-sm lg:overflow-hidden">
           {active && activeThreadId ? (
             <>
               {opening ? (
@@ -431,6 +441,9 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
   const runtime = useAISDKRuntime(helpers);
   const [showSources, setShowSources] = useState(true);
   const [selectedRank, setSelectedRank] = useState<number | null>(null);
+  // A bump that re-renders when the member stops a turn, so the badge can read
+  // `state.stopped` immediately rather than waiting for the store (D-10).
+  const [, setStoppedOnce] = useState(0);
   // The passages come from the messages' tool parts, so a reload rebuilds the
   // panel from what the stream carried rather than from the answer's prose.
   const sources: SourcesState = {
@@ -465,9 +478,13 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
       newestAnswer.parts.some((part) => part.type === "tool-search_documents"))
     : (state.newestStoredSearched ?? false);
   // The newest turn's status and text, so the badge can tell a stopped turn from a
-  // deficient one. A live turn's status arrives on the terminal frame; a stored
-  // one is on the message list's own text.
-  const newestStatus = state.status ?? state.newestStoredStatus;
+  // deficient one. Three sources, in order of how fresh they are: the member's own
+  // Stop (before the server has settled anything), the live turn's terminal frame,
+  // and the store. A stopped turn is reported as stopped even while the store still
+  // calls it `running`, because the member knows what they did.
+  const newestStatus: AskTurn["status"] | null = state.stopped
+    ? "cancelled"
+    : (state.status ?? state.newestStoredStatus);
   const newestText = newestAnswer
     ? newestAnswer.parts.map((part) => (part.type === "text" ? part.text : "")).join("")
     : (state.newestStoredAnswer ?? "");
@@ -486,10 +503,14 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 bg-muted/20 px-4">
         <span className="truncate text-label-sm font-medium text-foreground">Conversation</span>
         <div className="flex items-center gap-2">
-          {state.verdict ? (
+          {newestStatus === "cancelled" || state.verdict ? (
             <GroundingBadge
-              grounding={state.verdict.grounding}
-              citations={state.verdict.citations}
+              // A stopped turn with no verdict yet is drawn from its status alone:
+              // "grounded" is the neutral base the badge replaces for a cancel, and
+              // `badgeState` decides from the status before it looks at citations
+              // (D-10, FR-014).
+              grounding={state.verdict?.grounding ?? "grounded"}
+              citations={state.verdict?.citations ?? []}
               // A grounded answer with no citations is "Partly grounded" when it
               // searched and "Reused earlier evidence" when it did not. The test is
               // the newest turn's own search, not whether the panel has passages.
@@ -519,8 +540,15 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
           ) : null}
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-visible lg:flex-row lg:overflow-hidden">
+        {/* `min-h` on the chat column is the fix for a very short viewport: without
+            it the column shrank to about 48 px and the composer's hint and the
+            sources heading drew over each other. A chat needs a floor to stay a
+            chat. Below `lg` the whole page scrolls past that floor — the shell's
+            `<main>` already allows it — so the sources sit below a real chat rather
+            than squeezing it, and nothing is clipped (better-layout: hold structure
+            until it breaks, then let the page scroll rather than squeeze). */}
+        <div className="flex min-h-[19rem] min-w-0 flex-1 flex-col lg:min-h-0">
           <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
             <div
               aria-live="polite"
@@ -559,6 +587,14 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
                     .find((message) => message.role === "assistant");
                   return assistant?.id ?? state.session.resumeTurnId.current;
                 }}
+                onStopped={() => {
+                  // The stop's own intent, held on the thread's state: the badge
+                  // reads it before the store does, so it switches at once
+                  // (D-10, FR-014). A tick re-renders this surface; the store's
+                  // answer arrives with the next detail read.
+                  state.stopped = true;
+                  setStoppedOnce((value) => value + 1);
+                }}
               />
             </div>
           </div>
@@ -571,7 +607,15 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
           // scrollbar. One width, `min-w-0`, and no `shrink-0` on the child keep
           // the two in agreement, and stacking is what leaves the composer usable
           // at a narrow width (better-layout: hold structure until it breaks).
-          <div className="max-h-[45%] w-full overflow-y-auto overflow-x-hidden border-t border-border/60 p-3 lg:max-h-none lg:w-96 lg:shrink-0 lg:border-s lg:border-t-0 xl:w-[26rem]">
+          //
+          // Stacked, it caps itself and the panel fills that box, so exactly one
+          // thing scrolls: the passage list, under a heading that stays put. A
+          // proportional cap (`max-h-[45%]`) of a short row left the chat column
+          // ~48 px; letting the panel shrink collapsed it to 25 px; and capping the
+          // wrapper gave the row and the list two nested scrollers on a 320px
+          // viewport. A fixed cap with no shrinking makes the row scroll when both
+          // cannot fit, which is what a very short viewport needs.
+          <div className="flex max-h-72 w-full shrink-0 flex-col overflow-hidden border-t border-border/60 p-3 lg:max-h-none lg:w-96 lg:border-s lg:border-t-0 xl:w-[26rem]">
             <SourcesPanel
               state={sources}
               selectedRank={selectedRank}
@@ -664,6 +708,7 @@ function AskComposer({
   isRefusal,
   onRegenerate,
   runningTurnId,
+  onStopped,
 }: {
   threadId: string;
   canRegenerate: boolean;
@@ -671,6 +716,8 @@ function AskComposer({
   onRegenerate: () => void;
   /** The turn being written, if one is, so Stop can name it (FR-014). */
   runningTurnId: () => string | null;
+  /** Records the member's intent immediately, before the server settles the row. */
+  onStopped: () => void;
 }) {
   return (
     <div className="flex flex-col">
@@ -700,6 +747,9 @@ function AskComposer({
                 aria-label="Stop generating"
                 className={COMPOSER_BUTTON}
                 onClick={() => {
+                  // Recorded before the request is sent: the badge must describe
+                  // what the member just did, not wait for a round trip.
+                  onStopped();
                   const turnId = runningTurnId();
                   if (turnId) void askChatService.cancelTurn(turnId).catch(() => undefined);
                 }}
@@ -792,6 +842,9 @@ function threadState(
         if (!entry) return;
         entry.status = frame.status;
         entry.status_note = null;
+        // The terminal frame is the turn's own account, so it supersedes the
+        // intent recorded at the Stop press (D-10).
+        if (frame.status !== "running") entry.stopped = false;
         if (frame.grounding) {
           entry.verdict = {
             grounding: frame.grounding,
@@ -831,6 +884,10 @@ function threadState(
             const newestTurn = detail.turns[detail.turns.length - 1];
             entry.newestStoredStatus = newestTurn?.status ?? null;
             entry.newestStoredAnswer = newestTurn?.answer ?? "";
+            // The store has now confirmed the cancel, so the live intent is no
+            // longer the freshest fact and is cleared: a later completed turn must
+            // not inherit a stopped badge (D-10).
+            if (newestTurn?.status === "cancelled") entry.stopped = false;
             // The step is over, so its status note is stale whatever it said.
             entry.status_note = null;
             // The store's passages for the turn that just ended, so a stopped
@@ -885,6 +942,7 @@ function threadState(
     status_note: null,
     newestStoredStatus: turns[turns.length - 1]?.status ?? null,
     newestStoredAnswer: turns[turns.length - 1]?.answer ?? "",
+    stopped: false,
   };
 }
 

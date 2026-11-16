@@ -818,3 +818,84 @@ describe("a reasoning model", () => {
     expect(screen.getByText(/Die Antwort/)).toBeTruthy();
   });
 });
+
+describe("the badge as a stop settles", () => {
+  it("switches to the stopped state at once, before the store has settled the row", async () => {
+    // The reported defect: right after Stop the badge still read "Grounded", and
+    // only a reload showed the stopped state. Cancel is a request, so the re-read
+    // that follows the stream can land while the server still calls the turn
+    // running — and the badge then fell back to the grounding verdict. The member's
+    // intent is known the moment they press Stop, so the badge reads it.
+    const runningTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-10",
+      status: "running" as const,
+      answer: "Ein halber Satz.",
+      grounding: "grounded" as const,
+      citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+      passages: PASSAGES,
+      retrieval_query: "Trunkenheitsfahrt",
+    };
+    stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [] } }, () =>
+      openStream(["Ein ", "halber ", "Satz."], "turn-10"),
+    );
+    let reads = 0;
+    vi.spyOn(askChatService, "getThread").mockImplementation(async () => {
+      reads += 1;
+      // After the stop the store still says `running`: the settle has not landed.
+      return (
+        reads === 1 ? { thread: THREAD, turns: [] } : { thread: THREAD, turns: [runningTurn] }
+      ) as never;
+    });
+    vi.spyOn(askChatService, "cancelTurn").mockResolvedValue(undefined);
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
+      target: { value: "Lange Frage" },
+    });
+    fireEvent.submit(screen.getByRole("textbox", { name: "Ask" }).closest("form")!);
+    await screen.findByText(/Ein/);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop generating" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
+    await waitFor(() => {
+      expect(screen.getByText("Stopped, partial answer")).toBeTruthy();
+    });
+    expect(screen.queryByText("Grounded")).toBeNull();
+  });
+
+  it("keeps the stopped state after a reload, even with no verdict stored", async () => {
+    // The reported defect: a turn stopped before its first word showed the badge
+    // live, but after a reload the header was blank. The badge was only drawn when
+    // a verdict existed, and a cancelled turn can have none — so the stored status
+    // is what has to draw it.
+    for (const grounding of ["grounded", "not_searched", null] as const) {
+      const stoppedEmpty: AskTurn = {
+        ...STORED_TURN,
+        turn_id: "turn-8",
+        status: "cancelled",
+        answer: "",
+        citations: [],
+        grounding: grounding as never,
+        passages: PASSAGES,
+        retrieval_query: "Trunkenheitsfahrt",
+      };
+      vi.spyOn(askChatService, "listThreads").mockResolvedValue([THREAD] as never);
+      vi.spyOn(askChatService, "getThread").mockResolvedValue({
+        thread: THREAD,
+        turns: [stoppedEmpty],
+      } as never);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("data: [DONE]\n\n", { status: 200 })),
+      );
+      const { unmount } = renderPage(<AskPage indexReady />);
+      await waitFor(() => {
+        expect(screen.getByText("Stopped before answering")).toBeTruthy();
+      });
+      expect(screen.queryByText("Partly grounded")).toBeNull();
+      unmount();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+});
