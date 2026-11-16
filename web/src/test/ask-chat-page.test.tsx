@@ -1,8 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Suspense, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AppShell } from "@/components/layout/app-shell";
 import { AskPage } from "@/features/chat/chat-page";
 import { DELETE_CONVERSATION_COPY } from "@/features/chat/ask-thread-sidebar";
 import type { AskTurn } from "@/schemas/ask-chat";
@@ -71,6 +79,30 @@ function openStream(words: string[], turnId: string): Response {
     },
   });
   return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
+
+/**
+ * A stream that reports a `reasoning` status and then stays open with its text
+ * group unfinished — what a stopped mid-reasoning turn leaves behind.
+ */
+function openStreamWithStatus(words: string[], turnId: string): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of [
+          frame({ type: "start", messageId: turnId }),
+          frame({ type: "start-step" }),
+          frame({ type: "data-deepfix-status", data: { status: "reasoning" } }),
+          frame({ type: "text-start", id: "s" }),
+          ...words.map((delta) => frame({ type: "text-delta", id: "s", delta })),
+        ]) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } },
+  );
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -897,5 +929,139 @@ describe("the badge as a stop settles", () => {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("the page inside the real app shell", () => {
+  it("lets the shell's main scroll the stacked sources into view", async () => {
+    // The reported defect: at 250% zoom the sources panel could not be scrolled to
+    // at all, and the composer hint was clipped. The cause was the page's own
+    // `flex-1 min-h-0 overflow-hidden` chain: it gave the columns no height of their
+    // own below `lg`, so the panel was clipped and `<main>` never had anything to
+    // scroll. A harness that rendered the page alone could not see this — the shell
+    // is the scroll container — so this renders the real `AppShell` around the real
+    // page through a real router.
+    const root = createRootRoute();
+    const chat = createRoute({
+      getParentRoute: () => root,
+      path: "/chat",
+      // The shell is inside the route, exactly as `__root` renders it: it calls
+      // `useActivePath`, which needs a router above it.
+      component: () => (
+        <AppShell user={{ id: "u1", email: "ada@example.com", role: "member" } as never}>
+          <AskPage indexReady />
+        </AppShell>
+      ),
+    });
+    const search = createRoute({
+      getParentRoute: () => root,
+      path: "/search",
+      component: () => null,
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([chat, search]),
+      history: createMemoryHistory({ initialEntries: ["/chat"] }),
+    });
+    stubApi(
+      {
+        threads: [THREAD],
+        // The panel only renders when the stored turn carries the passages it
+        // found, so the fixture has to include them.
+        detail: { thread: THREAD, turns: [{ ...STORED_TURN, passages: PASSAGES }] },
+      },
+      () => streamResponse(answerFrames()),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("navigation", { name: "Conversations" });
+    await waitFor(() => {
+      expect(screen.getByRole("complementary", { name: "Sources" })).toBeTruthy();
+    });
+
+    // The shell's `<main>` is the scroll container, and the page must not clip its
+    // own content below `lg` — that is what made the sources unreachable.
+    const main = document.querySelector("main")!;
+    expect(main.className).toContain("overflow-auto");
+    const page = main.firstElementChild as HTMLElement;
+    expect(page.className.split(/\s+/)).not.toContain("overflow-hidden");
+    expect(page.className).not.toMatch(/(^|\s)min-h-\[calc/);
+
+    // The row that holds the chat and the sources must not be a `min-h-0 flex-1`
+    // box below `lg`: with one, the columns get no height and the panel is clipped.
+    const panel = screen.getByRole("complementary", { name: "Sources" });
+    const column = panel.parentElement!;
+    const row = column.parentElement!;
+    for (const el of [row, column.parentElement!.previousElementSibling]) {
+      expect(el!.className.split(/\s+/)).not.toContain("overflow-hidden");
+    }
+    // The sources column caps itself rather than claiming a share of a squashed row.
+    expect(column.className).toContain("max-h-72");
+    expect(column.className.split(/\s+/)).toContain("shrink-0");
+  });
+});
+
+describe("a stopped turn that wrote nothing, after an answered one", () => {
+  it("badges the newest turn, not the previous answer's text", async () => {
+    // The reported defect: in a thread whose previous turn was answered, a new turn
+    // stopped before any text badge "Stopped before answering" live, but after a
+    // reload it showed the previous turn's "Stopped, partial answer". The text was
+    // read from the newest *assistant message*, and an empty stopped turn seeds no
+    // message — so the previous answer's words were used to decide the state.
+    const answered: AskTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-1",
+      answer: "Die Trunkenheitsfahrt ist strafbar [1].",
+      citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+      passages: PASSAGES,
+      retrieval_query: "Trunkenheitsfahrt",
+    };
+    const stoppedEmpty: AskTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-2",
+      seq: 2,
+      status: "cancelled",
+      answer: "",
+      citations: [],
+      interaction_id: "i2",
+      passages: PASSAGES,
+      retrieval_query: "RuBisCO",
+    };
+    stubApi(
+      { threads: [THREAD], detail: { thread: THREAD, turns: [answered, stoppedEmpty] } },
+      () => streamResponse(answerFrames()),
+    );
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => {
+      expect(screen.getByText("Stopped before answering")).toBeTruthy();
+    });
+    expect(screen.queryByText("Stopped, partial answer")).toBeNull();
+  });
+});
+
+describe("the reasoning note when the member stops", () => {
+  it("clears Thinking… the moment Stop is pressed", async () => {
+    // The reported cosmetic defect: "Thinking…" lingered about two seconds after
+    // Stop, because the note was only cleared when a terminal frame or the thread
+    // re-read arrived. Nothing is being written any more, so it goes at once.
+    stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [] } }, () =>
+      openStreamWithStatus(["Ein ", "halber"], "turn-11"),
+    );
+    vi.spyOn(askChatService, "cancelTurn").mockResolvedValue(undefined);
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
+      target: { value: "Lange Frage" },
+    });
+    fireEvent.submit(screen.getByRole("textbox", { name: "Ask" }).closest("form")!);
+    // The stream reports `reasoning` and then stalls with the text group still open.
+    await screen.findByTestId("ask-chat-thinking");
+    fireEvent.click(await screen.findByRole("button", { name: "Stop generating" }));
+    // Not `waitFor`: the note must be gone on the very next render. Waiting accepts
+    // the old behaviour, where the thread re-read cleared it about two seconds later.
+    expect(screen.queryByTestId("ask-chat-thinking")).toBeNull();
   });
 });

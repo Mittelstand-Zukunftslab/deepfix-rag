@@ -377,8 +377,14 @@ export function AskPage({
   const active = activeThreadId ? states.current.get(activeThreadId) : null;
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-4.25rem)] w-full max-w-[96rem] flex-1 px-2 py-3 sm:px-4 lg:h-[calc(100vh-4.25rem)] lg:overflow-hidden lg:px-6">
-      <div className="relative flex min-h-0 flex-1 gap-4 overflow-hidden">
+    // The authenticated shell (`AppShell`) is `h-screen overflow-hidden` with a
+    // `<main>` that scrolls, so this page must let its content *grow* when it
+    // cannot fit and let that `<main>` scroll it. Below `lg` nothing in this chain
+    // may be `flex-1`/`min-h-0`/`overflow-hidden`, or the stacked sources are
+    // clipped instead of scrolled to; at `lg` and up the columns fill the viewport
+    // and scroll internally, which is what makes it a chat rather than a document.
+    <div className="mx-auto flex w-full max-w-[96rem] flex-1 flex-col px-2 py-3 sm:px-4 lg:h-[calc(100vh-4.25rem)] lg:overflow-hidden lg:px-6">
+      <div className="relative flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row lg:overflow-hidden">
         <AskThreadSidebar
           threads={threads}
           activeThreadId={activeThreadId}
@@ -388,7 +394,7 @@ export function AskPage({
           onRename={renameThread}
           onDelete={deleteThread}
         />
-        <section className="flex min-w-0 flex-1 flex-col overflow-visible rounded-2xl border border-border/80 bg-background/50 shadow-sm backdrop-blur-sm lg:overflow-hidden">
+        <section className="flex min-w-0 flex-col rounded-2xl border border-border/80 bg-background/50 shadow-sm backdrop-blur-sm lg:min-h-0 lg:flex-1 lg:overflow-hidden">
           {active && activeThreadId ? (
             <>
               {opening ? (
@@ -485,9 +491,14 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
   const newestStatus: AskTurn["status"] | null = state.stopped
     ? "cancelled"
     : (state.status ?? state.newestStoredStatus);
-  const newestText = newestAnswer
-    ? newestAnswer.parts.map((part) => (part.type === "text" ? part.text : "")).join("")
-    : (state.newestStoredAnswer ?? "");
+  // The text must come from the **newest turn**, not from the newest message that
+  // happens to have one. A turn stopped before its first word stores no answer and
+  // seeds no assistant message, so reading the newest message found the *previous*
+  // turn's text — and the badge said "Stopped, partial answer" after a reload in a
+  // thread whose newest turn had written nothing. The store already says what the
+  // newest turn holds; the live message is only the answer while a turn is still
+  // writing, when the store's copy is behind it.
+  const newestText = state.status === "running" ? liveText(newestAnswer) : state.newestStoredAnswer;
 
   useEffect(() => {
     if (!state.session.resumeTurnId.current) return;
@@ -540,16 +551,19 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
           ) : null}
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-visible lg:flex-row lg:overflow-hidden">
+      <div className="flex flex-col lg:min-h-0 lg:flex-1 lg:flex-row lg:overflow-hidden">
         {/* `min-h` on the chat column is the fix for a very short viewport: without
             it the column shrank to about 48 px and the composer's hint and the
             sources heading drew over each other. A chat needs a floor to stay a
-            chat. Below `lg` the whole page scrolls past that floor — the shell's
-            `<main>` already allows it — so the sources sit below a real chat rather
-            than squeezing it, and nothing is clipped (better-layout: hold structure
-            until it breaks, then let the page scroll rather than squeeze). */}
-        <div className="flex min-h-[19rem] min-w-0 flex-1 flex-col lg:min-h-0">
-          <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+            chat. Below `lg` the page scrolls past that floor — the shell's `<main>`
+            allows it — so the sources sit below a real chat rather than squeezing
+            it, and nothing is clipped (better-layout: hold structure until it
+            breaks, then let the page scroll rather than squeeze). */}
+        <div className="flex min-h-[19rem] min-w-0 flex-col lg:min-h-0 lg:flex-1">
+          {/* Below `lg` this grows with its content and the page scrolls; only in
+              the side-by-side layout does it become the internal scroller, which is
+              what lets the composer stay pinned under it. */}
+          <div className="px-4 py-6 sm:px-6 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             <div
               aria-live="polite"
               data-testid="ask-chat-stream"
@@ -593,6 +607,9 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
                   // (D-10, FR-014). A tick re-renders this surface; the store's
                   // answer arrives with the next detail read.
                   state.stopped = true;
+                  // Nothing is being written any more, so a "Thinking…" note left
+                  // over from the step would describe work that has stopped.
+                  state.status_note = null;
                   setStoppedOnce((value) => value + 1);
                 }}
               />
@@ -613,9 +630,9 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
           // proportional cap (`max-h-[45%]`) of a short row left the chat column
           // ~48 px; letting the panel shrink collapsed it to 25 px; and capping the
           // wrapper gave the row and the list two nested scrollers on a 320px
-          // viewport. A fixed cap with no shrinking makes the row scroll when both
-          // cannot fit, which is what a very short viewport needs.
-          <div className="flex max-h-72 w-full shrink-0 flex-col overflow-hidden border-t border-border/60 p-3 lg:max-h-none lg:w-96 lg:border-s lg:border-t-0 xl:w-[26rem]">
+          // viewport. A fixed cap with no shrinking means the page scrolls past the
+          // chat to reach it, which is what a very short viewport needs.
+          <div className="max-h-72 w-full shrink-0 overflow-hidden border-t border-border/60 p-3 lg:max-h-none lg:w-96 lg:border-s lg:border-t-0 xl:w-[26rem]">
             <SourcesPanel
               state={sources}
               selectedRank={selectedRank}
@@ -686,6 +703,17 @@ export function passagesFromMessages(messages: UIMessage[]): AskPassage[] {
     }
   }
   return latest;
+}
+
+/**
+ * An assistant message's text, for the live turn the store has not caught up with.
+ *
+ * Only used while a turn is `running`: the stored answer is the authority once the
+ * turn has settled, and the message list can still hold an older answer's words.
+ */
+function liveText(message: UIMessage | undefined): string {
+  if (!message) return "";
+  return message.parts.map((part) => (part.type === "text" ? part.text : "")).join("");
 }
 
 /**
