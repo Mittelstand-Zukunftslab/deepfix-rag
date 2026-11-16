@@ -384,6 +384,52 @@ describe("citation controls in a rendered answer", () => {
   });
 });
 
+describe("the sources panel's layout", () => {
+  it("stacks under the conversation and can shrink, so neither side clips", async () => {
+    // Two layout defects, both from the same root: the wrapper capped the panel
+    // at `max-w-sm` while the panel asked for a wider fixed width and refused to
+    // shrink, so the panel overflowed its own box — cards clipped their score and
+    // the panel grew a horizontal scrollbar — and below the breakpoint it starved
+    // the chat column instead of stacking. Layout is not measurable in jsdom, so
+    // this asserts the classes that decide it, and the rendered result was checked
+    // in a browser at 630px and at 1440px.
+    vi.spyOn(askChatService, "listThreads").mockResolvedValue([THREAD] as never);
+    vi.spyOn(askChatService, "getThread").mockResolvedValue({
+      thread: THREAD,
+      turns: [storedTurn({ citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }] })],
+    } as never);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamResponse(framesFor("Eine Antwort [1].", "grounded", [], PASSAGES))),
+    );
+    renderPage(<AskPage indexReady />);
+    const panel = await screen.findByRole("complementary", { name: "Sources" });
+
+    // The column stacks (full width, bordered on top) and only becomes a
+    // side column with a width once there is room for one.
+    const column = panel.parentElement!;
+    expect(column.className).toContain("w-full");
+    expect(column.className).toContain("lg:w-96");
+    expect(column.className).toContain("border-t");
+    expect(column.className).toContain("lg:border-s");
+    // Nothing in the chain may refuse to shrink, or the chat column is squeezed
+    // to nothing at a narrow width.
+    expect(column.className.split(/\s+/)).not.toContain("shrink-0");
+    expect(column.className.split(/\s+/)).toContain("lg:shrink-0");
+    // The panel itself takes the column's width instead of demanding its own.
+    expect(panel.className).toContain("min-w-0");
+    expect(panel.className).not.toMatch(/(^|\s)lg:w-96/);
+    // No horizontal scrolling anywhere in the panel.
+    expect(column.className).toContain("overflow-x-hidden");
+
+    // The card's name group can shrink, so a long filename ellipsises rather
+    // than pushing the score out of the card.
+    const name = screen.getByText("stgb_315c.txt");
+    expect(name.className).toContain("truncate");
+    expect(name.parentElement!.className).toContain("min-w-0");
+  });
+});
+
 describe("the badge rule", () => {
   it("is grounded only when there is a valid citation", () => {
     expect(badgeState("grounded", [])).toBe("partly_grounded");

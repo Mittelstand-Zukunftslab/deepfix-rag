@@ -1,4 +1,5 @@
 import {
+  cancelAskChatTurn,
   createAskChatThread,
   deleteAskChatThread,
   getAskChatThread,
@@ -6,7 +7,6 @@ import {
   listAskChatThreads,
   renameAskChatThread,
 } from "@/client";
-
 import type { AskThread, AskThreadDetail } from "@/schemas/ask-chat";
 import { resumeTurn, streamTurn, type StreamHandlers } from "@/services/ask-chat-sse";
 
@@ -130,6 +130,23 @@ export const askChatService = {
       turnsCreated: result.data.turns_created,
       turnsSkipped: result.data.turns_skipped,
     };
+  },
+
+  /**
+   * Stop a turn that is still being written (FR-014).
+   *
+   * Not the same as dropping the stream: a reload drops the stream and the turn
+   * keeps going, because the member only left the page. Stopping is this call,
+   * and the server answers 204 whether or not it was still running — a turn that
+   * just finished is not a failure the member can act on.
+   */
+  async cancelTurn(turnId: string): Promise<void> {
+    const result = await cancelAskChatTurn({ path: { turn_id: turnId } });
+    if (result.error) {
+      const status = (result.response as Response | undefined)?.status;
+      if (status === 204 || status === 404) return;
+      throw new AskChatError(errorDetail(result.error, "Unable to stop that answer."));
+    }
   },
 
   streamTurn,

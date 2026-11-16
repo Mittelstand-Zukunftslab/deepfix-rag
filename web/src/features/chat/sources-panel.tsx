@@ -44,8 +44,8 @@ export function SourcesPanel({
 }) {
   if (state.passages.length === 0) return null;
   return (
-    <aside className="w-full shrink-0 lg:w-96 xl:w-[26rem]" aria-label="Sources">
-      <section className="flex h-full flex-col gap-3 rounded-2xl border border-border/80 bg-muted/20 p-4 shadow-sm">
+    <aside className="w-full min-w-0" aria-label="Sources">
+      <section className="flex h-full min-w-0 flex-col gap-3 rounded-2xl border border-border/80 bg-muted/20 p-4 shadow-sm">
         <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
           <div className="flex items-center gap-2">
             <BookOpen className="size-4 text-primary" aria-hidden />
@@ -141,12 +141,15 @@ function PassageCard({
       }`}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 overflow-hidden">
+        {/* `min-w-0` on the name group is what lets `truncate` actually work: a
+            flex child defaults to its content width, so without it a long
+            filename pushes the score out of the card instead of ellipsising. */}
+        <div className="flex min-w-0 items-center gap-1.5">
           <span className="flex size-5 shrink-0 items-center justify-center rounded bg-primary/10 font-mono text-label-sm font-semibold text-primary">
             {passage.rank}
           </span>
           <span
-            className="truncate text-label-sm font-medium text-foreground"
+            className="min-w-0 truncate text-label-sm font-medium text-foreground"
             title={passage.filename}
           >
             {passage.filename}
@@ -161,7 +164,7 @@ function PassageCard({
           {passage.score.toFixed(3)}
         </span>
       </div>
-      <p className="line-clamp-6 text-label-sm leading-relaxed text-foreground/85">
+      <p className="line-clamp-6 break-words text-label-sm leading-relaxed text-foreground/85">
         {passage.text}
       </p>
       {passage.truncated ? (

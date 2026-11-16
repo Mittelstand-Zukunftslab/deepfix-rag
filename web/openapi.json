@@ -4361,6 +4361,52 @@
         ]
       }
     },
+    "/ask/chat/turns/{turn_id}/cancel": {
+      "post": {
+        "description": "Stop the model call for one of the caller's turns.\n\nStop used to be a closed socket, which is indistinguishable from a reload —\nand a reload must *not* stop the answer, or the member loses the reply they\nwere reading (FR-016). So stopping is an explicit request, and this is it:\nthe running task is cancelled, which unwinds the relay, settles the row\n``cancelled`` with the text read so far, and keeps the passages it found\n(FR-014, D-4).\n\nA turn that is not running here answers 204: it may have finished already,\nor it may be running in another worker, and neither is the caller's mistake.\nAnother member's id is 404, never 403.",
+        "operationId": "cancel_ask_chat_turn",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The turn was stopped, or had already ended."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Stop a turn that is still being written",
+        "tags": [
+          "ask-chat"
+        ]
+      }
+    },
     "/ask/chat/turns/{turn_id}/stream": {
       "get": {
         "description": "Replay the stored answer, then tail the turn when it runs in this process.\n\nThis is what a reload mid-answer calls, and the reason the reply survives it:\nthe text is read from the turn's interaction and the status from the turn row,\nso a resume on another worker degrades to a replay instead of a blank stream\n(FR-016).",

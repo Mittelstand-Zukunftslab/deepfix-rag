@@ -2580,6 +2580,40 @@ export type RenameAskChatThreadResponses = {
 
 export type RenameAskChatThreadResponse = RenameAskChatThreadResponses[keyof RenameAskChatThreadResponses];
 
+export type CancelAskChatTurnData = {
+    body?: never;
+    path: {
+        /**
+         * Turn Id
+         */
+        turn_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/turns/{turn_id}/cancel';
+};
+
+export type CancelAskChatTurnErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type CancelAskChatTurnError = CancelAskChatTurnErrors[keyof CancelAskChatTurnErrors];
+
+export type CancelAskChatTurnResponses = {
+    /**
+     * The turn was stopped, or had already ended.
+     */
+    204: void;
+};
+
+export type CancelAskChatTurnResponse = CancelAskChatTurnResponses[keyof CancelAskChatTurnResponses];
+
 export type ResumeAskChatTurnData = {
     body?: never;
     path: {

@@ -235,6 +235,10 @@ describe("the Ask page", () => {
     stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [] } }, () =>
       openStream(["Ein ", "halber ", "Satz."], "turn-10"),
     );
+    const cancelled: string[] = [];
+    vi.spyOn(askChatService, "cancelTurn").mockImplementation(async (turnId) => {
+      cancelled.push(turnId);
+    });
     // The first read is the empty thread the page opens; after the stop the store
     // holds the cancelled turn with its partial text and passages, and that is what
     // the page re-reads.
@@ -256,6 +260,11 @@ describe("the Ask page", () => {
     await screen.findByText(/Ein/);
     const stop = await screen.findByRole("button", { name: "Stop generating" });
     fireEvent.click(stop);
+    // Stop tells the server, explicitly. A closed socket is what a reload does,
+    // and the server must not treat the two alike, so the intent is a request.
+    await waitFor(() => {
+      expect(cancelled).toContain("turn-10");
+    });
     // The composer is usable again and the page does not error.
     await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Stop generating" })).toBeNull();
@@ -474,6 +483,120 @@ describe("what a reloaded or stopped answer shows", () => {
     });
     // And no marker is left as a raw private-use glyph.
     expect(document.body.textContent).not.toMatch(/[\uE000\uE001]/);
+  });
+
+  it("resumes a running turn on reload and shows the rest of its answer", async () => {
+    // The reported bug: ask a question, reload while it streams. The turn keeps
+    // running on the server now (FR-016), so a reload seeds the question, calls
+    // the resume route for the running turn, and renders the answer the replay
+    // and tail carry — once, not twice.
+    const running: AskTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-7",
+      status: "running" as const,
+      answer: null,
+      grounding: null,
+      citations: [],
+      passages: PASSAGES,
+      retrieval_query: "RuBisCO",
+    };
+    vi.spyOn(askChatService, "listThreads").mockResolvedValue([THREAD] as never);
+    vi.spyOn(askChatService, "getThread").mockResolvedValue({
+      thread: THREAD,
+      turns: [running],
+    } as never);
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        urls.push(String(input));
+        // The resume replays the frames the turn has published and its terminal
+        // frame, which is what a reader that reattached mid-answer receives.
+        return streamResponse([
+          frame({ type: "start", messageId: "turn-7" }),
+          frame({ type: "start-step" }),
+          frame({ type: "text-start", id: "s" }),
+          frame({ type: "text-delta", id: "s", delta: "RuBisCO fixes carbon " }),
+          frame({ type: "text-delta", id: "s", delta: "and is slow [1]." }),
+          frame({ type: "text-end", id: "s" }),
+          frame({ type: "finish-step" }),
+          frame({
+            type: "data-deepfix-grounding",
+            data: {
+              grounding: "grounded",
+              citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+              max_score: 0.85,
+              cutoff: 0.3,
+            },
+          }),
+          frame({ type: "data-deepfix-turn", data: { turn_id: "turn-7", status: "completed" } }),
+          frame({ type: "finish", finishReason: "stop" }),
+          "data: [DONE]\n\n",
+        ]);
+      }),
+    );
+    renderPage(<AskPage indexReady />);
+
+    // The answer arrives, once, from the resume the reload issued.
+    await waitFor(() => {
+      expect(screen.getByText(/RuBisCO fixes carbon and is slow/)).toBeTruthy();
+    });
+    expect(urls.filter((url) => url.includes("/turns/turn-7/stream"))).toHaveLength(1);
+    expect(screen.getAllByText(/RuBisCO fixes carbon/)).toHaveLength(1);
+    // The turn searched, so it is Grounded — not a reuse of some earlier answer.
+    expect(screen.getByText("Grounded")).toBeTruthy();
+    expect(screen.queryByText("Reused earlier evidence")).toBeNull();
+    // Its evidence is on screen and its marker is a control, not a glyph.
+    expect(screen.getByRole("heading", { name: "Sources" })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/[\uE000\uE001]/);
+  });
+
+  it("does not give a running turn the previous answer's badge", async () => {
+    // The reported thread: an answered question, then a new one still streaming,
+    // then a reload. The new turn has no verdict yet, so there is no badge to
+    // show — borrowing the previous answer's is how the page claimed a verdict
+    // about an answer that did not exist, and picked the wrong one ("Reused
+    // earlier evidence" over "Grounded") for the turn that was actually running.
+    const answered: AskTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-1",
+      grounding: "grounded",
+      citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+      passages: PASSAGES,
+      retrieval_query: "Trunkenheitsfahrt",
+      answer: "Die Trunkenheitsfahrt ist strafbar [1].",
+    };
+    const running: AskTurn = {
+      ...STORED_TURN,
+      turn_id: "turn-2",
+      seq: 2,
+      status: "running" as const,
+      answer: null,
+      grounding: null,
+      citations: [],
+      passages: PASSAGES,
+      retrieval_query: "RuBisCO",
+      interaction_id: null,
+    };
+    vi.spyOn(askChatService, "listThreads").mockResolvedValue([THREAD] as never);
+    vi.spyOn(askChatService, "getThread").mockResolvedValue({
+      thread: THREAD,
+      turns: [answered, running],
+    } as never);
+    vi.stubGlobal(
+      "fetch",
+      // The resume hangs: this case is about what the reload draws before any
+      // further frame arrives, which is exactly the window the bug appeared in.
+      vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start() {} }))),
+    );
+    renderPage(<AskPage indexReady />);
+    await screen.findByText(/Die Trunkenheitsfahrt ist strafbar/);
+    // The badge describes the newest turn, and that turn has no verdict yet — so
+    // there is no badge. Inheriting the previous answer's verdict is what made
+    // this thread read "Reused earlier evidence" over a turn that had searched.
+    expect(screen.queryByText("Reused earlier evidence")).toBeNull();
+    expect(screen.queryByText("Partly grounded")).toBeNull();
+    expect(screen.queryByText("Grounded")).toBeNull();
   });
 
   it("names a thread from its first question once the turn is stored", async () => {

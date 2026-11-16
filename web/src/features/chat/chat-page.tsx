@@ -91,6 +91,12 @@ type ThreadState = {
    * question earlier still has passages on screen when a later "thanks" arrives.
    */
   storedSearched: Record<string, boolean>;
+  /**
+   * Whether the newest stored turn ran a search. Used when that turn has no
+   * assistant message yet — a reload mid-answer seeds the question and nothing
+   * else — so the badge describes the turn rather than the absence of a message.
+   */
+  newestStoredSearched: boolean | null;
 };
 
 const COMPOSER_BUTTON =
@@ -436,13 +442,18 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
   // it as its `retrieval_query`; a live one is still in the message list, so its
   // own tool parts answer the same question. The thread's passages cannot: they
   // survive from an earlier answer, and a "thanks" after one still shows them.
+  //
+  // A turn with no answer yet has no assistant message, which is the reload-mid-
+  // answer case: the question is seeded and the text is still empty. Falling back
+  // to the newest *stored* turn keeps the badge honest there, instead of reading
+  // "no search" from a missing message and calling a searched turn a reuse.
   const newestAnswer = [...helpers.messages]
     .reverse()
     .find((message) => message.role === "assistant");
   const newestSearched = newestAnswer
     ? (state.storedSearched[newestAnswer.id] ??
       newestAnswer.parts.some((part) => part.type === "tool-search_documents"))
-    : false;
+    : (state.newestStoredSearched ?? false);
 
   useEffect(() => {
     if (!state.session.resumeTurnId.current) return;
@@ -508,12 +519,28 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
                 onRegenerate={() => void helpers.regenerate()}
                 canRegenerate={state.status === "completed" || state.status === "failed"}
                 isRefusal={state.verdict?.grounding === "no_relevant_sources"}
+                runningTurnId={() => {
+                  // A turn's assistant message takes its turn id, so the running
+                  // turn is the newest assistant message's id — the same value a
+                  // resume uses (FR-016).
+                  const assistant = [...helpers.messages]
+                    .reverse()
+                    .find((message) => message.role === "assistant");
+                  return assistant?.id ?? state.session.resumeTurnId.current;
+                }}
               />
             </div>
           </div>
         </div>
         {showSources && sources.passages.length > 0 ? (
-          <div className="w-full shrink-0 overflow-y-auto border-s border-border/60 p-3 md:w-auto lg:max-w-sm">
+          // Stacked under the conversation until there is genuinely room beside
+          // it, then a bounded column. `lg:max-w-sm` on the wrapper while the
+          // panel asked for `26rem` is what made the panel overflow its own box:
+          // the cards clipped their score and the panel grew a horizontal
+          // scrollbar. One width, `min-w-0`, and no `shrink-0` on the child keep
+          // the two in agreement, and stacking is what leaves the composer usable
+          // at a narrow width (better-layout: hold structure until it breaks).
+          <div className="max-h-[45%] w-full overflow-y-auto overflow-x-hidden border-t border-border/60 p-3 lg:max-h-none lg:w-96 lg:shrink-0 lg:border-s lg:border-t-0 xl:w-[26rem]">
             <SourcesPanel
               state={sources}
               selectedRank={selectedRank}
@@ -605,11 +632,14 @@ function AskComposer({
   canRegenerate,
   isRefusal,
   onRegenerate,
+  runningTurnId,
 }: {
   threadId: string;
   canRegenerate: boolean;
   isRefusal: boolean;
   onRegenerate: () => void;
+  /** The turn being written, if one is, so Stop can name it (FR-014). */
+  runningTurnId: () => string | null;
 }) {
   return (
     <div className="flex flex-col">
@@ -629,8 +659,20 @@ function AskComposer({
             </ComposerPrimitive.Send>
           </AuiIf>
           <AuiIf condition={(state) => state.thread.isRunning}>
+            {/* Stop is two things now: end the local stream, and tell the server
+                to stop the turn. The server cannot infer it from the socket —
+                that is also what a reload does, and a reload must let the answer
+                finish (FR-016) — so the intent has to be said out loud. */}
             <ComposerPrimitive.Cancel asChild>
-              <button type="button" aria-label="Stop generating" className={COMPOSER_BUTTON}>
+              <button
+                type="button"
+                aria-label="Stop generating"
+                className={COMPOSER_BUTTON}
+                onClick={() => {
+                  const turnId = runningTurnId();
+                  if (turnId) void askChatService.cancelTurn(turnId).catch(() => undefined);
+                }}
+              >
                 <Square className="size-3.5 fill-current" aria-hidden />
               </button>
             </ComposerPrimitive.Cancel>
@@ -744,6 +786,7 @@ function threadState(
               detail.turns.map((turn) => [turn.turn_id, turn.citations]),
             );
             entry.storedSearched = searchedByTurn(detail.turns);
+            entry.newestStoredSearched = newestSearchedOf(detail.turns);
             // The store's passages for the turn that just ended, so a stopped
             // stream's sources panel survives the abort: the tool parts are gone
             // with the unfinished message, and these are the same hits (FR-007).
@@ -792,6 +835,7 @@ function threadState(
     storedPassages: [...turns].reverse().find((turn) => turn.passages?.length)?.passages ?? [],
     storedCitations: Object.fromEntries(turns.map((turn) => [turn.turn_id, turn.citations])),
     storedSearched: searchedByTurn(turns),
+    newestStoredSearched: newestSearchedOf(turns),
   };
 }
 
@@ -813,11 +857,23 @@ function searchedByTurn(turns: AskTurn[]): Record<string, boolean> {
   );
 }
 
-/** The verdict the store already holds for the newest answered turn, if any. */
+/** Whether the newest stored turn searched, for a turn with no answer yet. */
+function newestSearchedOf(turns: AskTurn[]): boolean | null {
+  const newest = turns[turns.length - 1];
+  if (!newest) return null;
+  return Boolean(newest.retrieval_query) || (newest.passages?.length ?? 0) > 0;
+}
+
+/**
+ * The verdict the store holds for the newest turn, if that turn has one.
+ *
+ * It must be the **newest** turn's verdict and nothing else. Scanning back to
+ * the last turn that had a verdict made a running turn — which has none yet —
+ * inherit the previous answer's badge, so a reload mid-answer showed a verdict
+ * about an answer that was not on screen, and the wrong one.
+ */
 function verdictFromTurns(turns: AskTurn[]): AskVerdict | null {
-  const answered = [...turns]
-    .reverse()
-    .find((turn) => askTurnStatus.safeParse(turn.status).success && turn.grounding);
-  if (!answered?.grounding) return null;
-  return { grounding: answered.grounding, citations: answered.citations, maxScore: 0, cutoff: 0 };
+  const newest = turns[turns.length - 1];
+  if (!newest?.grounding) return null;
+  return { grounding: newest.grounding, citations: newest.citations, maxScore: 0, cutoff: 0 };
 }
