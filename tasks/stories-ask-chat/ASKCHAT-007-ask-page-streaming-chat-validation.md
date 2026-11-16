@@ -83,3 +83,19 @@ controls, or a row's title.
    still writing — and the stored answer is deliberately different text from the
    streamed one, so the assertion can only pass if the text came back from the
    store. With the fix reverted, that test fails.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after a browser check at about 630px and a reload mid-answer
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | Nothing said how the sources panel behaves below its side column | AC 7c requires it to stack under the conversation, full width, with the composer still reachable | Below `lg` the panel was a `shrink-0` sibling inside a fixed-height column, so it squeezed the chat column toward nothing and sat over the composer |
+| 2 | AC 7b said the list takes the derived title but nothing about a running turn | AC 7d requires the badge to describe the newest turn, and to be absent when that turn has no verdict | The page took the last verdict any turn had, so a running turn inherited the previous answer's badge — "Reused earlier evidence" over a turn that had searched |
+| 3 | Nothing said the panel must not scroll sideways | AC 7c requires one width from wrapper to panel, a shrinking filename, and the score always in view | The wrapper capped the panel at `max-w-sm` while the panel asked for `26rem` and refused to shrink, so the cards clipped their score and the panel grew a horizontal scrollbar |
+
+### Blockers
+
+Two, both visible in an ordinary visit: the panel covered the composer at a narrow
+width, and a reload mid-answer showed a badge for an answer that was not on screen.

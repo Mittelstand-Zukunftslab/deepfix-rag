@@ -301,13 +301,20 @@ and it must not borrow either of the other states' labels.
 
 ### D-4: Stop cancels the model stream, keeps the text, and keeps the evidence
 
-The browser's `Chat` abort closes the fetch. Starlette then **closes the relay
-generator**, which unwinds the loop as a `GeneratorExit` — not as an `Exception`,
-so `except Exception` never sees it. That single fact shaped the implementation:
-the relay's terminal state is written in a `finally`, and the cancelled path is
-caught explicitly. The first attempt used `except Exception` alone and left the
-row `running`; a real-socket test is what caught it, and a `TestClient` never
+Stop is an **explicit request**, not a closed socket: `POST /ask/chat/turns/{turn_id}/cancel`
+cancels the task that drives the turn. The first implementation read Stop from the
+browser closing the fetch, and Starlette closing the relay generator unwinds it as a
+`GeneratorExit` — not an `Exception`, so `except Exception` never sees it. That shaped
+the implementation: the terminal state is written in a `finally`, and the cancelled
+path is caught explicitly. The first attempt used `except Exception` alone and left
+the row `running`; a real-socket test is what caught it, and a `TestClient` never
 could, because it cannot abort mid-stream.
+
+Sharing that trigger with "the member navigated away" was the mistake the deployed
+check found: a reload closes the same socket, so a reload cancelled the turn and the
+member returned to a question with no answer. The turn therefore runs in a task the
+API process owns, a closed socket only ends the reader, and Stop says what it means
+(FR-014, FR-016).
 
 Then:
 
@@ -895,9 +902,9 @@ may slip one release), or **Could** (nice, unplanned).
 | FR-011 | The upstream conversation must be built from the store, never from the client's array: the system prompt, then the last `ASK_CHAT_MAX_HISTORY_MESSAGES` stored messages, then the new user message. A request whose last message is not a user message must be 400. | Must | G2, G7. The client cannot rewrite the policy or claim a history that never happened. |
 | FR-012 | A follow-up must be retrievable: the tool's own `query` argument is what is searched, and it must be stored as `ask_chat_turns.retrieval_query` while `interactions.query` keeps the member's literal message. No separate query-rewriting model call is added in this release. | Must | G2, G5, D-6. The model already has the history; a second rewrite call would add a model hop and a second thing to evaluate. |
 | FR-013 | Each passage delivered to the model must be wrapped in explicit delimiters and labelled as untrusted corpus text whose instructions must not be followed, and the system prompt must say so. | Must | G7. Members upload the corpus, so a document can contain an instruction. |
-| FR-014 | A browser abort must cancel the retrieval and the model stream (closing the async generator, not merely abandoning the wait), store the partial assistant text, keep the tool results already obtained, mark the turn `cancelled` with `ended_at`, and still emit a terminal `data-deepfix-turn`. A turn that had already searched before it stopped also records the standalone query its last search ran and the verdict its evidence supports, so what it found is not lost when the member comes back to it. | Must | G1, D-4. Stop must stop the work and the spend, and a stopped answer must be readable. |
+| FR-014 | A browser abort must cancel the retrieval and the model stream (closing the async generator, not merely abandoning the wait), store the partial assistant text, keep the tool results already obtained, mark the turn `cancelled` with `ended_at`, and still emit a terminal `data-deepfix-turn`. A turn that had already searched before it stopped also records the standalone query its last search ran and the verdict its evidence supports, so what it found is not lost when the member comes back to it. **Stopping is an explicit request** — `POST /ask/chat/turns/{turn_id}/cancel`, 204 — not a closed socket, because a closed socket is also what a reload does and a reload must let the answer finish (FR-016). The route cancels the process-owned task, which unwinds the same path. | Must | G1, D-4. Stop must stop the work and the spend, and a stopped answer must be readable. Sharing a trigger with "the member navigated away" made a reload lose the reply. |
 | FR-015 | A regenerate must replace the newest answered or cancelled turn in place, keeping its `turn_id`; the previous answer's text must not remain beside the new one; and votes on the replaced answer and its passages must be cleared by writing the existing `clear` action through `record_vote`, which deletes the mirrored MLflow assessment. No new vote action and no `CHECK` change. | Must | G3, D-4. The admin chat settled in-place replacement (CHAT-014); an orphaned assessment is worse than no assessment, and `feedback_events.action` already permits `clear`. |
-| FR-016 | `GET /ask/chat/turns/{turn_id}/stream` must replay the stored text and close with the stored status when the turn is not live in this process, and must replay then tail when it is. A resumed turn reports the deployment's configured `rerank.min_relevance_score` as its `cutoff`, never a placeholder zero, and reports the verdict the turn reached — a turn that never searched reports `not_searched`, never `no_relevant_sources`, because that copy would claim a search happened (D-4b). Another member's turn id must be 404. | Must | G4, D-4. A reload mid-answer must not lose it; `chat_turns.py` already implements this shape. |
+| FR-016 | `GET /ask/chat/turns/{turn_id}/stream` must replay the stored text and close with the stored status when the turn is not live in this process, and must replay then tail when it is. **The turn must outlive the request that asked for it**: it runs in a task the API process owns, so a closed socket — a reload, a navigation — ends the reader and not the answer, and the row settles `completed` with the whole text. While the turn is live, the resume replays the frames it has published and then follows it to the terminal frame, so a reader that reattached mid-answer sees the whole reply exactly once. A resumed turn reports the deployment's configured `rerank.min_relevance_score` as its `cutoff`, never a placeholder zero, and reports the verdict the turn reached — a turn that never searched reports `not_searched`, never `no_relevant_sources`, because that copy would claim a search happened (D-4b). Another member's turn id must be 404. | Must | G4, D-4. A reload mid-answer must not lose it; `chat_turns.py` already implements this shape, and reusing the request's lifetime for the turn is what lost the answer. |
 | FR-017 | A turn interrupted by an API restart must be settled `failed` at startup with a readable reason, and no `ask_chat_turns` row may stay `running`. | Must | G4. Mirrors `fail_interrupted_chat_turns`; a stuck row is a lie about state. |
 | FR-018 | Errors must be distinct: a pre-stream failure is a JSON status with a sentence; a mid-stream failure is an `error` part followed by a terminal `data-deepfix-turn` with `status: "failed"`; the UI must offer regenerate for a failed turn and must not offer it for a `no_relevant_sources` answer. A failed turn's `interactions` row has no answer, so it must be excluded from the feedback export (`build_questions` and the downvote rows) and its trace must be marked `ERROR` rather than left as a healthy trace. | Must | G1. A blank stream and a refused question must not look the same. |
 | FR-019 | Each assistant turn must write exactly one `interactions` row with `kind='ask'`, `thread_id`, `turn_id`, the answer, the grounding status, and its hits; `interaction_hits` must hold the tool's passages. The `kind` CHECK constraint must not be changed. | Must | G5, D-5. This is what keeps votes, history, the assessment mirror, and `export_feedback` working with no new path. |
@@ -1298,15 +1305,13 @@ again, without losing what was already written.
 
 **Acceptance criteria:**
 
-- On disconnect, the generator cancels the in-flight retrieval and closes the
-  LiteLLM async generator; the partial text and any tool results already
-  received are stored, the turn is `cancelled` with `ended_at`, and a terminal
-  `data-deepfix-turn` with `status: "cancelled"` is emitted before the stream
-  closes.
+- On **Stop** — an explicit `POST /ask/chat/turns/{turn_id}/cancel` — the turn's task cancels the in-flight retrieval and closes the LiteLLM async generator; the partial text and any tool results already received are stored, the turn is `cancelled` with `ended_at`, and a terminal `data-deepfix-turn` with `status: "cancelled"` is emitted before the stream closes. A closed connection on its own does **not** do this: it is also what a reload does, and a reload must let the answer finish.
 - `GET /ask/chat/turns/{turn_id}/stream` replays the stored text as
   `text-start` / one `text-delta` / `text-end` and closes with the stored status
-  and grounding when the turn is not live here, and replays then tails when it
-  is; another member's turn is 404.
+  and grounding when the turn is not live here, and replays the frames the live
+  turn has already published and then tails it when it is — so a reader that
+  reattached mid-answer sees the reply exactly once, missing none of it; another
+  member's turn is 404.
 - A regenerate (`regenerate: true`) replaces the newest answered or cancelled
   turn in place, reuses its `turn_id`, leaves no second answer in the thread, and
   clears votes on the replaced answer and its passages through the existing
@@ -1315,11 +1320,13 @@ again, without losing what was already written.
   `status: "failed"`; the interaction row records the error sentence and the
   member can regenerate.
 - **Integration test** against the fake endpoint and the real app: a client that
-  closes the socket mid-stream leaves a `cancelled` row with the partial text and
-  the tool's hits, and the fake server records that its response stream was
-  **closed** (not merely that the client stopped reading); a resume of that turn
-  returns the stored text once and then the terminal frame; a regenerate leaves
-  one assistant message and a `clear` event per prior vote; a failure frame
+  closes the socket mid-stream **leaves the turn running** — it settles `completed`
+  with the whole answer, because a closed socket is a reload and a reload must not
+  lose the reply — and a resume of that turn returns the stored text once and then
+  the terminal frame; an explicit cancel instead leaves a `cancelled` row with the
+  partial text and the tool's hits, and the fake server records that its response
+  stream was **closed** (not merely that the client stopped reading); a regenerate
+  leaves one assistant message and a `clear` event per prior vote; a failure frame
   yields `failed` and a regenerate that succeeds.
 
 ### ASKCHAT-005: Limits, the turn budget, and the plumbing
@@ -1879,6 +1886,10 @@ in `tasks/stories-ask-chat/` were corrected in the same pass.
 | 24 | The import payload's timestamps were typed as strings | A numeric epoch is accepted and normalised, because the retired page wrote `Date.now()` numbers and every real payload was rejected | FR-033 |
 | 25 | The client kept an empty title until a rename | It takes the title the server derives from the first question, both on open and after a turn | FR-010 |
 | 26 | The runbook told an operator to open `/admin/interactions` | The page is `/history`; `/admin/interactions` is its API and a 404 in a browser | ASKCHAT-011 |
+| 27 | The turn ran inside the request, so a closed socket cancelled it | The turn runs in a task the API process owns; a closed socket only ends the reader, and Stop is `POST /ask/chat/turns/{id}/cancel` | FR-014, FR-016, D-4 |
+| 28 | A resume could show a live turn's opening twice or lose the deltas in between | While the turn is live the resume replays the frames it published and then tails, so the reply arrives exactly once | FR-016 |
+| 29 | The badge took the last verdict any turn had, so a running turn inherited the previous answer's | The badge describes the newest turn; a turn with no verdict yet shows none | FR-009, D-10 |
+| 30 | The sources panel asked for a fixed width inside a narrower wrapper, and refused to shrink | The panel takes the column's width and stacks under the conversation below `lg`; cards ellipsise the filename and keep the score in view | FR-007 |
 
 ## Handoff
 

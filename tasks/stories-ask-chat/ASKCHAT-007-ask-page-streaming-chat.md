@@ -35,6 +35,8 @@ The page reads like a conversation. Answers arrive as they are written, the send
 7. Given a stopped turn, when the page re-renders, then the partial answer stays visible and the composer is usable again. The page re-reads the thread after a turn ends — a stop included — and rebuilds the answer from the store, because an aborted stream leaves the answer's text part unfinished and the runtime declines to draw it. The sources the turn had already found stay on screen with it.
 7a. Given a stored answer loaded from the thread, when it renders, then its citation markers are controls, exactly as a live answer's are. Each assistant message uses the citations **its own turn** recorded, not the newest verdict's: handing every message the newest citations left an older answer's markers as raw characters.
 7b. Given a new thread, when its first turn has been stored, then the list shows the title the server derived from that question. Before this, the row stayed unnamed until a member renamed it by hand.
+7c. Given a thread with passages, when the window is narrow, then the sources panel stacks **below** the conversation at full width and the question bubble and composer stay visible and usable; when the window is wide, then it is a side column and neither it nor any card scrolls horizontally, a long filename ellipsises, and each card's score stays fully in view.
+7d. Given a running turn, when the header renders, then the badge describes **that** turn: a searched turn reads Grounded, and a turn with no verdict yet shows no badge rather than the previous answer's.
 
 **The thread list**
 

@@ -89,13 +89,17 @@ sqlite3 /data/product/product.db \
 | Observation | Expected | Result |
 | :--- | :--- | :--- |
 | Connection closed when Stop was pressed | yes, and the composer became usable again | NOT RUN |
+| `POST /ask/chat/turns/{turn_id}/cancel` was sent | yes, 204 — Stop is an explicit request, not just a closed socket | NOT RUN |
 | Database row | `cancelled`, `ended=1` | NOT RUN |
 | Partial text still on screen | yes | NOT RUN |
 | Sources panel still shows the passages it had retrieved | yes | NOT RUN |
-| Any traceback in `docker compose logs backend-api` | none — a disconnect is a normal end | NOT RUN |
+| Any traceback in `docker compose logs backend-api` | none — a cancel is a normal end | NOT RUN |
 
 A cancelled turn that loses its text is worse than a failed one, because the member cannot tell what they had; if the
 partial text is gone, that is a defect, not a finding.
+
+**Stop is not the same as leaving the page.** A closed socket used to cancel the turn, which meant a reload mid-answer
+lost the reply; section 4 covers that, and it no longer stops the work.
 
 ## 3. A follow-up, and what the export asks (AC 5)
 
@@ -119,14 +123,15 @@ This is FR-021 and it is the difference between a usable dev question and one th
 retrieval miss.
 
 ## 4. Reload mid-answer (AC 6)
-
 Ask a question, and reload the page while the answer is still streaming.
 
 | Observation | Expected | Result |
 | :--- | :--- | :--- |
-| The answer on reload | resumes, or shows its stored text once | NOT RUN |
+| The answer on reload | continues — the page resumes the running turn and renders the rest of it | NOT RUN |
 | A duplicated paragraph or sentence | none | NOT RUN |
-| The turn's status after the reload finishes | `completed` (or `cancelled` if the reload closed the first connection) | NOT RUN |
+| The turn's status after the reload finishes | `completed`, with the whole answer — the reload does **not** cancel it | NOT RUN |
+| The badge | the verdict that turn reached: a turn that searched reads **Grounded**, not "Reused earlier evidence" | NOT RUN |
+| No badge inherited from the previous answer | yes — a turn with no verdict yet shows no badge rather than the older turn's | NOT RUN |
 
 Record whether the deployment runs more than one uvicorn worker:
 
@@ -172,6 +177,29 @@ sqlite3 /data/product/product.db \
 
 If a state cannot be produced, record which and why rather than leaving the row blank: a state that never renders on a
 real deployment is a product finding.
+
+## 6a. The layout at a narrow width, and the sources panel's own box
+
+The Ask page was reported broken at about 630px effective width — at 200% zoom — and the sources panel scrolled
+sideways at a normal desktop width. Neither is visible in a jsdom test, so check it in a browser.
+
+Set the window to about 630px wide (or 200% zoom on a 1260px window) with a thread that has passages, and check:
+
+| Observation | Expected | Result |
+| :--- | :--- | :--- |
+| The sources panel | stacks **below** the conversation, full width, with a top border | NOT RUN |
+| The question bubble and the composer | fully visible, not covered by the panel | NOT RUN |
+| Scrolling the conversation | the composer stays reachable at the bottom | NOT RUN |
+| Panel header | `N passages` is not clipped | NOT RUN |
+
+Then widen to a normal desktop width:
+
+| Observation | Expected | Result |
+| :--- | :--- | :--- |
+| A horizontal scrollbar in the sources panel | none | NOT RUN |
+| Each card's score (`0.xxx`) | fully visible at the trailing edge | NOT RUN |
+| A long filename | ellipsised, with the full name in its `title` | NOT RUN |
+| The conversation column | keeps a usable width beside the panel | NOT RUN |
 
 ## 7. Resources under four concurrent turns (AC 9)
 
@@ -237,6 +265,11 @@ dashboard or the provider's usage log for the same window.
 
 This is the residual cost R-1 and R-2 describe. If the stopped turn bills the full completion, the generator close in
 `ask_chat_turn._stream_completion` is not reaching the provider, which is a defect worth its own story.
+
+**A reload now costs what the answer costs.** The turn outlives the request, so closing the tab no longer stops the
+spend — that is the trade that keeps the reply (FR-016). The turn's own `ASK_CHAT_TURN_TIMEOUT_SECONDS` bounds it.
+Record one case while you are here: ask a question, close the tab immediately, and confirm in the usage log that the
+turn ran to its natural end rather than to the timeout, so the bound is real but rarely reached.
 
 ## 10. The shipped surfaces still work (AC 12)
 

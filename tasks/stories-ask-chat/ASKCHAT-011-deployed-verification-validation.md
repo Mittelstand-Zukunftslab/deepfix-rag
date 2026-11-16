@@ -83,3 +83,24 @@ None. The page it meant exists and works; only the instruction was wrong.
    a failed import in the browser, and untitled rows. Those are now their own fixes
    and story passes; a later runbook revision could fold a browser-visual pass into
    step 3's stop check rather than leaving it to chance.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after a browser recheck on the deployed stack found two remaining defects
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 6 said a reload "resumes or shows its stored text", which accepted a cancelled turn | AC 6 requires the answer to continue, the row to settle `completed`, and the badge to describe that turn | The reload was closing the socket, the server was treating that as Stop, and the answer was lost. A runbook row that accepts "stored text" would have passed the broken behaviour |
+| 2 | No step looked at the layout | Step 6a checks a narrow width and the sources panel's own box | The panel overlapped the composer at about 630px and scrolled sideways at desktop width. Neither is reachable from a jsdom test, so no automated check could have caught either |
+
+### Blockers
+
+Two on the second pass: a reload lost the reply, and the panel covered the composer
+at a narrow width.
+
+### Nice-to-have
+
+1. Both defects were visual or lifecycle facts that only a browser shows. A later
+   revision could make the narrow-width check part of every deployed verification,
+   not only this story's.

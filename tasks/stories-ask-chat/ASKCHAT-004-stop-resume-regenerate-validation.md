@@ -106,3 +106,24 @@ None. This was the minor of the three live findings.
    passages, not `no_relevant_sources`. Classifying the unfinished answer's empty
    string would have claimed the search found nothing, which is the opposite of what
    the member had already been shown.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after a browser check reloaded the page mid-answer and lost the reply
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 1 made a closed socket the Stop signal | AC 1 requires an explicit `POST /ask/chat/turns/{turn_id}/cancel`; a closed socket only ends the reader | A reload closes the socket too, so the two were indistinguishable — and a reload must let the answer finish. The relay was cancelled by Starlette's close, so the row settled `cancelled` with whatever text existed and the member came back to a question with no answer |
+| 2 | AC 6 let a resume tail a live turn from "now" | AC 6 requires replaying the frames the live turn has already published, then tailing | Tailing alone dropped every delta published before the reader attached; replaying the stored text as well sent the opening twice. Taking the backlog and the queue under one lock is what makes it gapless |
+| 3 | Nothing said where a terminal frame comes from when the task is cancelled | A cancelled task publishes its terminal frames from a `finally` | A coroutine cannot run code after the `await` it was cancelled at, so the closing frames were never sent and a subscriber waited forever for a turn that had already stopped |
+
+### Blockers
+
+One: the reply was unrecoverable after a reload, which is data loss from the member's
+point of view.
+
+### Should-fix (applied)
+
+1. The live registry keeps every published frame, so a resume is a replay plus a tail
+   rather than a guess about what the store has.
