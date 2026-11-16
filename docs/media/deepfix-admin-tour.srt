@@ -1,0 +1,35 @@
+1
+00:00:00,000 --> 00:00:02,500
+DeepFix Admin mode tour
+
+2
+00:00:02,500 --> 00:00:15,000
+Ask chat: ask a question in a new thread
+
+3
+00:00:15,000 --> 00:00:31,500
+Answers stream in with citations, sources and a grounding badge
+
+4
+00:00:31,500 --> 00:00:41,500
+Optimization: nightly schedule, current champion config and recent runs
+
+5
+00:00:41,500 --> 00:00:59,000
+History: every search and answer, with passages shown and feedback
+
+6
+00:00:59,000 --> 00:01:07,000
+History filter: only interactions that received feedback
+
+7
+00:01:07,000 --> 00:01:19,000
+Admin chat: talk to Hermes, the optimization agent
+
+8
+00:01:19,000 --> 00:01:35,500
+Hermes summarizes runs; any action it proposes waits for your Confirm
+
+9
+00:01:35,500 --> 00:01:44,000
+Back on the Optimization page
