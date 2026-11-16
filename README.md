@@ -149,14 +149,23 @@ uv sync                      # creates .venv from uv.lock
 source .venv/bin/activate
 ```
 
-Bring up the local services and the web app:
+Run the API and the web app directly, which is what the Compose stack cannot do for you locally: it publishes no host ports.
 
 ```bash
-docker compose up -d         # rustfs, mlflow, backend-api, web, hermes
-cd web && bun install && bun run dev
+uv run uvicorn deepfix_rag.api.app:app --reload --port 8000   # FastAPI
+cd web && bun install && bun run dev                          # http://localhost:8080
 ```
 
-The web app dev server listens on `http://localhost:8080`. `WEB_ORIGIN` must equal `BETTER_AUTH_URL` — it is the identity token's issuer and audience — and the API fetches the signing keys from `WEB_ORIGIN/api/auth/jwks`.
+The web dev server serves the app on `http://localhost:8080`; `web/.env.example` points `VITE_API_BASE_URL` and `API_INTERNAL_URL` at the API on 8000. `WEB_ORIGIN` must equal `BETTER_AUTH_URL` — it is the identity token's issuer and audience — and the API fetches the signing keys from `WEB_ORIGIN/api/auth/jwks`.
+
+The full stack in Compose has no published host port either, because every public route is a Traefik router (see [Published ports](#published-ports)). A machine running the stack outside Dokploy needs the external network that the `mlflow` router joins:
+
+```bash
+docker network create dokploy-network   # once
+docker compose up -d
+```
+
+To reach a Compose service from a laptop for a session, publish a loopback-only port for that service (`ports: ["127.0.0.1:8080:8080"]`), never a bare `8080:8080`, and do not commit it.
 
 ### Install the CLI and the skills
 
@@ -472,7 +481,7 @@ The target is Dokploy with one Compose stack on a **7.6 GB** host. Full notes: [
 - **Memory caps are ceilings, not reservations.** `hermes` 4 GB plus `cpus: "2"`, `mlflow` 2 GB, `rustfs` and `diagnostic-agent` 1 GB each, graph stores 1 GB each, `backend-api` and `web` uncapped. If memory is tight, lower the chat's appetite first (`ADMIN_CHAT_MAX_CONCURRENT_TURNS`, then the chat timeouts and prompt cap) rather than raising `hermes`.
 - **One API worker.** SQLite, the index writer, and the scheduler all assume it.
 - **Secrets live in the deployment environment.** Set the variables above as Dokploy environment variables; never commit a filled `.env`.
-- **Domains.** The web app has one public domain, routed to the `web` container on 8080 over the Compose network. The API needs none, because the web app proxies `/api/*` itself. MLflow keeps one domain behind basic auth. RustFS has none, and its console stays off.
+- **Domains.** Nothing publishes a host port; each public route is a Traefik router. The web app has one, from Dokploy, proxying to `web:8080`. The API needs none, because the web app proxies `/api/*` itself. MLflow's router is declared in `docker-compose.yml` with the `deepfix-mlflow-auth` middleware, so it needs no Dokploy Domain entry. RustFS has none, and its console stays off. See [Published ports](#published-ports).
 
 ---
 

@@ -12,8 +12,8 @@ This guide walks through those pages in the order the [Admin mode tour](media/de
 
 ## What admin means
 
-- The web app's navigation hides **History**, **Optimization**, and **Hermes chat** from a member (`ADMIN_PATHS` in `web/src/components/layout/navigation.ts`).
-- The web server refuses those paths for a member with a 403, and the page renders a "This page is only available to admins." panel rather than a half-loaded screen.
+- The web app's navigation hides **History**, **Optimization**, and **Hermes chat** from a member (`ADMIN_PATHS` in `web/src/components/layout/navigation.ts`), and each of those routes renders a "This page is only available to admins." panel instead of a half-loaded screen.
+- The web app's server functions for those pages are wrapped in `requireRole("admin")`, which answers 403 "Only admins can review history." (or the matching sentence) before it forwards anything to FastAPI.
 - The API refuses them independently: `require_admin` in `src/deepfix_rag/api/deps.py` answers 403 `FORBIDDEN` with "Only admins can do this." for every `/admin/*` route. The UI gate is convenience; the API gate is the one that matters.
 - Nothing in admin mode edits a config file by hand. The champion is written by `promotion.apply_candidate` and by nothing else, so what the admin screens show and what the pipeline reads cannot drift apart.
 
@@ -26,7 +26,7 @@ This guide walks through those pages in the order the [Admin mode tour](media/de
 Ask is not admin-only, but it is where the corpus earns its keep, so the tour starts there.
 
 - A question is typed into **New conversation**. Each conversation is a thread in the sidebar, and the thread keeps its own history.
-- The answer **streams in** with numbered citations. Clicking a citation highlights the passage it came from.
+- The answer **streams in** with numbered citations. Clicking a citation opens the sources panel, scrolls the matching passage into view, and highlights it.
 - The **sources panel** on the right lists every retrieved passage with its file name and rerank score (0.778, 0.757, 0.748 in the frame above). Each passage keeps its own 👍/👎 buttons whatever the answer's badge says.
 - The **grounding badge** in the header says how well the answer is backed: *Grounded*, *Partly grounded*, *Reused earlier evidence*, *Not searched*, *Not found in the documents*, or a *Stopped* variant. An answer that could not be grounded is badged as such rather than presented as fact.
 - **Stop** ends a reply you do not need. The partial text and the passages it used stay on screen, and the badge says so.
@@ -59,11 +59,11 @@ Passages below `rerank.min_relevance_score` (default `0.3`) never reach the mode
 
 `/history` is the audit view of the corpus in use: every search and every question from the team, with the answer returned and the feedback given.
 
-The table shows **When**, **Person**, **Type** (Search or Ask), **Question**, and a feedback summary — 👍/👎 counts on passages plus a comment count. Selecting a row opens a side panel with:
+The table shows **When**, **Person**, **Type** (Search or Ask), **Question**, **Answer** (a truncated answer, or `10 passages shown` for a search with no answer), and a feedback summary — 👍/👎 counts on passages plus a comment count. Selecting a row — or its question — opens a side panel with:
 
-- the **full answer**, citations intact,
-- **passages shown**, each with its file, its rerank score, and its own vote buttons,
-- any **comments** the member left.
+- the **full answer** with its vote counts and any comments on it, citations intact,
+- **passages shown**, each with its rank, file name, score, its own vote counts, and any comments,
+- the **config path and serving build id** the interaction was answered from, which is what makes an old answer reproducible.
 
 The filters across the top are a free-text box over the question text and the person's email, a **Type** selector (All, Searches, Asks), and a **Feedback** selector.
 
