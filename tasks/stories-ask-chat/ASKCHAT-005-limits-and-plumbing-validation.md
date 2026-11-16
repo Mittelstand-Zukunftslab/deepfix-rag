@@ -55,3 +55,23 @@ written. Two facts worth recording because they are evidence rather than opinion
 ### Blockers
 
 None.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after a deployed turn answered nothing for 93 seconds
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 9 made the wall clock a per-chunk check | AC 9 requires each step to run inside `asyncio.timeout(remaining)`, and reaching it settles `failed` with the timeout sentence | `_check_deadline` only ran between chunks, so a provider that sent nothing could hold the turn open past the bound. A timeout stored as `cancelled` also told a member they had stopped something they had not |
+| 2 | Nothing bounded the model's hidden reasoning | Two new settings: `ASK_CHAT_REASONING` (`off`) and `ASK_CHAT_MAX_OUTPUT_TOKENS` (2048) | The model reasoned in hidden mode by default and spent 93 s, and once the entire output budget, on thinking before any visible text (D-12) |
+
+### Blockers
+
+One: a turn could look hung for a minute and a half while a proxy prepared to drop it.
+
+### Should-fix (applied)
+
+1. The settings test enumerates every `ASK_CHAT_*` name, so a setting that reaches
+   `Settings` but not Compose or `example.env` fails CI. It caught both new names in
+   this change, which is the behaviour it exists for.

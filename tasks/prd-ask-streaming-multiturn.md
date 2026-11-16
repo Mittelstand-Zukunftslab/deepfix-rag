@@ -630,7 +630,9 @@ process, and no new container.
 | `ASK_CHAT_MAX_HISTORY_MESSAGES` | 12 | Six exchanges. Enough for pronouns and ellipsis; bounded prompt cost. |
 | `ASK_CHAT_MAX_MESSAGE_CHARS` | 4000 | A question, not a document. |
 | `ASK_CHAT_MAX_PASSAGE_CHARS` | 1200 | Truncation of one passage sent to the model, with `truncated: true` so the UI can say so. |
-| `ASK_CHAT_TURN_TIMEOUT_SECONDS` | 120 | A chat reply, not a training job. |
+| `ASK_CHAT_TURN_TIMEOUT_SECONDS` | 120 | A chat reply, not a training job. It is a hard bound: each step runs inside `asyncio.timeout(remaining)`, so a silent provider cannot exceed it (D-12). |
+| `ASK_CHAT_REASONING` | `off` | How much the model may think before it answers: `off`, `low`, `medium`, `high`. Sent as OpenRouter's own `reasoning` body field, and only to an OpenRouter endpoint. A reasoning model at its provider default spent 93 s on hidden thinking and emitted no prose, which a proxy then drops (D-12). |
+| `ASK_CHAT_MAX_OUTPUT_TOKENS` | 2048 | Most tokens one step may produce, reasoning included. An uncapped reasoning step spends the whole budget before it writes a visible character, so this is what bounds both the spend and the latency (D-12). |
 
 **No new service.** The loop runs inside the existing `backend-api` container
 (no `mem_limit`, per `docs/deployment.md`), reads the index the process already
@@ -729,6 +731,64 @@ becoming a measurable share of `product_db_path`, or a member accumulating
 thousands of threads. The mechanism would be an
 `ASK_CHAT_THREAD_RETENTION_DAYS` prune on the existing optimization scheduler
 tick, exactly as `admin_chat.prune_audit` does — one story, no schema change.
+
+### D-12: Bound the model's hidden reasoning, and say when it is thinking
+
+Decided on **2026-11-16**, after a deployed turn answered nothing for 93 seconds.
+
+`LLM_MODEL` is `qwen/qwen3.8-flash` on OpenRouter, which reasons in hidden mode by
+default. With no reasoning control and no output cap, a turn's final prose step
+streamed only reasoning chunks: the searches finished at about 10 s, the first
+visible character arrived at +101 s, and the turn completed at +111 s. A probe with
+the same model and prompt and a 1500-token cap spent all 1500 tokens on hidden
+reasoning and emitted no visible text at all; `effort: low` produced first text at
+9 s, and reasoning off at 0.7 s. The page was not buffering — direct, through the
+web container, and through the public domain all streamed promptly — but the
+deployment sits behind Cloudflare, which drops a proxied response after about 100 s
+with no bytes. So the stall was also a truncated answer waiting to happen.
+
+Three changes, and each answers a different part of that:
+
+- **`ASK_CHAT_REASONING`** (`off`, `low`, `medium`, `high`; default `off`) is sent
+  as OpenRouter's own `reasoning` body field. `off` sends
+  `{"enabled": false}` and an effort level is passed through. The field is
+  OpenRouter's, not part of the OpenAI-compatible schema, so it is sent only when
+  the endpoint's host is OpenRouter: another vendor would answer 400 for an unknown
+  body field, and a member's question must not fail because of where it is deployed.
+  Turning reasoning *off* does not touch `tool_choice`, which is what broke before
+  (D-4a): it changes what the model may think, not whether it may emit a call.
+- **`ASK_CHAT_MAX_OUTPUT_TOKENS`** (default `2048`) caps each step. Reasoning tokens
+  count against it, so an uncapped step is what let the hidden reasoning consume the
+  whole budget, and a runaway step now fails fast instead of running to the wall
+  clock.
+- **The bound holds whether or not chunks arrive.** `_check_deadline` only ran
+  between chunks, so a silent provider — exactly the case above — could hold a turn
+  open past `ASK_CHAT_TURN_TIMEOUT_SECONDS`. Each step is now wrapped in
+  `asyncio.timeout(remaining)`, and reaching it settles the turn **failed** with the
+  timeout sentence. It used to settle `cancelled`, which told a member they had
+  stopped something they had not, and left a reviewer unable to tell a slow provider
+  from an impatient one.
+
+Two supporting changes, both about the wait being legible and survivable:
+
+- A step that carries only reasoning emits one `data-deepfix-status` part with
+  `status: "reasoning"`, and the page shows **Thinking…** beside the answer until
+  the first word arrives. The reasoning text itself is never stored, forwarded, or
+  shown; only the fact that the model is working.
+- Both streaming routes wait on their queue with a 15 s timeout and send an SSE
+  `: keepalive` comment on expiry, so a proxy in front never sees a silent
+  connection. 15 s is chosen to sit well under Cloudflare's ~100 s idle limit.
+
+**A stopped turn is not a deficient answer.** Stopping leaves the evidence intact
+and the prose unfinished. The badge rule read `grounded` with no citations as
+"Partly grounded" (D-10), so every stopped turn was reported as an answer that had
+ignored its evidence — the opposite of what had happened. Two fixes, one on each
+side: the server now computes `valid_citations` for a cancelled turn from the text
+it did write, and the web badge takes the turn's status into account before judging
+citations — **Stopped, partial answer** when words arrived and **Stopped before
+answering** when none did, never "Partly grounded". The cancelled stream also closes
+its text group and sends the grounding and turn frames, so the badge appears without
+a reload.
 
 ## Glossary
 
@@ -890,7 +950,7 @@ may slip one release), or **Could** (nice, unplanned).
 | ID | Requirement | Priority | Rationale |
 | :--- | :--- | :--- | :--- |
 | FR-001 | The agent loop must run in deepfix-api. The browser must reach it only through the same-origin `/api/ask/chat/*` path on the existing BFF proxy, must receive no model key and no model id, and must receive the AI SDK UI message stream (`x-vercel-ai-ui-message-stream: v1`) as `src/deepfix_rag/api/chat_stream.py` already emits it. | Must | G7, D-1. One credential holder; the admin chat proves the protocol works through this proxy. |
-| FR-002 | The stream must carry these parts, in **this** grammar: `start` once; then, **per model step**, `start-step`, a `text-start`/`text-delta`*/`text-end` group for whatever prose that step produced, and `finish-step`; a tool call's `tool-input-start`, `tool-input-available`, and `tool-output-available` are emitted between one step's `finish-step` and the next step's `start-step`, because they belong to the boundary between steps, and are emitted **once per call** after that step's stream has ended and its argument fragments have been assembled — a provider may send one call as many deltas; then one `data-deepfix-grounding`, one `data-deepfix-turn`, `finish`, and `data: [DONE]`. `error` may appear in place of the per-step prose when a step fails. A step that streamed **no** prose opens no text group at all: an empty `text-start`/`text-end` pair makes the runtime draw an empty bubble under the question, so the group is opened on the step's first delta. Nothing is buffered: the first delta reaches the browser when the model produced it. | Must | G1, D-1. The AI SDK's parser and Assistant UI's message parts are what render this; anything else needs a hand-written renderer. A two-step turn emits **two** `start-step`/`finish-step` pairs, so the sequence is a grammar rather than one fixed list — the first draft's single linear order was not emittable. A search-only step is the common case for the empty-bubble rule, because it streams tool parts and no prose. |
+| FR-002 | The stream must carry these parts, in **this** grammar: `start` once; then, **per model step**, `start-step`, a `text-start`/`text-delta`*/`text-end` group for whatever prose that step produced, and `finish-step`; a tool call's `tool-input-start`, `tool-input-available`, and `tool-output-available` are emitted between one step's `finish-step` and the next step's `start-step`, because they belong to the boundary between steps, and are emitted **once per call** after that step's stream has ended and its argument fragments have been assembled — a provider may send one call as many deltas; then one `data-deepfix-grounding`, one `data-deepfix-turn`, `finish`, and `data: [DONE]`. `error` may appear in place of the per-step prose when a step fails. A step that streamed **no** prose opens no text group at all: an empty `text-start`/`text-end` pair makes the runtime draw an empty bubble under the question, so the group is opened on the step's first delta. A step that carries only hidden reasoning emits one `data-deepfix-status` part with `status: "reasoning"`, which the page renders as **Thinking…**; the reasoning text itself is never stored, forwarded, or shown (D-12). `data-deepfix-status` is the only non-terminal `data-*` part in this grammar. Nothing is buffered: the first delta reaches the browser when the model produced it. | Must | G1, D-1. The AI SDK's parser and Assistant UI's message parts are what render this; anything else needs a hand-written renderer. A two-step turn emits **two** `start-step`/`finish-step` pairs, so the sequence is a grammar rather than one fixed list — the first draft's single linear order was not emittable. A search-only step is the common case for the empty-bubble rule, because it streams tool parts and no prose. |
 | FR-003 | `POST /ask/chat/completions` must accept `{thread_id, messages}` for a signed-in member, rebuild the conversation from the store, and answer 401 unsigned, 404 for another member's thread, 429 over a limit, and 503 while the index is preparing, each with a sentence the UI shows. | Must | G4, G7. Same contract the admin chat's route already has, with the member's role instead of admin. |
 | FR-004 | `search_documents` must be the only tool, must run on the serving index through `QueryService.retrieve` with the champion config, must return only what survives the landed `rerank.min_relevance_score` floor (which that path already applies — the tool reports, it does not re-filter), and must return the passage shape in D-2. Its depth must come from the existing `displayed_limit(config, MAX_DISPLAYED_HITS)` helper — `rerank.top_n` when rerank is on, `retrieval.top_k` otherwise, then the display cap — and a requested `top_k` must be clamped into `[1, displayed_limit(...)]`, never widening what the single-turn product would show. | Must | G3, D-2, G6. The floor is the grounding decision and it already lives in one place; the tool's window must be the product's window, not a second one. |
 | FR-005 | The model decides when to search. Every step must be sent with `tool_choice: "auto"` except the last permitted one, which is `"none"` to bound the loop; no step forces a tool call (D-4b). The system prompt must instruct the model to call `search_documents` for any question about the documents and for any factual or domain question, including a follow-up that needs new evidence, and to answer without searching only for small talk, a greeting, a thanks, or a reworking of its own previous answer from content already in the thread. If a provider refuses the request with a 400 that names `tool_choice` before emitting anything, the server must execute `search_documents` itself with the member's message and continue, so a refusal cannot fail the turn (D-4a). A turn must make at most `ASK_CHAT_MAX_TOOL_CALLS` tool calls. An unknown `toolName` must be rejected, not executed. One step attempt must be one HTTP call (`num_retries=0`). | Must | G3, D-2, D-4b. Forcing the tool broke on reasoning providers and forced a retrieval on a "thanks"; the guarantee the product needs is not that every turn searches but that no answer is claimed to be grounded without evidence, which FR-009 enforces. |
@@ -902,7 +962,7 @@ may slip one release), or **Could** (nice, unplanned).
 | FR-011 | The upstream conversation must be built from the store, never from the client's array: the system prompt, then the last `ASK_CHAT_MAX_HISTORY_MESSAGES` stored messages, then the new user message. A request whose last message is not a user message must be 400. | Must | G2, G7. The client cannot rewrite the policy or claim a history that never happened. |
 | FR-012 | A follow-up must be retrievable: the tool's own `query` argument is what is searched, and it must be stored as `ask_chat_turns.retrieval_query` while `interactions.query` keeps the member's literal message. No separate query-rewriting model call is added in this release. | Must | G2, G5, D-6. The model already has the history; a second rewrite call would add a model hop and a second thing to evaluate. |
 | FR-013 | Each passage delivered to the model must be wrapped in explicit delimiters and labelled as untrusted corpus text whose instructions must not be followed, and the system prompt must say so. | Must | G7. Members upload the corpus, so a document can contain an instruction. |
-| FR-014 | A browser abort must cancel the retrieval and the model stream (closing the async generator, not merely abandoning the wait), store the partial assistant text, keep the tool results already obtained, mark the turn `cancelled` with `ended_at`, and still emit a terminal `data-deepfix-turn`. A turn that had already searched before it stopped also records the standalone query its last search ran and the verdict its evidence supports, so what it found is not lost when the member comes back to it. **Stopping is an explicit request** — `POST /ask/chat/turns/{turn_id}/cancel`, 204 — not a closed socket, because a closed socket is also what a reload does and a reload must let the answer finish (FR-016). The route cancels the process-owned task, which unwinds the same path. | Must | G1, D-4. Stop must stop the work and the spend, and a stopped answer must be readable. Sharing a trigger with "the member navigated away" made a reload lose the reply. |
+| FR-014 | A browser abort must cancel the retrieval and the model stream (closing the async generator, not merely abandoning the wait), store the partial assistant text, keep the tool results already obtained, mark the turn `cancelled` with `ended_at`, and still emit a terminal `data-deepfix-turn`. A turn that had already searched before it stopped also records the standalone query its last search ran, the verdict its evidence supports, its `first_token_ms`, and **the citations its own text wrote** — so what it found is not lost when the member comes back to it, and its badge is not read as an uncited answer. The cancelled stream closes its text group (`text-end`) and sends the grounding part before the terminal frame, so the badge appears without a reload. **Stopping is an explicit request** — `POST /ask/chat/turns/{turn_id}/cancel`, 204 — not a closed socket, because a closed socket is also what a reload does and a reload must let the answer finish (FR-016). The route cancels the process-owned task, which unwinds the same path. | Must | G1, D-4. Stop must stop the work and the spend, and a stopped answer must be readable. Sharing a trigger with "the member navigated away" made a reload lose the reply. |
 | FR-015 | A regenerate must replace the newest answered or cancelled turn in place, keeping its `turn_id`; the previous answer's text must not remain beside the new one; and votes on the replaced answer and its passages must be cleared by writing the existing `clear` action through `record_vote`, which deletes the mirrored MLflow assessment. No new vote action and no `CHECK` change. | Must | G3, D-4. The admin chat settled in-place replacement (CHAT-014); an orphaned assessment is worse than no assessment, and `feedback_events.action` already permits `clear`. |
 | FR-016 | `GET /ask/chat/turns/{turn_id}/stream` must replay the stored text and close with the stored status when the turn is not live in this process, and must replay then tail when it is. **The turn must outlive the request that asked for it**: it runs in a task the API process owns, so a closed socket — a reload, a navigation — ends the reader and not the answer, and the row settles `completed` with the whole text. While the turn is live, the resume replays the frames it has published and then follows it to the terminal frame, so a reader that reattached mid-answer sees the whole reply exactly once. A resumed turn reports the deployment's configured `rerank.min_relevance_score` as its `cutoff`, never a placeholder zero, and reports the verdict the turn reached — a turn that never searched reports `not_searched`, never `no_relevant_sources`, because that copy would claim a search happened (D-4b). Another member's turn id must be 404. | Must | G4, D-4. A reload mid-answer must not lose it; `chat_turns.py` already implements this shape, and reusing the request's lifetime for the turn is what lost the answer. |
 | FR-017 | A turn interrupted by an API restart must be settled `failed` at startup with a readable reason, and no `ask_chat_turns` row may stay `running`. | Must | G4. Mirrors `fail_interrupted_chat_turns`; a stuck row is a lie about state. |
@@ -1890,6 +1950,15 @@ in `tasks/stories-ask-chat/` were corrected in the same pass.
 | 28 | A resume could show a live turn's opening twice or lose the deltas in between | While the turn is live the resume replays the frames it published and then tails, so the reply arrives exactly once | FR-016 |
 | 29 | The badge took the last verdict any turn had, so a running turn inherited the previous answer's | The badge describes the newest turn; a turn with no verdict yet shows none | FR-009, D-10 |
 | 30 | The sources panel asked for a fixed width inside a narrower wrapper, and refused to shrink | The panel takes the column's width and stacks under the conversation below `lg`; cards ellipsise the filename and keep the score in view | FR-007 |
+| 31 | Nothing bounded the model's hidden reasoning, and each step was uncapped | `ASK_CHAT_REASONING` (default `off`) rides in `extra_body` on OpenRouter, and `ASK_CHAT_MAX_OUTPUT_TOKENS` caps each step | D-12 |
+| 32 | The turn's bound only ran between chunks, so a silent provider held it open | Each step is wrapped in `asyncio.timeout(remaining)`, and reaching it settles `failed` with the timeout sentence, not `cancelled` | D-12, FR-017 |
+| 33 | A reasoning-only step was indistinguishable from a stalled one | One `data-deepfix-status` part with `status: "reasoning"`, and the page shows **Thinking…** until the first word; the reasoning text is never stored or shown | D-12, FR-002 |
+| 34 | A proxied stream could go silent for 93 s and be dropped | Both streaming routes wait with a 15 s timeout and emit `: keepalive` on expiry | D-12, FR-016 |
+| 35 | A stopped turn stored no citations, so its badge read "Partly grounded" | A cancelled turn's citations are validated from the text it wrote, and the web badge says **Stopped, partial answer** or **Stopped before answering** | D-4, D-10, D-12 |
+| 36 | A cancelled stream ended at `text-delta` with no `text-end` and no verdict | It closes its text group and sends the grounding and turn frames, so the badge needs no reload | D-4, FR-014 |
+| 37 | A cancelled turn stored `first_token_ms` as NULL | The route records it on the first text delta, so a stopped turn keeps its latency | D-4 |
+| 38 | The cancel sentence said "The browser closed the connection" | It says "Stopped by the user" — Stop is an explicit request now, and the old sentence described a transport detail nobody chose | FR-014 |
+| 39 | LiteLLM printed a "Provider List" banner on the API's stdout | `litellm.suppress_debug_info = True` is set once at import | NFR-3 |
 
 ## Handoff
 

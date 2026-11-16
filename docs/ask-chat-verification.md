@@ -91,15 +91,43 @@ sqlite3 /data/product/product.db \
 | Connection closed when Stop was pressed | yes, and the composer became usable again | NOT RUN |
 | `POST /ask/chat/turns/{turn_id}/cancel` was sent | yes, 204 — Stop is an explicit request, not just a closed socket | NOT RUN |
 | Database row | `cancelled`, `ended=1` | NOT RUN |
+| `error` column | `Stopped by the user.` — not a sentence about the browser | NOT RUN |
 | Partial text still on screen | yes | NOT RUN |
 | Sources panel still shows the passages it had retrieved | yes | NOT RUN |
+| Badge | **Stopped, partial answer**, or **Stopped before answering** if no word arrived — never **Partly grounded** | NOT RUN |
+| Badge appears without a reload | yes — the cancelled stream closes its text group and sends the verdict | NOT RUN |
+| `first_token_ms` on the row | not NULL when any text arrived | NOT RUN |
 | Any traceback in `docker compose logs backend-api` | none — a cancel is a normal end | NOT RUN |
 
 A cancelled turn that loses its text is worse than a failed one, because the member cannot tell what they had; if the
-partial text is gone, that is a defect, not a finding.
+partial text is gone, that is a defect, not a finding. If the badge reads **Partly grounded**, the stored turn has a
+`grounded` verdict with no citations, which a stopped turn must no longer produce.
 
 **Stop is not the same as leaving the page.** A closed socket used to cancel the turn, which meant a reload mid-answer
 lost the reply; section 4 covers that, and it no longer stops the work.
+
+## 2a. How long the first word takes (AC 6b)
+
+This is the check that found the 93-second silence. Ask a question the corpus answers, with the browser's network
+panel open, and record when the first *visible character* arrives — not when the response starts.
+
+| Observation | Expected | Result |
+| :--- | :--- | :--- |
+| Time to first visible character | a few seconds, not tens of seconds | NOT RUN |
+| **Thinking…** shown while the model is silent | yes, and it disappears when the first word arrives | NOT RUN |
+| Any silent gap longer than 15 s on the wire | none — `: keepalive` comments fill it | NOT RUN |
+| Time to the finished answer | record it | NOT RUN |
+
+```bash
+# What the turn actually recorded, and how it was allowed to think.
+docker compose exec backend-api sh -c 'env | grep -E "ASK_CHAT_(REASONING|MAX_OUTPUT_TOKENS|TURN_TIMEOUT)"'
+sqlite3 /data/product/product.db \
+  "SELECT turn_id, status, first_token_ms, error FROM ask_chat_turns ORDER BY started_at DESC LIMIT 1;"
+```
+
+`ASK_CHAT_REASONING=off` and `ASK_CHAT_MAX_OUTPUT_TOKENS=2048` are the defaults, and `first_token_ms` is the measured
+number to compare across a change. A gap over about 100 s would also be dropped by Cloudflare, so a long silence is both
+a latency defect and a truncated answer waiting to happen (D-12).
 
 ## 3. A follow-up, and what the export asks (AC 5)
 
