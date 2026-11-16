@@ -1,10 +1,10 @@
 # ASKCHAT-011 — Prove it on the deployed stack
 
 ## Type
-Chore
+Chore — an **operator runbook**, not a code story. Its deliverable is a document an operator fills in, and no code change belongs to it.
 
 ## Status
-Draft
+Runbook prepared, not run — `ea90987`. `docs/ask-chat-verification.md` is written in full with every result reading `NOT RUN`; an operator executes it and records the observed values.
 
 ## Summary
 A local test cannot prove that the BFF streams a body unchanged, that the provider honours `tool_choice` on the pinned model, or that four concurrent turns leave the 7.6 GB host where it was. This story is one operator session on the real stack, recorded as a runbook with its result.
@@ -31,7 +31,9 @@ A local test cannot prove that the BFF streams a body unchanged, that the provid
 3. Given a streamed answer, when the browser's network panel is inspected, then the response is `text/event-stream` with `x-vercel-ai-ui-message-stream: v1`, the frames arrive progressively rather than in one burst, and no frame contains a model id, an API key, or an S3 secret.
 4. Given a turn running, when **Stop** is pressed, then the connection closes, the turn settles `cancelled` in the database, the partial text stays on screen, and the sources panel still shows what had been retrieved.
 5. Given a follow-up question, when it is asked, then the trace shows a tool call whose query is standalone rather than a pronoun sentence, and the exported dev question for that turn is that query.
-6. Given a reload mid-answer, when the page reopens, then the answer resumes or shows its stored text exactly once, with no duplicated paragraph.
+6. Given a reload mid-answer, when the page reopens, then the answer continues — the page resumes the running turn and renders the rest of it exactly once, with no duplicated paragraph. The reload must not cancel the turn: the row settles `completed` with the whole text, and the badge is the verdict that turn reached, not the previous answer's. A turn with no verdict yet shows no badge.
+6a. Given a narrow window (about 630px, or 200% zoom), when a thread with passages is open, then the sources panel stacks below the conversation at full width and the question bubble and composer stay visible; given a normal desktop width, then the panel does not scroll horizontally, a long filename is ellipsised, and each card's score stays fully in view.
+6b. Given a question the corpus answers, when the turn is timed end to end, then the first visible character arrives in a few seconds rather than tens of seconds, **Thinking…** is shown while the model is silent and disappears when the first word arrives, no silent gap on the wire exceeds about 15 s, and `first_token_ms` on the row is not NULL. A turn whose reasoning is unbounded is both a latency defect and one Cloudflare will truncate (D-12).
 7. Given the same account in a second browser, when the thread list loads, then the conversation is there; given a second account, when it requests that thread id, then it gets 404.
 8. Given four answers about the same question, when each renders, then the four badge states of D-10 are each observed at least once: **Grounded** with citations, **Partly grounded** with none, and both "Not found in the documents" notes — the declined one and the no-passages one.
 9. Given `docker stats` before, during, and after four concurrent turns, when the numbers are recorded, then no new container exists, no `mem_limit` or `cpus` value has changed, and the API's memory returns to its pre-test level afterwards.

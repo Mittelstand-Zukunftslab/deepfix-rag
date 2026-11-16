@@ -1,8 +1,9 @@
 """Pydantic request and response models shared by public API routes."""
 
+from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from deepfix_rag.feedback import COMMENT_MAX_LENGTH, CommentReason
 from deepfix_rag.grounding import Grounding
@@ -463,3 +464,176 @@ class ChatThreadRunResponse(ApiModel):
     mlflow_run_id: str | None = None
     mlflow_url: str | None = None
     steps: list[str] = Field(default_factory=list)
+
+
+class AskChatCitationResponse(ApiModel):
+    """One ``[n]`` marker in an answer and the passage it resolved to."""
+
+    marker: int = Field(description="The number inside the marker, as the member sees it.")
+    rank: int = Field(description="The passage's rank in that turn's tool output.")
+    doc_id: str
+
+
+class AskChatPassageResponse(ApiModel):
+    """One stored passage: the hit snapshot a turn's answer was built from.
+
+    The text is the whole chunk, not the truncated copy sent to the model, so a
+    reload shows what the vote records under that rank (FR-006).
+    """
+
+    rank: int
+    doc_id: str
+    filename: str
+    text: str
+    score: float
+    truncated: bool = False
+
+
+class AskChatThreadResponse(ApiModel):
+    """One of the member's conversations."""
+
+    thread_id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class AskChatRenameRequest(ApiModel):
+    """A new thread title.
+
+    The bound is on the **trimmed** title, and the store is the one that applies
+    it: whitespace is collapsed and stripped, and only then is the length checked
+    against 120. That is why this field's `max_length` is a payload guard rather
+    than the rule — a title of exactly 120 characters arriving with trailing
+    spaces is a valid rename, and a field that measured the raw string would
+    refuse it. `min_length` is 1 so an entirely empty body field is still a
+    validation error; a whitespace-only title passes here and is refused by the
+    store as empty-after-trimming, which is the same 400 either way.
+    """
+
+    title: str = Field(
+        min_length=1,
+        max_length=1000,
+        description=(
+            "The new title. Leading and trailing whitespace is removed before the "
+            "1 to 120 character limit is applied."
+        ),
+    )
+
+
+class AskChatTurnResponse(ApiModel):
+    """One question and the answer stored for it.
+
+    ``interaction_id``, ``question`` and ``answer`` are null until the turn's
+    ``interactions`` row exists, which is how a turn still ``running`` reports.
+    ``passages`` is that turn's stored hit snapshot, which is what lets a reload
+    rebuild the sources panel without a second request per answer (FR-007).
+    """
+
+    turn_id: str
+    seq: int
+    status: Literal["running", "completed", "failed", "cancelled"]
+    retry_of: str | None = None
+    error: str | None = None
+    grounding: Grounding | None = None
+    citations: list[AskChatCitationResponse] = Field(default_factory=list)
+    passages: list[AskChatPassageResponse] = Field(default_factory=list)
+    retrieval_query: str | None = None
+    first_token_ms: int | None = None
+    started_at: str
+    ended_at: str | None = None
+    interaction_id: str | None = Field(
+        default=None,
+        description="The interactions row that holds this turn's question and answer.",
+    )
+    question: str | None = None
+    answer: str | None = None
+
+
+class AskChatThreadDetailResponse(ApiModel):
+    """A thread and its turns in order, with each turn's grounding and citations.
+
+    One load is enough to draw the whole conversation, including the badges, so
+    a reload does not issue a request per turn (FR-010).
+    """
+
+    thread: AskChatThreadResponse
+    turns: list[AskChatTurnResponse]
+
+
+class AskChatCompletionRequest(ApiModel):
+    """One Ask chat turn.
+
+    ``messages`` carries the browser's view for the AI SDK's own bookkeeping; the
+    prompt is rebuilt from the store, so the array is not trusted and only its
+    last entry's role is checked (FR-011). ``regenerate`` marks the AI SDK's
+    reload trigger, which replaces the newest answered turn in place (FR-015).
+    """
+
+    thread_id: str = Field(min_length=1)
+    messages: list[ChatMessageModel] = Field(min_length=1)
+    regenerate: bool = False
+
+
+class LegacyTurnRequest(ApiModel):
+    """One turn from the browser's old localStorage sessions."""
+
+    interaction_id: str | None = Field(default=None, alias="interactionId")
+    user_query: str = Field(default="", alias="userQuery")
+    answer: str | None = None
+
+    model_config = ConfigDict(
+        populate_by_name=True, json_schema_serialization_defaults_required=True
+    )
+
+
+class LegacySessionRequest(ApiModel):
+    """One session from the browser's old localStorage sessions.
+
+    ``createdAt`` and ``updatedAt`` are accepted as **either** an ISO string or a
+    millisecond epoch number, because the retired page wrote ``Date.now()`` values
+    and a strict string field rejected every real payload with a 422 — which reached
+    the member as "your earlier conversations could not be carried over". The store
+    only reads them as display timestamps, so both forms are normalised to a string.
+    """
+
+    id: str = Field(min_length=1)
+    title: str = ""
+    created_at: str | int | float | None = Field(default=None, alias="createdAt")
+    updated_at: str | int | float | None = Field(default=None, alias="updatedAt")
+    turns: list[LegacyTurnRequest] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        populate_by_name=True, json_schema_serialization_defaults_required=True
+    )
+
+    @field_validator("created_at", "updated_at", mode="after")
+    @classmethod
+    def _timestamp_text(cls, value: str | int | float | None) -> str | None:
+        """A numeric timestamp as an ISO string; a string is kept as it is."""
+        if value is None or isinstance(value, str):
+            return value
+        try:
+            return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+
+
+class AskChatImportRequest(ApiModel):
+    """The browser's legacy sessions, imported once (FR-033).
+
+    The list is bounded rather than unbounded: an import is one write per stored
+    turn, so a payload past the bound is a 400 naming it instead of a long write.
+    An empty list is accepted and creates nothing, which is what a member with
+    nothing to import produces.
+    """
+
+    sessions: list[LegacySessionRequest] = Field(default_factory=list, max_length=200)
+
+
+class AskChatImportResponse(ApiModel):
+    """What the import created and what it skipped, so the client can say so."""
+
+    threads_created: int
+    turns_created: int
+    turns_skipped: int

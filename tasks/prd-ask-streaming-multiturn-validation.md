@@ -139,3 +139,176 @@ Next step: **`create-story`** for ASKCHAT-001, one file under
 `tasks/stories-ask-chat/` with a `*-validation.md` sibling. ASKCHAT-002 must not
 start until the ASK- minimum-relevance work is on the branch.
 
+
+## Fifth pass: after implementation (2026-11-15)
+
+Validated again after ASKCHAT-001 … ASKCHAT-010 were implemented and committed on
+`feat/ask-chat-streaming`, and after a defect found on the deployed stack was
+fixed (`3b5d24f`). This pass exists because the fourth validated a *plan*: it
+compared the PRD against the tree the plan was written for, not against the code
+the plan produced. Fifteen places had drifted, and two behaviours the fourth pass
+inherited as "current" were wrong for a product and are now settled.
+
+| Dimension | Status | Notes |
+|-----------|--------|-------|
+| Completeness | Green | D-4a added (a provider that refuses the forced tool step, with the measurement that settled it); "Corrections after implementation" added as the index of every plan/code divergence; "Open questions" now records the two inherited behaviours as settled rather than open. |
+| Consistency | Green | D-5's column list matches the schema including `legacy_session_id` and names the marker table the idempotent delete needs; FR-002's grammar matches what `ask_chat_turn.run_turn` emits; FR-010 states the delete and rename rules the code enforces. |
+| Testability | Green | FR-005 now names the exact wire shape (`reasoning` disabled on the forced step, `num_retries=0`) and the two recoveries; FR-016 names the cutoff and the absent verdict; FR-018 and FR-020 name the export exclusion and the `ERROR` trace state. Each is observed by a test that exists. |
+| Traceability | Green | D-4a is cited from FR-005, R-2 and ASKCHAT-003; FR-010's delete and rename rules are cited from ASKCHAT-001; no FR lost a goal link. |
+| Feasibility | Green | The Amber of the fourth pass is resolved by measurement rather than by argument: the provider's behaviour is now known and worked around, and the workaround is tested against a socket. The one remaining unmeasured item is whether a stopped turn's spend stops upstream, which ASKCHAT-011's runbook still asks an operator to record. |
+| Security & privacy | Green | FR-010's 404 for a thread that is not the member's is unchanged, so the idempotent delete does not become a probe; a failed turn's answerless interaction is excluded from the export, so a failure cannot create a dev question. |
+
+### Blockers
+
+None. The deployed defect this pass documents — every turn failing at step 0 —
+was a code defect, is fixed in `3b5d24f`, and is now a risk that **occurred** (R-2)
+with its mitigation stated as the code that shipped.
+
+### Should-fix (closed in this pass)
+
+1. **The PRD described a plan, and fifteen details had drifted from the code.**
+   The "Corrections after implementation" table lists all fifteen with where each
+   is now recorded; the story files were corrected in the same commit series.
+2. **Two inherited behaviours were documented as open decisions when both had a
+   clearly better answer.** A retried delete returning 404 reports a failure for a
+   request that succeeded; a rename bound measured on the raw string refuses a valid
+   120-character name that arrived with whitespace. Both are now settled, implemented,
+   and tested — a 204 for the owner's already-deleted thread with a marker row
+   distinguishing it from "never yours", and a bound measured after trimming in both
+   the route and the store.
+3. **R-2 asserted a provider behaviour that turned out to be false.** It now records
+   the measurement and the fix rather than the assumption.
+
+### Nice-to-have
+
+1. The delete-marker table (`ask_chat_deleted_threads`) is a small piece of state
+   the plan did not anticipate. It is the minimum that makes "already deleted by
+   this member" distinguishable from "never this member's" after the row is gone;
+   an alternative is an `owners` tombstone keyed differently, which would be the
+   same idea with a worse name.
+2. `docs/ask-chat-verification.md` is still `NOT RUN`. Its step 8 now also has a
+   reason to be run: it is where the provider's live `tool_choice` behaviour is
+   confirmed rather than assumed.
+
+## Verdict
+
+**Pass.** No blocker, no open question, and the three should-fix items are closed
+in this pass. Feasibility moves to Green because the one behaviour that was
+asserted from documentation is now measured and handled in code.
+
+## Sixth pass: `tool_choice` becomes auto (2026-11-16)
+
+Validated after the product owner replaced the forced-tool rule (**D-4b**) and after
+a second live defect was found in the same area (a tool call streamed as many
+deltas). Both were confirmed on the deployed stack, not in review.
+
+| Dimension | Status | Notes |
+|-----------|--------|-------|
+| Completeness | Green | D-4b added with the four-cell verdict table and the reason the rule changed; D-4a marked partly superseded; the correction table grows to seventeen rows; FR-005 and FR-009 rewritten around "the model decides, the server never claims". |
+| Consistency | Green | D-3 no longer says the enum is never widened — it says the one widening, `not_searched`, and why the three landed values cannot express it. FR-016's "a turn that never searched carries none" became `not_searched`, because carrying none is no longer a state the product has. |
+| Testability | Green | FR-005 names `auto`/`none` and the recovery; FR-009 names the four-cell rule and the badge copy; FR-002 and FR-005 require one assembled `tool-input-available` per call. Each has a test, including the fragmented-delta fixture that the suite previously lacked. |
+| Traceability | Green | D-4b is cited from FR-005, FR-009, R-2 and ASKCHAT-003/008; no FR lost a goal link. |
+| Feasibility | Green | The measured provider behaviour is unchanged; what changed is that the product no longer sends the request shape that provider refuses. |
+| Security & privacy | Green | Unaffected: no new route, no new credential, no change to per-owner scoping. |
+
+### Blockers
+
+One was found again, and it is the more interesting of the two: **the test suite
+could not have caught the fragmented-delta bug**, because every fixture sent a whole
+tool call in a single chunk. The fix is not only in the loop but in the fixture —
+AC 19(e) of ASKCHAT-003 now reproduces the provider's real stream shape.
+
+### Should-fix (applied)
+
+1. D-4a's first bullet (thinking disabled on the forced step) is now dead. Rather
+   than deleting the decision, it is marked superseded by D-4b and the unused flag
+   was removed from the code, so a reader can see what was tried and why it went.
+2. `not_searched` is a widening of a landed enum, which the PRD previously forbade
+   outright. D-3 now states the exception and its cost (a guarded one-time rebuild
+   of the `grounding` CHECK) instead of quietly contradicting itself.
+
+### Nice-to-have
+
+1. The `not_searched` rate is a useful prompt-quality signal and is recorded as a
+   Success Metric; a rise on real questions means the prompt needs work, not that
+   the rule is wrong.
+
+## Verdict
+
+**Pass.** No blocker, no open question; the two should-fix items are closed in this
+pass.
+
+## Seventh pass: three live findings (2026-11-16)
+
+Validated after `c755c67` ran on the deployment end to end — seven of seven real
+questions searched and grounded, traces and spans correct — and live testing found
+three defects in the edges around that success.
+
+| Dimension | Status | Notes |
+|-----------|--------|-------|
+| Completeness | Green | FR-027 now defines the cap as individual searches with its refuse path; FR-009 states the order the verdict is decided in; FR-014 states what a cancelled turn keeps. Correction table to twenty rows. |
+| Consistency | Green | The three FRs now agree with D-4b: the model decides *whether* to search, the cap decides *how many*, and the verdict is computed in the order of the facts. No FR claims a step-level cap. |
+| Testability | Green | Each fix names its observation, and each has an integration test that was mutation-checked: removing the per-call check lets six searches run, restoring the old verdict order labels a thanks `no_relevant_sources`, and dropping the live wiring loses the cancelled turn's query. |
+| Traceability | Green | No FR changed owners; the three fixes stay inside ASKCHAT-003, 004 and 008. |
+| Feasibility | Green | Unchanged. |
+| Security & privacy | Green | Unchanged. The cap being enforced is itself a denial-of-service bound, which is why it belongs in NFR-3's envelope rather than only in D-8's numbers. |
+
+### Blockers
+
+All three were found on a deployment, not in review, and two of the three were
+edge cases around correct behaviour rather than failures: the turn answered, the
+badge was simply wrong about *why*. That is the finding worth carrying forward —
+the suite tested that a search happens and that an answer is grounded, but not that
+the verdict explains itself correctly in every path.
+
+### Should-fix (applied)
+
+1. The cap's unit was never stated. "At most `ASK_CHAT_MAX_TOOL_CALLS` calls per
+   turn" reads as a per-step budget when a model can issue several calls in one
+   step; FR-027 now says *searches across the turn* and names the refuse path.
+2. A cancelled turn's verdict is now computed from the evidence rather than from
+   the unfinished answer, so "stopped mid-sentence" cannot read as "the search found
+   nothing".
+
+## Verdict
+
+**Pass.** No blocker, no open question.
+
+## Eighth pass: a browser check on the deployment (2026-11-16)
+
+Validated after an operator checked `/chat` in a browser on `333870c`. The
+server-side checks all passed — seven of seven questions searched, grounded, and
+traced correctly — and the browser found six UI defects around that success.
+
+| Dimension | Status | Notes |
+|-----------|--------|-------|
+| Completeness | Green | D-10's badge table grows a third row for a reuse answer; FR-009 states it; FR-033 accepts the payload the retired page actually wrote; the correction table reaches twenty-six rows. |
+| Consistency | Green | The badge's six rendered states now each describe a distinct fact, and none of them borrows another's label. FR-014's "keeps the text" now has a client half: the page rebuilds from the store after a stop. |
+| Testability | Green | Each fix has a test that fails without it, mutation-checked: the title row, the older answer's citation control, the numeric-timestamp import, and the empty text group. |
+| Traceability | Green | No FR changed owner. |
+| Feasibility | Green | Unchanged. |
+| Security & privacy | Green | Unchanged; the import still checks ownership. |
+
+### Blockers
+
+None in the server. All six were client-side or documentation, and the pattern is
+worth recording: **the suite proved that the server did the right thing and never
+asked what the page showed**. A stopped turn's answer was stored correctly and
+disappeared from the screen; a grounded reuse answer was stored correctly and was
+badged as a defect; a citation was validated correctly and rendered as a glyph.
+
+### Should-fix (applied)
+
+1. **The badge's "Partly grounded" carried two meanings.** It now covers only the
+   searched case, and a reuse answer gets **Reused earlier evidence**. The
+   discriminator needed no new server field.
+2. **The runbook named an API path as a page.** `/admin/interactions` is the History
+   page's API; `/history` is the page. Corrected in the runbook, which is the only
+   document that named it as something to click.
+3. **The import's timestamp type was narrower than the payload it exists to
+   read.** It is the clearest of the six: the feature could not have worked from a
+   browser, and the failure was reported as a sentence with no cause.
+
+## Verdict
+
+**Pass.** No blocker, no open question.

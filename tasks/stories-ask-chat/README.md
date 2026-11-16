@@ -2,7 +2,10 @@
 
 Stories for `tasks/prd-ask-streaming-multiturn.md`, produced with the `create-story` skill and reviewed with the
 `validate-story` skill from `https://github.com/Mittelstand-Zukunftslab/awesome-skills` (the repository's closest
-available names; there is no `create-stories` or `validate-stories`, so one file per story is the unit either way).
+available names; there is no `create-stories` or `validate-stories` upstream — a `404` — so the singular skills are the
+real ones and one file per story is their unit either way). The PRD itself was drafted and validated with `create-prd`
+and `validate-prd` from the same repository, whose default `docs/prd.md` and `docs/prd-validation.md` paths are
+overridden to `tasks/prd-ask-streaming-multiturn.md` and `tasks/prd-ask-streaming-multiturn-validation.md`.
 
 Skill adaptations, stated once here so the files do not need to repeat them:
 
@@ -31,26 +34,43 @@ Hermes chat already speaks.
 
 ## Order
 
-Stories are implemented one at a time, on `feat/hermes-optimizer`, each built, tested and committed before the next
-starts. The order below is a topological sort of the dependencies; there are no cycles.
+Stories are implemented one at a time, each built, tested and committed before the next starts. They were built on
+`feat/ask-chat-streaming` (not `feat/hermes-optimizer`, so a review could be a branch rather than a moving target). The
+order below is a topological sort of the dependencies; there are no cycles.
 
-| # | Id | Title | Depends on |
-| :--- | :--- | :--- | :--- |
-| 1 | ASKCHAT-001 | Keep conversations on the server, private to their owner | — |
-| 2 | ASKCHAT-002 | Give the model one read-only tool over the champion index | ASK-001, ASK-002 (landed) |
-| 3 | ASKCHAT-003 | Stream the answer as the AI SDK UI message stream | ASKCHAT-001, 002 |
-| 4 | ASKCHAT-004 | Stop, resume, regenerate, and fail honestly | ASKCHAT-003 |
-| 5 | ASKCHAT-005 | Bound one member and one deployment, and plumb every bound | ASKCHAT-003, 004 |
-| 6 | ASKCHAT-006 | One typed web data layer and one Chat per thread | ASKCHAT-001 … 005 |
-| 7 | ASKCHAT-007 | Make the Ask page a streaming, stoppable conversation | ASKCHAT-006 |
-| 8 | ASKCHAT-008 | Show the evidence, follow its citations, and say how grounded it is | ASKCHAT-007, 003 |
-| 9 | ASKCHAT-009 | Bring the browser's existing conversations across, once | ASKCHAT-001, 006 |
-| 10 | ASKCHAT-010 | Trace the tool calls and export the standalone question | ASKCHAT-003, 004 |
-| 11 | ASKCHAT-011 | Prove it on the deployed stack | ASKCHAT-001 … 010, a deployment |
+| # | Id | Title | Depends on | Commit |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | ASKCHAT-001 | Keep conversations on the server, private to their owner | — | `ff9434e` |
+| 2 | ASKCHAT-002 | Give the model one read-only tool over the champion index | ASK-001, ASK-002 (landed) | `033e834` |
+| 3 | ASKCHAT-003 | Stream the answer as the AI SDK UI message stream | ASKCHAT-001, 002 | `09cd26f` |
+| 4 | ASKCHAT-004 | Stop, resume, regenerate, and fail honestly | ASKCHAT-003 | `98eddf0` |
+| 5 | ASKCHAT-005 | Bound one member and one deployment, and plumb every bound | ASKCHAT-003, 004 | `289974a` |
+| 6 | ASKCHAT-006 | One typed web data layer and one Chat per thread | ASKCHAT-001 … 005 | `206e36c` |
+| 7 | ASKCHAT-007 | Make the Ask page a streaming, stoppable conversation | ASKCHAT-006 | `d10c656` |
+| 8 | ASKCHAT-008 | Show the evidence, follow its citations, and say how grounded it is | ASKCHAT-007, 003 | `838fdbf` |
+| 9 | ASKCHAT-009 | Bring the browser's existing conversations across, once | ASKCHAT-001, 006 | `2fb98d5` |
+| 10 | ASKCHAT-010 | Trace the tool calls and export the standalone question | ASKCHAT-003, 004 | `7368a7b` |
+| 11 | ASKCHAT-011 | Prove it on the deployed stack (operator runbook) | ASKCHAT-001 … 010, a deployment | `ea90987` (prepared, not run) |
+
+**Every story above is implemented and its tests are green.** ASKCHAT-011 is not code: `docs/ask-chat-verification.md`
+is a runbook an operator executes, and every result in it reads `NOT RUN`.
+
+Three commits after the series fix defects the deployed stack exposed in ASKCHAT-003:
+
+- `3b5d24f` — OpenRouter routed `LLM_MODEL` to a provider that refuses
+  `tool_choice: "required"` while its reasoning mode is on, so **every** Ask turn failed at step 0. It also fixed a
+  failed turn misreporting its cutoff, its grounding, its trace state, and its place in the feedback export.
+- `cadf518` — the documentation pass that made the PRD and these stories describe what was built.
+- the `tool_choice: auto` revision — no step forces a tool call any more. The system prompt steers when to search, a
+  turn that answers without searching is the new `not_searched` grounding state and is never Grounded, and a tool call
+  streamed as many deltas is assembled into one call rather than read as several.
+
+The PRD's D-4a and D-4b record both measurements; each story's `-validation.md` records what it corrected, including the
+fixtures that let the second defect through.
 
 ASKCHAT-009 is the only Should story and is ordered ninth rather than last because it depends on the client layer, not
 on tracing. If it is cut, the fallback is in the PRD's D-5: delete the legacy keys with a one-time notice, so no member
-is left on a store the server cannot see. ASKCHAT-011 is a Chore and an operator session; a cloud agent cannot run it.
+is left on a store the server cannot see.
 
 ## Fixed decisions (do not re-open in a story)
 
@@ -114,3 +134,21 @@ are the repository's standard ones:
 uv run --env-file .env pytest -v -m "not network and not e2e"
 cd web && bun run typecheck && bun run lint && bun run test && bun run build
 ```
+
+## Live findings after deployment
+
+`c755c67` ran end to end on the deployment: seven of seven real questions searched,
+grounded with citations, with correct traces and spans. Testing around that success
+found four more defects, each fixed and covered by an integration test that was
+mutation-checked:
+
+| # | Symptom | Fixed in |
+| :--- | :--- | :--- |
+| 1 | Every turn failed at step 0: the provider refused a forced tool choice | `3b5d24f`, then D-4b removed the forced step |
+| 2 | One tool call streamed as ~10 deltas was read as ~10 calls | the `tool_choice: auto` revision |
+| 3 | `ASK_CHAT_MAX_TOOL_CALLS=3` allowed 5 searches, because the cap was per step | the cap revision |
+| 4 | "Thanks!" in an answered thread showed **Not found in the documents** | the cap revision |
+| 5 | A cancelled turn kept its passages but lost its query and verdict | the cap revision |
+
+Every one of them was invisible to a suite that exercised the happy path, which is
+the lesson recorded in each story's `-validation.md`.

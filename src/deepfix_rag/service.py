@@ -16,6 +16,22 @@ from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.config.settings import LOGGER
 from deepfix_rag.pipeline import RAGResult, RAGWorkflow, RetrievalResult
 
+# The sentence a caller shows while no index is serving. It lives here rather
+# than in a route module so the retrieval routes and the Ask chat's tool report
+# one sentence, and so a domain module never imports from the HTTP layer.
+INDEX_PREPARING = "The index is being prepared. Try again in a minute."
+
+
+def displayed_limit(config: RAGConfig, maximum: int) -> int:
+    """How many passages to show: retrieval depth, or rerank depth, then the display cap.
+
+    This is the product's one answer to "how many passages does a member see", so
+    ``POST /retrieval``, ``POST /ask``, and the Ask chat's ``search_documents``
+    tool all read it here rather than each computing a depth of its own.
+    """
+    depth = config.rerank.top_n if config.rerank.enabled else config.retrieval.top_k
+    return max(0, min(depth, maximum))
+
 
 class QueryService:
     """Keep a built index in memory and serve retrieval and answer requests from it.

@@ -18,6 +18,9 @@ from deepfix_rag.api.routes import (
     admin_chat as admin_chat_routes,
 )
 from deepfix_rag.api.routes import (
+    ask_chat as ask_chat_routes,
+)
+from deepfix_rag.api.routes import (
     documents,
     feedback,
     health,
@@ -26,6 +29,7 @@ from deepfix_rag.api.routes import (
     optimization,
     retrieval,
 )
+from deepfix_rag.ask_chat import fail_interrupted_ask_turns, init_ask_chat
 from deepfix_rag.config.settings import LOGGER, Settings
 from deepfix_rag.config.settings import settings as default_settings
 from deepfix_rag.documents import MAX_UPLOAD_BYTES, init_documents, prepare_workspace
@@ -103,6 +107,7 @@ def create_app(
         init_documents(app.state.settings.product_db_path)
         init_optimization(app.state.settings.product_db_path)
         init_admin_chat(app.state.settings.product_db_path)
+        init_ask_chat(app.state.settings.product_db_path)
         prepare_workspace(app.state.settings.workspace_dir)
         coordinator = IndexCoordinator(
             app.state.settings.workspace_dir,
@@ -121,6 +126,9 @@ def create_app(
         # A turn left running by the restart just ended is settled before the
         # first request can resume it (NFR-1). A chat turn never blocks a run.
         fail_interrupted_chat_turns(app.state.settings.product_db_path)
+        # The same rule for a member's answer: a turn the restart cut short is
+        # settled before the first request can load the thread (FR-017).
+        fail_interrupted_ask_turns(app.state.settings.product_db_path)
         worker = FeedbackWorker(app.state.settings.product_db_path)
         app.state.feedback = worker
         worker.start()
@@ -180,6 +188,7 @@ def create_app(
     app.include_router(history.router)
     app.include_router(optimization.router)
     app.include_router(admin_chat_routes.router)
+    app.include_router(ask_chat_routes.router)
     for route in app.routes:
         if isinstance(route, APIRoute):
             route.responses.pop(422, None)

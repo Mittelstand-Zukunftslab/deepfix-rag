@@ -40,3 +40,26 @@ Fixed by rewording AC 4, AC 5 and AC 11 to say the tool **reports** the floor's 
 - **NFR-4** — AC 13: read-only, no path to `configs/champion.yaml`, `indexes/current`, or holdout. This is where FR-023 is easiest to break, because the tool is the component closest to the index.
 - **NFR-3** — AC 7, AC 6: the depth is bounded, so a tool call cannot hand the model 50 passages and blow the prompt budget.
 - **NFR-1** — AC 3: the lease is released in a `finally`, so a failed tool call cannot pin a build that is being replaced.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`033e834`)
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 7's depth came from `displayed_limit` "in `api/routes/retrieval.py`" | The helper lives in `service.py`; the note says so | A domain module importing from a route module is the layering violation the repository forbids. The function moved rather than being imported across the boundary |
+| 2 | AC 2 said the tool "refuses" a bad `query` without saying how | It raises `ToolInputError`, and AC 2 says the loop turns that into a retryable model error | The distinction matters: raising into the turn would fail a turn the model could correct |
+| 3 | AC 6's "near 0.03" was an assertion from a measurement nobody in this repository had reproduced | Pinned to **0.033** on the test corpus, measured when a mutation re-applied the floor and emptied the tool | A number that came from elsewhere is not evidence; this one was produced here |
+
+### Blockers
+
+None. The parity test was mutation-checked: adding a floor comparison inside the
+tool makes it fail, which is the property FR-024 exists for.
+
+### Nice-to-have
+
+1. `max_score` is the highest surviving passage's score, which is only meaningful
+   when the floor applied (a rerank score). With rerank off it is a fusion score
+   and is not comparable across configs; the trace records it either way, and the
+   grounding part reports the configured cutoff beside it so a reader can tell.

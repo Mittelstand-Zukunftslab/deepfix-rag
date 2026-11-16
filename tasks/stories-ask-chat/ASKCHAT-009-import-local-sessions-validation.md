@@ -39,3 +39,40 @@ None. The outcome is single — a member's existing conversations arrive once an
 ## Note for `check-story-size`, not a finding here
 
 Eleven acceptance criteria, one route and one client effect — comfortably within a single session. Nothing to split.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`2fb98d5`)
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 1's payload was camelCase throughout (`interactionId`, `createdAt`, `turns`) | AC 1 states the snake_case body and that camelCase is accepted as aliases | Every other route is snake_case; a client generated from the OpenAPI schema would have sent the canonical form and the server would have ignored it. The aliases keep an older browser's payload working |
+| 2 | AC 1 did not say the payload was bounded | AC 1 states 200 sessions and a 400 past it | An import is one write per turn; an unbounded list is an unbounded write |
+| 3 | AC 4 said "idempotent per session id" without saying where that id is remembered | AC 4 names `ask_chat_threads.legacy_session_id` | Without a stored id, "the same session again" is indistinguishable from "a new session with the same turns" |
+| 4 | The original draft said the keys are deleted "after a successful import" | They are deleted whatever the outcome, with one notice on failure | A retry loop against a store the server cannot read never converges, and two divergent copies of one history is worse than one lost |
+
+### Blockers
+
+None. The ownership check in AC 2 was mutation-checked: dropping it lets a member
+attach another member's interaction to their own thread.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after a browser check found the import failing for real members
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 1 said `createdAt` is a string, without saying it must also accept a number | AC 1 accepts an ISO string **or** a millisecond epoch | The retired page wrote `Date.now()` numbers. A string-only field rejected every real payload with a 422, which the browser showed as "Your earlier conversations could not be carried over" — the API passed only because a hand-written `curl` used strings |
+
+### Blockers
+
+One: the import never worked from a real browser, and the only signal was a
+frightening sentence that named no cause.
+
+### Should-fix (applied)
+
+1. The client's error sentence stays, but it is now shown only when there was
+   something to import — a failure with nothing to carry over is a no-op and must
+   not alarm anyone.

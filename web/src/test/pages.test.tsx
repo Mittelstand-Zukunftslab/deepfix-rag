@@ -3,13 +3,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Suspense, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { AskPage, chatStorageKeys } from "@/features/chat/chat-page";
+import { AskResultView } from "@/features/chat/ask-result";
+import { AskPage } from "@/features/chat/chat-page";
 import { nextVoteAction } from "@/features/feedback/vote-actions";
 import { indexQueryOptions } from "@/features/index/index-queries";
 import { libraryQueryOptions } from "@/features/library/library-queries";
 import { LibraryPage } from "@/features/library/library-page";
 import { SearchPage } from "@/features/search/search-page";
-import { askService } from "@/services/ask-service";
 import type { IndexStatus } from "@/services/index-service";
 import type { LibraryDocument } from "@/services/library-service";
 
@@ -57,8 +57,7 @@ describe("Dashboard pages", () => {
 
   it("ask shows the answer before the passages it used", () => {
     renderWithQuery(
-      <AskPage
-        indexReady
+      <AskResultView
         askedQuery="harbor"
         answer="The harbor budget was approved."
         hits={[
@@ -73,8 +72,10 @@ describe("Dashboard pages", () => {
         ]}
       />,
     );
-    expect(screen.getByRole("textbox", { name: "Ask" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy();
+    // The result view draws the question it was given, then the answer, then the
+    // evidence; the composer is the conversation page's, tested in
+    // `ask-chat-page.test.tsx`.
+    expect(screen.getByText("harbor")).toBeTruthy();
     const answer = screen.getByText("Answer");
     const passages = screen.getByRole("heading", { name: "Passages" });
     expect(
@@ -97,23 +98,25 @@ describe("Dashboard pages", () => {
       vote: null,
     };
 
+    // A single-turn result carries no validated citations, so D-10's rule makes
+    // it Partly grounded rather than Grounded: the evidence is there and the
+    // answer's prose does not point at it.
     const grounded = renderWithQuery(
-      <AskPage
-        indexReady
+      <AskResultView
         askedQuery="harbor"
         answer="The harbor budget was approved."
         grounding="grounded"
         hits={[hit]}
       />,
     );
-    expect(screen.getByText("Grounded")).toBeTruthy();
+    expect(screen.getByText("Partly grounded")).toBeTruthy();
     expect(screen.getByText("1 passage used")).toBeTruthy();
+    expect(screen.queryByText("Grounded")).toBeNull();
     expect(screen.queryByText(/Evaluated/)).toBeNull();
     grounded.unmount();
 
     renderWithQuery(
-      <AskPage
-        indexReady
+      <AskResultView
         askedQuery='explain "rerank off"'
         answer='No explanation of "rerank off" is available.'
         grounding="declined"
@@ -121,6 +124,7 @@ describe("Dashboard pages", () => {
       />,
     );
     expect(screen.queryByText("Grounded")).toBeNull();
+    expect(screen.queryByText("Partly grounded")).toBeNull();
     expect(screen.getAllByText("Not found in the documents").length).toBeGreaterThan(0);
     expect(screen.getByText("Answer declined")).toBeTruthy();
     expect(screen.queryByText(/Evaluated/)).toBeNull();
@@ -128,8 +132,7 @@ describe("Dashboard pages", () => {
 
   it("ask shows no passages as sources when nothing met the relevance floor", () => {
     renderWithQuery(
-      <AskPage
-        indexReady
+      <AskResultView
         askedQuery="how do I turn rerank off"
         answer="Nothing in these documents matches that question."
         grounding="no_relevant_sources"
@@ -152,8 +155,7 @@ describe("Dashboard pages", () => {
 
   it("ask shows a generation error above the passages", () => {
     renderWithQuery(
-      <AskPage
-        indexReady
+      <AskResultView
         askedQuery="harbor"
         answer={null}
         error="The answer could not be generated."
@@ -268,183 +270,5 @@ describe("Dashboard pages", () => {
     expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
     renderWithQuery(<AskPage indexReady={false} />);
     expect(screen.getAllByText(message).length).toBeGreaterThan(0);
-  });
-});
-
-describe("Ask history", () => {
-  it("keeps each user's chats under their own keys and drops shared history", () => {
-    const session = (title: string) => [
-      { id: `s-${title}`, title, createdAt: 1, updatedAt: 1, turns: [] },
-    ];
-    window.localStorage.clear();
-    window.localStorage.setItem("deepfix.chat_sessions.v2", JSON.stringify(session("Shared")));
-    window.localStorage.setItem(chatStorageKeys("bea").sessions, JSON.stringify(session("Bea")));
-
-    renderWithQuery(<AskPage ownerId="ada" />);
-
-    expect(window.localStorage.getItem("deepfix.chat_sessions.v2")).toBeNull();
-    const ada = JSON.parse(window.localStorage.getItem(chatStorageKeys("ada").sessions) ?? "[]");
-    expect(ada.map((item: { title: string }) => item.title)).toEqual(["New Chat"]);
-    const bea = JSON.parse(window.localStorage.getItem(chatStorageKeys("bea").sessions) ?? "[]");
-    expect(bea.map((item: { title: string }) => item.title)).toEqual(["Bea"]);
-    expect(screen.queryByText("Bea")).toBeNull();
-    expect(screen.queryByText("Shared")).toBeNull();
-  });
-});
-
-describe("Ask pending state", () => {
-  const HIT = {
-    rank: 1,
-    doc_id: "ws_harbor",
-    document_filename: "harbor.txt",
-    text: "The harbor budget was approved.",
-    score: 0.82,
-    vote: null,
-  };
-
-  /** A promise the test resolves, so a request can be held open mid-flight. */
-  function deferred() {
-    let settle: (value: unknown) => void = () => undefined;
-    const promise = new Promise((resolve) => {
-      settle = resolve;
-    });
-    return { promise, settle };
-  }
-
-  it("keeps the thinking card and the answer in the session that asked", async () => {
-    const first = deferred();
-    const spy = vi
-      .spyOn(askService, "ask")
-      .mockImplementationOnce(() => first.promise as ReturnType<typeof askService.ask>);
-
-    // Two named sessions, so a switch is unambiguous before any title changes.
-    const keys = chatStorageKeys("ada");
-    const session = (id: string, title: string) => ({
-      id,
-      title,
-      createdAt: 1,
-      updatedAt: 1,
-      turns: [],
-    });
-    window.localStorage.clear();
-    window.localStorage.setItem(
-      keys.sessions,
-      JSON.stringify([session("alpha", "Alpha"), session("beta", "Beta")]),
-    );
-    window.localStorage.setItem(keys.active, "alpha");
-
-    renderWithQuery(<AskPage ownerId="ada" />);
-    fireEvent.click(screen.getByRole("button", { name: /History/ }));
-
-    // Ask in Alpha.
-    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
-      target: { value: "what is the harbor budget" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
-    await screen.findByText(/DeepFix is searching corpus/);
-
-    // Switch to Beta while Alpha's request is still open.
-    fireEvent.click(screen.getByText("Beta"));
-    expect(screen.queryByText(/DeepFix is searching corpus/)).toBeNull();
-    expect((screen.getByRole("textbox", { name: "Ask" }) as HTMLInputElement).disabled).toBe(false);
-
-    // Back in Alpha the card is still there and its composer is busy.
-    fireEvent.click(screen.getByText("Alpha"));
-    await screen.findByText(/DeepFix is searching corpus/);
-    expect((screen.getByRole("textbox", { name: "Ask" }) as HTMLInputElement).disabled).toBe(true);
-
-    // Land the answer while Beta is on screen.
-    fireEvent.click(screen.getByText("Beta"));
-    first.settle({
-      interaction_id: "i-1",
-      answer: "The harbor budget was approved.",
-      error: null,
-      vote: null,
-      grounding: "grounded",
-      hits: [HIT],
-    });
-    await waitFor(() => {
-      expect(screen.queryByText(/DeepFix is searching corpus/)).toBeNull();
-    });
-
-    // Beta never received Alpha's answer.
-    expect(screen.queryByText("The harbor budget was approved.")).toBeNull();
-    expect((screen.getByRole("textbox", { name: "Ask" }) as HTMLInputElement).disabled).toBe(false);
-
-    // Alpha holds it.
-    fireEvent.click(screen.getByText("Alpha"));
-    await screen.findByText("Grounded");
-    expect(screen.getAllByText("The harbor budget was approved.").length).toBeGreaterThan(0);
-
-    spy.mockRestore();
-  });
-
-  it("lets a second session ask while the first is still waiting", async () => {
-    const first = deferred();
-    const second = deferred();
-    const spy = vi
-      .spyOn(askService, "ask")
-      .mockImplementationOnce(() => first.promise as ReturnType<typeof askService.ask>)
-      .mockImplementationOnce(() => second.promise as ReturnType<typeof askService.ask>);
-
-    const keys = chatStorageKeys("ada");
-    const session = (id: string, title: string) => ({
-      id,
-      title,
-      createdAt: 1,
-      updatedAt: 1,
-      turns: [],
-    });
-    window.localStorage.clear();
-    window.localStorage.setItem(
-      keys.sessions,
-      JSON.stringify([session("alpha", "Alpha"), session("beta", "Beta")]),
-    );
-    window.localStorage.setItem(keys.active, "alpha");
-
-    renderWithQuery(<AskPage ownerId="ada" />);
-    fireEvent.click(screen.getByRole("button", { name: /History/ }));
-
-    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
-      target: { value: "alpha question" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
-    await screen.findByText(/DeepFix is searching corpus/);
-
-    // Beta is usable while Alpha is busy, and asks its own question.
-    fireEvent.click(screen.getByText("Beta"));
-    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
-      target: { value: "beta question" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
-    await waitFor(() => {
-      expect(screen.getByText("beta question")).toBeTruthy();
-    });
-
-    // Each answer lands in its own session.
-    second.settle({
-      interaction_id: "i-beta",
-      answer: "Beta answer.",
-      error: null,
-      vote: null,
-      grounding: "grounded",
-      hits: [],
-    });
-    await screen.findByText("Beta answer.");
-    expect(screen.queryByText("Alpha answer.")).toBeNull();
-
-    first.settle({
-      interaction_id: "i-alpha",
-      answer: "Alpha answer.",
-      error: null,
-      vote: null,
-      grounding: "grounded",
-      hits: [],
-    });
-    fireEvent.click(screen.getByText("Alpha"));
-    await screen.findByText("Alpha answer.");
-    expect(screen.queryByText("Beta answer.")).toBeNull();
-
-    spy.mockRestore();
   });
 });

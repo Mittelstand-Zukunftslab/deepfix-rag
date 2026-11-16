@@ -40,3 +40,43 @@ Three were found and fixed before this report was written.
 - **NFR-5** — AC 10, AC 11: D-9 means a delete keeps the feedback record and the admin history keeps showing it, stated as a consequence rather than left implicit.
 - **NFR-2** — the story adds no service; the tables are in the database the API already opens.
 - **Accessibility** — not implied: the story ships no UI. ASKCHAT-007 carries the thread list's controls.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped on `feat/ask-chat-streaming`
+  (`ff9434e` … `3b5d24f`)
+- Verdict: **Pass with actions, all applied**
+
+Re-run with `validate-story` against the code rather than the plan. Four things
+the original acceptance criteria said did not match what the implementation had
+to do, and each is corrected in the story file:
+
+| # | Was | Now | Why it changed |
+| :--- | :--- | :--- | :--- |
+| 1 | `ask_chat_threads` had six columns and AC 2 asserted exactly those | It also has `legacy_session_id`, and `ask_chat_deleted_threads` is a third table | The import needs a per-session marker to be idempotent, and the idempotent delete needs a per-thread marker to tell "already deleted by this member" from "never theirs" |
+| 2 | AC 18 required "thread, turns, and their grounding/citations" from the turn table | The turn table has no answer; the route joins `interactions` and returns each turn's stored `passages` | The answer belongs to the one `interactions` row per turn (FR-019), and a reload has no tool part to rebuild the sources panel from |
+| 3 | AC 9's delete answered 204, and a second delete was unspecified | AC 9a states the idempotent 204 for the owner and the 404 for anybody else | A client that retries a dropped response was being told a successful request failed |
+| 4 | AC 6's bound was measured on the raw title | AC 6 measures the trimmed title in the route *and* the store | A 120-character name with trailing whitespace was refused by the route and accepted by the store |
+
+### Blockers
+
+None.
+
+### Should-fix (applied)
+
+1. **AC 21's single end-to-end pass was doing too much to read.** Two further
+cases were added as AC 22, one per behaviour: the idempotent delete with its
+404 counter-cases, and the trim-then-measure rename. Each is a real integration
+test against the app and a SQLite file, and each fails if its fix is reverted —
+verified by reverting the marker row and the raw-length cap in turn.
+
+### Nice-to-have
+
+1. The delete marker table will grow with deletions and is never pruned. That is
+   deliberate: it is three short columns per deleted thread, it is what makes the
+   idempotence safe, and D-11's no-prune rule applies to it for the same reason —
+   a prune would reintroduce the ambiguity between "deleted" and "never yours".
+2. `GET /interactions/{id}` deliberately still answers 404 for another member's
+   row and for a row deleted with its thread; only the *thread* delete is
+   idempotent. If that asymmetry is ever a problem for a client, it is a product
+   decision, not this story's.

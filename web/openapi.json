@@ -1,6 +1,366 @@
 {
   "components": {
     "schemas": {
+      "AskChatCitationResponse": {
+        "description": "One ``[n]`` marker in an answer and the passage it resolved to.",
+        "properties": {
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "marker": {
+            "description": "The number inside the marker, as the member sees it.",
+            "title": "Marker",
+            "type": "integer"
+          },
+          "rank": {
+            "description": "The passage's rank in that turn's tool output.",
+            "title": "Rank",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "marker",
+          "rank",
+          "doc_id"
+        ],
+        "title": "AskChatCitationResponse",
+        "type": "object"
+      },
+      "AskChatCompletionRequest": {
+        "description": "One Ask chat turn.\n\n``messages`` carries the browser's view for the AI SDK's own bookkeeping; the\nprompt is rebuilt from the store, so the array is not trusted and only its\nlast entry's role is checked (FR-011). ``regenerate`` marks the AI SDK's\nreload trigger, which replaces the newest answered turn in place (FR-015).",
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageModel"
+            },
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "regenerate": {
+            "default": false,
+            "title": "Regenerate",
+            "type": "boolean"
+          },
+          "thread_id": {
+            "minLength": 1,
+            "title": "Thread Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "messages"
+        ],
+        "title": "AskChatCompletionRequest",
+        "type": "object"
+      },
+      "AskChatImportRequest": {
+        "description": "The browser's legacy sessions, imported once (FR-033).\n\nThe list is bounded rather than unbounded: an import is one write per stored\nturn, so a payload past the bound is a 400 naming it instead of a long write.\nAn empty list is accepted and creates nothing, which is what a member with\nnothing to import produces.",
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/LegacySessionRequest"
+            },
+            "maxItems": 200,
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "title": "AskChatImportRequest",
+        "type": "object"
+      },
+      "AskChatImportResponse": {
+        "description": "What the import created and what it skipped, so the client can say so.",
+        "properties": {
+          "threads_created": {
+            "title": "Threads Created",
+            "type": "integer"
+          },
+          "turns_created": {
+            "title": "Turns Created",
+            "type": "integer"
+          },
+          "turns_skipped": {
+            "title": "Turns Skipped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "threads_created",
+          "turns_created",
+          "turns_skipped"
+        ],
+        "title": "AskChatImportResponse",
+        "type": "object"
+      },
+      "AskChatPassageResponse": {
+        "description": "One stored passage: the hit snapshot a turn's answer was built from.\n\nThe text is the whole chunk, not the truncated copy sent to the model, so a\nreload shows what the vote records under that rank (FR-006).",
+        "properties": {
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rank",
+          "doc_id",
+          "filename",
+          "text",
+          "score",
+          "truncated"
+        ],
+        "title": "AskChatPassageResponse",
+        "type": "object"
+      },
+      "AskChatRenameRequest": {
+        "description": "A new thread title.\n\nThe bound is on the **trimmed** title, and the store is the one that applies\nit: whitespace is collapsed and stripped, and only then is the length checked\nagainst 120. That is why this field's `max_length` is a payload guard rather\nthan the rule — a title of exactly 120 characters arriving with trailing\nspaces is a valid rename, and a field that measured the raw string would\nrefuse it. `min_length` is 1 so an entirely empty body field is still a\nvalidation error; a whitespace-only title passes here and is refused by the\nstore as empty-after-trimming, which is the same 400 either way.",
+        "properties": {
+          "title": {
+            "description": "The new title. Leading and trailing whitespace is removed before the 1 to 120 character limit is applied.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "AskChatRenameRequest",
+        "type": "object"
+      },
+      "AskChatThreadDetailResponse": {
+        "description": "A thread and its turns in order, with each turn's grounding and citations.\n\nOne load is enough to draw the whole conversation, including the badges, so\na reload does not issue a request per turn (FR-010).",
+        "properties": {
+          "thread": {
+            "$ref": "#/components/schemas/AskChatThreadResponse"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/AskChatTurnResponse"
+            },
+            "title": "Turns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "thread",
+          "turns"
+        ],
+        "title": "AskChatThreadDetailResponse",
+        "type": "object"
+      },
+      "AskChatThreadResponse": {
+        "description": "One of the member's conversations.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "title",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AskChatThreadResponse",
+        "type": "object"
+      },
+      "AskChatTurnResponse": {
+        "description": "One question and the answer stored for it.\n\n``interaction_id``, ``question`` and ``answer`` are null until the turn's\n``interactions`` row exists, which is how a turn still ``running`` reports.\n``passages`` is that turn's stored hit snapshot, which is what lets a reload\nrebuild the sources panel without a second request per answer (FR-007).",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/AskChatCitationResponse"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "first_token_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Token Ms"
+          },
+          "grounding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grounding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "interaction_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The interactions row that holds this turn's question and answer.",
+            "title": "Interaction Id"
+          },
+          "passages": {
+            "items": {
+              "$ref": "#/components/schemas/AskChatPassageResponse"
+            },
+            "title": "Passages",
+            "type": "array"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "retrieval_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Query"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id",
+          "seq",
+          "status",
+          "retry_of",
+          "error",
+          "grounding",
+          "citations",
+          "passages",
+          "retrieval_query",
+          "first_token_ms",
+          "started_at",
+          "ended_at",
+          "interaction_id",
+          "question",
+          "answer"
+        ],
+        "title": "AskChatTurnResponse",
+        "type": "object"
+      },
       "AskResponse": {
         "description": "One single-turn answer and the passages it used.\n\n``grounding`` is how the corpus supports the answer: ``grounded`` when the\nanswer came from the retrieved passages, ``declined`` when the model refused\nbecause the corpus does not answer the question, and ``no_relevant_sources``\nwhen no passage passed the relevance floor and no answer was attempted. The\nUI branches on it, so it is never absent.",
         "properties": {
@@ -1197,7 +1557,8 @@
         "enum": [
           "grounded",
           "declined",
-          "no_relevant_sources"
+          "no_relevant_sources",
+          "not_searched"
         ],
         "title": "Grounding",
         "type": "string"
@@ -1601,6 +1962,101 @@
           "hits"
         ],
         "title": "InteractionReviewResponse",
+        "type": "object"
+      },
+      "LegacySessionRequest": {
+        "description": "One session from the browser's old localStorage sessions.\n\n``createdAt`` and ``updatedAt`` are accepted as **either** an ISO string or a\nmillisecond epoch number, because the retired page wrote ``Date.now()`` values\nand a strict string field rejected every real payload with a 422 — which reached\nthe member as \"your earlier conversations could not be carried over\". The store\nonly reads them as display timestamps, so both forms are normalised to a string.",
+        "properties": {
+          "createdAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Createdat"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/LegacyTurnRequest"
+            },
+            "title": "Turns",
+            "type": "array"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "LegacySessionRequest",
+        "type": "object"
+      },
+      "LegacyTurnRequest": {
+        "description": "One turn from the browser's old localStorage sessions.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "interactionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interactionid"
+          },
+          "userQuery": {
+            "default": "",
+            "title": "Userquery",
+            "type": "string"
+          }
+        },
+        "title": "LegacyTurnRequest",
         "type": "object"
       },
       "OptimizationRunResponse": {
@@ -3514,6 +3970,493 @@
         "summary": "Ask a question",
         "tags": [
           "retrieval"
+        ]
+      }
+    },
+    "/ask/chat/completions": {
+      "post": {
+        "description": "Open a turn, then stream the model's answer as AI SDK UI message parts.\n\nA failure discovered before the first byte is a JSON status with a sentence:\nanother member's thread is 404, a last message that is not the member's is\n400, and no serving index is 503 with the sentence the Search page shows.\nOnce the stream has started, the only honest failure is an ``error`` part.",
+        "operationId": "ask_chat_completion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskChatCompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The AI SDK UI message stream for one turn."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request conflicts with the current state."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests; wait and try again."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "An upstream dependency answered with an error."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A required dependency is not ready."
+          }
+        },
+        "summary": "Ask one question and stream the answer",
+        "tags": [
+          "ask-chat"
+        ]
+      }
+    },
+    "/ask/chat/threads": {
+      "get": {
+        "description": "The member's threads, newest first, capped at 50 with no pagination (D-11).\n\nThe cap is display-only: a thread past it is not hidden, expired, or deleted,\nand ``GET /ask/chat/threads/{thread_id}`` still loads it.",
+        "operationId": "list_ask_chat_threads",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AskChatThreadResponse"
+                  },
+                  "title": "Response List Ask Chat Threads",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "List this member's conversations",
+        "tags": [
+          "ask-chat"
+        ]
+      },
+      "post": {
+        "description": "Open one empty thread. Its title is derived from the first question later.",
+        "operationId": "create_ask_chat_thread",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskChatThreadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "Start a new conversation",
+        "tags": [
+          "ask-chat"
+        ]
+      }
+    },
+    "/ask/chat/threads/import": {
+      "post": {
+        "description": "Bring a member's legacy localStorage sessions across, best effort (FR-033).\n\nThe caller's own interactions only: a turn whose interaction is missing or\nbelongs to somebody else is skipped and counted. The import never fabricates an\ninteraction, so it cannot create a question the optimizer would score with no\npassages behind it.",
+        "operationId": "import_ask_chat_sessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskChatImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskChatImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          }
+        },
+        "summary": "Import the browser's old conversations once",
+        "tags": [
+          "ask-chat"
+        ]
+      }
+    },
+    "/ask/chat/threads/{thread_id}": {
+      "delete": {
+        "description": "Remove the thread and its turns. The interactions and votes behind them stay (D-9).\n\nA delete is idempotent for the member who owns the thread: the second call\nanswers 204 exactly as the first did, because \"it is gone\" is the outcome the\ncaller asked for. An id that was never this member's — another member's, or one\nthat never existed — answers 404, so a delete is still not a way to probe for\nsomebody else's ids. The two are told apart by a marker row written in the same\ntransaction as the delete, not by the thread's absence.",
+        "operationId": "delete_ask_chat_thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Delete a conversation, keeping the votes it recorded",
+        "tags": [
+          "ask-chat"
+        ]
+      },
+      "get": {
+        "description": "The thread and its turns in order, each with its grounding and citations.\n\nEach turn also carries its stored passages, so a reload rebuilds the sources\npanel from the interaction snapshot instead of issuing a request per answer\n(FR-007). The texts are the full chunks, because that is what the vote's rank\nresolves to.",
+        "operationId": "get_ask_chat_thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskChatThreadDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Show one conversation with its turns",
+        "tags": [
+          "ask-chat"
+        ]
+      },
+      "patch": {
+        "description": "Rename a conversation.\n\nThe title is trimmed first and measured after: one to 120 characters once\nsurrounding whitespace is gone. A title that is empty after trimming, or\nlonger than 120 then, is a 400 and the stored title is unchanged.",
+        "operationId": "rename_ask_chat_thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskChatRenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskChatThreadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Rename a conversation",
+        "tags": [
+          "ask-chat"
+        ]
+      }
+    },
+    "/ask/chat/turns/{turn_id}/cancel": {
+      "post": {
+        "description": "Stop the model call for one of the caller's turns.\n\nStop used to be a closed socket, which is indistinguishable from a reload —\nand a reload must *not* stop the answer, or the member loses the reply they\nwere reading (FR-016). So stopping is an explicit request, and this is it:\nthe running task is cancelled, which unwinds the relay, settles the row\n``cancelled`` with the text read so far, and keeps the passages it found\n(FR-014, D-4).\n\nA turn that is not running here answers 204: it may have finished already,\nor it may be running in another worker, and neither is the caller's mistake.\nAnother member's id is 404, never 403.",
+        "operationId": "cancel_ask_chat_turn",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The turn was stopped, or had already ended."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Stop a turn that is still being written",
+        "tags": [
+          "ask-chat"
+        ]
+      }
+    },
+    "/ask/chat/turns/{turn_id}/stream": {
+      "get": {
+        "description": "Replay the stored answer, then tail the turn when it runs in this process.\n\nThis is what a reload mid-answer calls, and the reason the reply survives it:\nthe text is read from the turn's interaction and the status from the turn row,\nso a resume on another worker degrades to a replay instead of a blank stream\n(FR-016).",
+        "operationId": "resume_ask_chat_turn",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The AI SDK UI message stream, replayed and then tailed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid session."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown id."
+          }
+        },
+        "summary": "Resume an answer that is in progress or already finished",
+        "tags": [
+          "ask-chat"
         ]
       }
     },

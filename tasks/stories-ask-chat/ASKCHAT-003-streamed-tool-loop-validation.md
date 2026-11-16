@@ -41,3 +41,132 @@ This story is large: twenty acceptance criteria spanning the route, the loop, th
 - **NFR-7** — the story adds no runtime and no protocol; it speaks the one the admin chat already speaks.
 - **NFR-8** — the Notes require one structured line per turn start and terminal state, with no passage text.
 - **Accessibility** — not implied: this story ships no UI. ASKCHAT-007 and -008 carry it.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`09cd26f`) and after the deployed defect
+  was fixed (`3b5d24f`)
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 2 listed one linear part sequence | AC 2 states the per-step grammar, with two `start-step`/`finish-step` pairs for a two-step turn | `start-step`/`finish-step` bracket *model steps*. The drafted list described a turn with one step and put the tool parts outside any step |
+| 2 | AC 5 said `drop_params` came from `litellm_additional_kwargs()` per call | AC 5 says it is set once at import and the loop does not re-set it | That helper assigns the process-wide `litellm.drop_params`; calling it inside a request is a global side effect racing every other request |
+| 3 | AC 10 read history from `ask_chat_turns` | AC 10 reads turns joined to `interactions`, because the text lives there | The turn table has no question and no answer (FR-019) |
+| 4 | AC 14 implied the interaction row was written at the end | AC 14 says it is opened before the first byte and filled in afterwards | A cancelled or failed turn must be readable, and a regenerate must rewrite the same row |
+| 5 | Nothing said a provider could refuse the forced step | AC 6 disables thinking on it and AC 6a recovers from a refusal | The deployed stack failed **every** turn this way; the drafted story assumed the hint was honoured |
+| 6 | The test plan named a "local fake endpoint" without a recovery case | AC 19 names both recoveries and the exact wire body assertion | The failure was invisible to every local test because none refused the forced shape |
+
+### Blockers
+
+None outstanding. The defect itself (every turn failing at step 0) was a
+**blocker in the shipped code**, found on the deployment and fixed in `3b5d24f`
+with an integration test that reproduces the exact 400 over a socket.
+
+### Should-fix (applied)
+
+1. **The trace could not carry child spans.** D-4's "one child span per tool
+   call" is impossible with `trace_request`, which opens and closes its span
+   before the loop runs. The story now points at `tracing.turn_trace`, a context
+   manager held open for the turn.
+2. **A failed turn's trace was reported as healthy.** `turn_trace` initially
+   swallowed an exception raised by its own body, so a failed turn left a
+   `TRACESTATUS.OK` trace. It now re-raises, and FR-020 has the route mark the
+   span `ERROR`.
+
+### Nice-to-have
+
+1. A provider that refuses the *unforced* retry too is recovered by the
+   server-side search, which means the model's first real step is answering with
+   a tool result already in the conversation. That is the correct behaviour and is
+   tested, but it is worth watching in the trace: a high rate of it would mean the
+   served provider needs replacing via `LLM_MODEL`, not another workaround.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after the `tool_choice: auto` change and the fragmented-tool-call fix
+- Verdict: **Pass with actions, all applied**
+
+Two live defects forced changes to this story after it was first marked
+implemented. Both were invisible to the suite as written, which is the finding
+worth recording.
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 6 forced a tool call on the first step, with a provider-specific reasoning flag | AC 6 says every step is `auto` and only the last is `none`, with no reasoning flag | Forcing was the wrong rule: it broke on reasoning providers and made every "thanks" search. D-4b moves the decision into the system prompt |
+| 2 | `_delta_tool_calls` mapped each delta's `tool_calls` to a whole call | AC 2a requires accumulating fragments by `index` across the step, then parsing once | The deployed provider sends one call as ~10 deltas at `index: 0`; per-delta mapping produced `search_documents({})` and then an unknown-tool error |
+| 3 | AC 19's test list assumed a model that ignores `tool_choice` should trigger a server search | AC 19(b) asserts a non-searching turn is `not_searched` and is never Grounded | The old criterion described behaviour the product no longer wants: a legitimate small-talk turn must not be forced into a search |
+| 4 | AC 5's `drop_params` handling was per call | Unchanged, and still correct: `llm.py` sets it once at import | Verified again while rewriting the call |
+
+### Blockers
+
+Both defects were blockers in shipped code and are fixed. The second is the more
+instructive: **every fixture in this file sent a complete tool call in one chunk**,
+so a suite that exercised the loop end to end could not distinguish "assembles a
+call" from "treats each delta as a call". AC 19(e) is that missing fixture.
+
+### Should-fix (applied)
+
+1. The assembly uses `litellm.stream_chunk_builder`, the library's own merge for
+   exactly this shape, rather than the hand-rolled accumulator first written for
+   it. The repository's rule is to reach for the established dependency first, and
+   this is a case where the dependency is doing real work: it takes the id and name
+   from the piece that carries them and concatenates the argument fragments.
+
+### Nice-to-have
+
+1. A provider could in principle split one call across two different `index`
+   values, which would be a protocol violation. `stream_chunk_builder` would build
+   two calls and the loop would run two searches, which is harmless but wasteful.
+   Not worth defending against.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after live testing on `c755c67` found the search cap unenforced
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 8 bounded "tool calls" without saying what a call is when a step issues several | AC 8 counts **individual searches across the turn**, refuses a call past the limit, and says the refuse path returns a short tool result | Live: one question ran five searches against a cap of three. A step issued two in parallel, the cap was checked only between steps, and the step marked last still ran a search |
+| 2 | The refuse path did not exist | A call past the cap is announced, answered with a one-sentence "limit reached" result, and never run | Failing the turn would punish the member for the model's burst; the model can answer from what it has |
+| 3 | Nothing said the last step cannot run tools | AC 8 says the step after the last permitted search is sent with `tool_choice: "none"` | It was already sent that way, but only the AC makes it a promise |
+
+### Blockers
+
+One, and it is a budget defect rather than a correctness one: five searches and
+21.5 s to first text on a question the cap says should run three.
+
+### Should-fix (applied)
+
+1. The per-step call handling was rewritten so one assistant message carries every
+   call a step made, before any of them runs. Building the message per call meant a
+   parallel step described itself to the model one call at a time, which is not the
+   call set the provider produced.
+
+### Nice-to-have
+
+1. The tool result for a refused call advertises `grounding:
+   "no_relevant_sources"` with no passages. It is never stored — only real searches
+   contribute hits — but a reader of the stream sees a result that does not fit the
+   D-2 shape exactly. It is deliberately distinguishable by its `limit_reached` flag.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after a live run with reasoning off, where 4 of 7 turns searched nothing
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 2 allowed a step to write prose before it searched | AC 18a holds the first step's prose and drops it when a tool call follows | With thinking off the model opened with a refusal or role prose and sometimes stopped there. A member read a refusal the answer then contradicted, and it was stored as the answer's opening |
+| 2 | Nothing covered a first step that refused without searching | AC 18a requires the server to search on the member's own question and take one more step | That was the whole failure: a `not_searched` refusal in two seconds, from a turn that never looked |
+| 3 | A substituted answer was only stored | AC 18b requires it to be streamed too | One turn stored a 76-character fallback and streamed nothing; the page stayed blank until a reload |
+| 4 | The policy was prose under bold headings that described the assistant first | AC 18c requires the search-before-writing rule first and the search cap from the setting | The prompt's shape was imitated by the model, which introduced itself before searching |
+
+### Blockers
+
+One: the product answered 4 of 7 real questions with a refusal that never searched.
+
+### Should-fix (applied)
+
+1. Reasoning is per step. One level for the whole turn could not be right: thinking
+   off broke tool calling, and thinking on delayed the answer's first word.

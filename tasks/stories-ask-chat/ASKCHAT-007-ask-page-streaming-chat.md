@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `d10c656` on `feat/ask-chat-streaming`
 
 ## Summary
 The page reads like a conversation. Answers arrive as they are written, the send control becomes **Stop** while a turn runs, the thread list comes from the server and can be named and deleted, and a reply in flight stays in the thread that started it.
@@ -32,7 +32,11 @@ The page reads like a conversation. Answers arrive as they are written, the send
 4. Given a turn running in the active thread, when the composer renders, then the send control is a **Stop** control built with `ComposerPrimitive.Cancel`, named for a screen reader, and pressing it ends the turn.
 5. Given a finished or failed turn, when its actions render, then **Regenerate** is offered and calls the transport's reload trigger.
 6. Given a turn whose grounding is `no_relevant_sources`, when its actions render, then **Regenerate** is absent. The refusal is the answer.
-7. Given a stopped turn, when the page re-renders, then the partial answer stays visible and the composer is usable again.
+7. Given a stopped turn, when the page re-renders, then the partial answer stays visible and the composer is usable again. The page re-reads the thread after a turn ends — a stop included — and rebuilds the answer from the store, because an aborted stream leaves the answer's text part unfinished and the runtime declines to draw it. The sources the turn had already found stay on screen with it.
+7a. Given a stored answer loaded from the thread, when it renders, then its citation markers are controls, exactly as a live answer's are. Each assistant message uses the citations **its own turn** recorded, not the newest verdict's: handing every message the newest citations left an older answer's markers as raw characters.
+7b. Given a new thread, when its first turn has been stored, then the list shows the title the server derived from that question. Before this, the row stayed unnamed until a member renamed it by hand.
+7c. Given a thread with passages, when the window is narrow, then the sources panel stacks **below** the conversation at full width and the question bubble and composer stay visible and usable; when the window is wide, then it is a side column and neither it nor any card scrolls horizontally, a long filename ellipsises, and each card's score stays fully in view. At the smallest supported size — 250% zoom on a 1280×800 window, about 512×320 CSS pixels — the chat column keeps a usable height, the composer's hint and the Regenerate link are neither overlapping the **Sources** heading nor clipped at the bottom edge, and the **page scrolls to reveal the sources**: the scroll container is `AppShell`'s `<main>`, so every clip in the page must be `lg:`-scoped and the page must grow below `lg`. When it is wide, the page does not scroll at all.
+7d. Given a running turn, when the header renders, then the badge describes **that** turn: a searched turn reads Grounded, and a turn with no verdict yet shows no badge rather than the previous answer's. Given a turn the member stops, then the badge switches to **Stopped, partial answer** (or **Stopped before answering** when no word arrived) as soon as Stop is pressed — before the store has settled the row — and keeps that state after a reload, including when the turn has no stored verdict **and when an earlier turn in the thread has text**: the badge's text comes from the newest turn's stored answer, never from the newest message that happens to contain words. A **Thinking…** note is cleared the moment Stop is pressed rather than when the thread re-read returns.
 
 **The thread list**
 
@@ -44,7 +48,7 @@ The page reads like a conversation. Answers arrive as they are written, the send
 
 **What must not change**
 
-13. Given the controlled mode the Search page uses (`askedQuery` / `answer` / `hits`), when the page renders in it, then it still shows that single result exactly as before.
+13. Given the controlled mode the Search page uses (`askedQuery` / `answer` / `hits`), when it renders, then it still shows that single result exactly as before — as **`web/src/features/chat/ask-result.tsx`**, a separate component. The conversation page runs on `useAISDKRuntime` and has no runtime in that mode, so keeping both in one file would have meant either a runtime with nothing behind it or a page that could not be a conversation. AC 1's "the page runs on `useAISDKRuntime`" and this AC are both satisfied by splitting them.
 14. Given `indexReady={false}`, when the page renders, then it still shows the existing "index is being prepared" state.
 15. Given the existing Ask tests in `web/src/test/pages.test.tsx`, when they run, then they pass, with changes only where they drove a control this story replaces (the send button's behaviour, the page-level pending state).
 

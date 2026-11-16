@@ -4,7 +4,7 @@
 Feature
 
 ## Status
-Draft
+Implemented — `289974a` on `feat/ask-chat-streaming`
 
 ## Summary
 One member cannot hold the API, one deployment cannot be overrun, and every bound is visible in the three places an operator looks: `Settings`, the Compose environment, and `example.env`. There is no Ask-chat model setting: the chat resolves `LLM_MODEL`, the same value eval and `POST /ask` use.
@@ -22,7 +22,7 @@ One member cannot hold the API, one deployment cannot be overrun, and every boun
 
 **The settings**
 
-1. Given `src/deepfix_rag/config/settings.py`, when it is read, then `ASK_CHAT_MAX_TURNS_PER_WINDOW` (20), `ASK_CHAT_TURN_WINDOW_SECONDS` (300), `ASK_CHAT_MAX_CONCURRENT_TURNS` (4), `ASK_CHAT_MAX_TOOL_CALLS` (3), `ASK_CHAT_MAX_HISTORY_MESSAGES` (12), `ASK_CHAT_MAX_MESSAGE_CHARS` (4000), `ASK_CHAT_MAX_PASSAGE_CHARS` (1200), and `ASK_CHAT_TURN_TIMEOUT_SECONDS` (120) all exist with those defaults, and each has a one-line comment saying what it bounds.
+1. Given `src/deepfix_rag/config/settings.py`, when it is read, then `ASK_CHAT_MAX_TURNS_PER_WINDOW` (20), `ASK_CHAT_TURN_WINDOW_SECONDS` (300), `ASK_CHAT_MAX_CONCURRENT_TURNS` (4), `ASK_CHAT_MAX_TOOL_CALLS` (3), `ASK_CHAT_MAX_HISTORY_MESSAGES` (12), `ASK_CHAT_MAX_MESSAGE_CHARS` (4000), `ASK_CHAT_MAX_PASSAGE_CHARS` (1200), `ASK_CHAT_TURN_TIMEOUT_SECONDS` (120), `ASK_CHAT_REASONING` (`off`), `ASK_CHAT_TOOL_STEP_REASONING` (`low`), and `ASK_CHAT_MAX_OUTPUT_TOKENS` (2048) all exist with those defaults, and each has a one-line comment saying what it bounds. The last three are D-12's latency controls: how much the **answer** step may think, how much a step that may **call a tool** may think, and how many tokens one step may emit, reasoning included. The two reasoning levels are separate because the live run needed opposite settings at the two steps.
 2. Given `docker-compose.yml`, when the `backend-api` service's environment is read, then every one of those names appears with a non-empty default (`${ASK_CHAT_MAX_TOOL_CALLS:-3}` and so on), because that service has an explicit allowlist and no `env_file`, so a name that is only on `Settings` is invisible on the deployment.
 3. Given `example.env`, when it is read, then every one of those names is documented with a one-line comment. The only other change is one comment line beneath `LLM_MODEL` naming `qwen/qwen3.8-27b` as the manual tool-calling fallback — a comment, not a variable.
 
@@ -38,7 +38,7 @@ One member cannot hold the API, one deployment cannot be overrun, and every boun
 8. Given `ASK_CHAT_MAX_CONCURRENT_TURNS` turns already running across the deployment, when another member asks, then 429 with a `Retry-After`, and the sentence says the server is busy rather than blaming the member's own usage.
 9. Given a turn that runs past `ASK_CHAT_TURN_TIMEOUT_SECONDS`, when it is ended, then the stream emits an `error` part and a terminal `data-deepfix-turn` with `status: "failed"`, and the row is `failed` with an `ended_at` — never `running`.
 10. Given a message longer than `ASK_CHAT_MAX_MESSAGE_CHARS`, when it is sent, then 400 with a sentence naming the limit.
-11. Given a stored history longer than `ASK_CHAT_MAX_HISTORY_MESSAGES`, when a turn is built, then the oldest messages are trimmed rather than the request refused, and the newest `ASK_CHAT_MAX_HISTORY_MESSAGES` messages are used.
+11. Given a stored history longer than `ASK_CHAT_MAX_HISTORY_MESSAGES`, when a turn is built, then the oldest messages are trimmed rather than the request refused, and the newest `ASK_CHAT_MAX_HISTORY_MESSAGES` messages are used. The history is read from `ask_chat_turns` joined to `interactions`, because the turn table holds state and the interaction holds the text.
 
 **No new footprint**
 

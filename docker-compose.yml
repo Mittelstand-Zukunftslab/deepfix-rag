@@ -290,6 +290,23 @@ services:
       ADMIN_CHAT_STEP_READ_BYTES: ${ADMIN_CHAT_STEP_READ_BYTES:-65536}
       # Audit rows older than this many days are pruned hourly. 0 keeps them.
       ADMIN_CHAT_AUDIT_RETENTION_DAYS: ${ADMIN_CHAT_AUDIT_RETENTION_DAYS:-14}
+      # Ask chat bounds (D-8). Every value needs a non-empty default: the service
+      # has an explicit allowlist with no env_file, and a typed field with an
+      # empty value raises at startup instead of taking its default.
+      ASK_CHAT_MAX_TURNS_PER_WINDOW: ${ASK_CHAT_MAX_TURNS_PER_WINDOW:-20}
+      ASK_CHAT_TURN_WINDOW_SECONDS: ${ASK_CHAT_TURN_WINDOW_SECONDS:-300}
+      ASK_CHAT_MAX_CONCURRENT_TURNS: ${ASK_CHAT_MAX_CONCURRENT_TURNS:-4}
+      ASK_CHAT_MAX_TOOL_CALLS: ${ASK_CHAT_MAX_TOOL_CALLS:-3}
+      ASK_CHAT_MAX_HISTORY_MESSAGES: ${ASK_CHAT_MAX_HISTORY_MESSAGES:-12}
+      ASK_CHAT_MAX_MESSAGE_CHARS: ${ASK_CHAT_MAX_MESSAGE_CHARS:-4000}
+      ASK_CHAT_MAX_PASSAGE_CHARS: ${ASK_CHAT_MAX_PASSAGE_CHARS:-1200}
+      ASK_CHAT_TURN_TIMEOUT_SECONDS: ${ASK_CHAT_TURN_TIMEOUT_SECONDS:-120}
+      # Reasoning budget and output cap (D-12). "off" is the default because a
+      # reasoning model left to its provider default streams nothing but hidden
+      # thinking, which reads as a hung page.
+      ASK_CHAT_REASONING: ${ASK_CHAT_REASONING:-off}
+      ASK_CHAT_TOOL_STEP_REASONING: ${ASK_CHAT_TOOL_STEP_REASONING:-low}
+      ASK_CHAT_MAX_OUTPUT_TOKENS: ${ASK_CHAT_MAX_OUTPUT_TOKENS:-2048}
     volumes:
       - api_data:/data
     restart: unless-stopped

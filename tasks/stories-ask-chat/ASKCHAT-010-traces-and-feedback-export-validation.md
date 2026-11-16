@@ -37,3 +37,26 @@ Two were found and fixed.
 - **NFR-2** — AC 4, AC 5: a tracing failure never fails a turn, and a cancelled or failed turn still has a trace, so "the turn did nothing" is distinguishable from "the turn was not recorded".
 - **NFR-5** — AC 3: the existing traces' shape is unchanged, so no conversation text enters MLflow that did not already.
 - **NFR-8** — the trace's tags are what make a member's turn findable from an interaction id, which is the same path a vote's assessment already follows.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`7368a7b`) and after the deployed defect
+  was fixed (`3b5d24f`)
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 3 said "a new helper or an optional parent" on `trace_request` | AC 3 says the trace is a context manager, `turn_trace` | MLflow nests through the ambient context; `start_span` takes no `trace_id`. An "optional parent" argument is not expressible, and `trace_request` closes its span before the loop runs |
+| 2 | AC 5 only asked that a failed turn's trace "carries the terminal status" | AC 5 also requires the span status `ERROR`, the trace id on the interaction, and that `turn_trace` never swallows the turn's own exception | A tag is not a state: a failed turn showed as `TRACESTATUS.OK`. And `turn_trace` initially caught its body's exception, which made a turn failure look healthy |
+| 3 | Nothing said what happens to a failed turn's answerless interaction | FR-018 (PRD) and this story's export note exclude it | An empty answer reaching the dev set is a question the optimizer can never answer |
+
+### Blockers
+
+One, found in verification rather than in review: `trace_tool_call` was written
+against a `trace_id` argument `start_span` does not have, so every search span
+failed and logged. Replaced by `turn_trace` + `TurnTrace.tool_call`.
+
+### Should-fix (applied)
+
+1. The exclusion lives in `feedback._latest_events`, the one read both
+   `build_questions` and `_answer_downvotes` use, rather than in each of them.

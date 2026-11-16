@@ -37,3 +37,93 @@ Two were found and fixed.
 - **NFR-2** — AC 1, AC 5, AC 16: the disconnect is a normal end, logged once, no traceback; no row stays `running`.
 - **NFR-4** — AC 8: another member's turn id is 404 on the resume route, which is the route a naive implementation forgets to scope.
 - **NFR-1** — AC 6: the replayed text appears exactly once, which is the correctness property that makes resume usable rather than merely present.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the story shipped (`98eddf0`) and after the deployed defect
+  was fixed (`3b5d24f`)
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 13/14 left the target set implicit | AC 13 states 409 for a running newest turn, and that `failed` is replaceable | FR-018 offers regenerate for a failed answer, so "only answered turns" would have contradicted it; and a running turn must not be replaced under itself |
+| 2 | The abort was tested through `TestClient` | AC 18a requires a real `uvicorn` on a loopback port with a real closed connection | `TestClient` cannot abort mid-stream, so the `GeneratorExit` path — the one that actually runs — was untested. This is where the shipped bug lived |
+| 3 | Nothing said what a regenerate did to the interaction row | AC 12 says it rewrites the existing row | Inserting a second row breaks the one-row-per-turn rule the thread's join depends on |
+| 4 | A failed turn's reporting was unspecified | AC 18 adds the cutoff, the absent verdict, the `ERROR` trace, and the empty export | A resumed failure claimed `no_relevant_sources` and `cutoff: 0.0`, and its answerless interaction would have been filed as a dev question |
+
+### Blockers
+
+One, found on the deployment rather than in review: the cancelled path left the
+row `running`, because the relay caught `Exception` and a disconnect raises
+`GeneratorExit`. Fixed in the story's own implementation once the real-socket test
+existed; that test is now AC 18a.
+
+### Should-fix (applied)
+
+1. **The `finally` is the only writer of the terminal state.** Stated in the
+   Notes so a later edit cannot reintroduce a second settle path.
+
+### Nice-to-have
+
+1. A stopped turn's partial text is stored per delta, which is one `UPDATE` per
+   token. On the deployment that is a few hundred small writes per answer; it is
+   acceptable at this scale and is what makes a resume exact. Batching would trade
+   that exactness for write volume, and is not worth it until a measurement says so.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after the `tool_choice: auto` change
+- Verdict: **Pass**
+
+One consequence to record, because it changes what a stopped or failed turn can
+look like. With no forced search, a turn that answers without searching is a
+normal outcome rather than a bug, so `cancelled` and `failed` are no longer the
+only statuses that can follow a turn which never retrieved. AC 18's failure cases
+still hold: a failed turn reports the configured cutoff, claims no verdict it did
+not reach, is marked `ERROR` in its trace, and leaves no answerless interaction in
+the export.
+
+### Blockers
+
+None.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after live testing found a cancelled turn losing its query and verdict
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 2 kept the partial text and the hits only | AC 2 also requires `retrieval_query` and a `grounding` verdict when the turn had searched | A stopped turn that had found passages was indistinguishable from one that never retrieved, so a reload showed no verdict and a later vote had no query to file against |
+
+### Blockers
+
+None. This was the minor of the three live findings.
+
+### Should-fix (applied)
+
+1. The verdict for a turn stopped mid-answer is `grounded` when its search returned
+   passages, not `no_relevant_sources`. Classifying the unfinished answer's empty
+   string would have claimed the search found nothing, which is the opposite of what
+   the member had already been shown.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after a browser check reloaded the page mid-answer and lost the reply
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 1 made a closed socket the Stop signal | AC 1 requires an explicit `POST /ask/chat/turns/{turn_id}/cancel`; a closed socket only ends the reader | A reload closes the socket too, so the two were indistinguishable — and a reload must let the answer finish. The relay was cancelled by Starlette's close, so the row settled `cancelled` with whatever text existed and the member came back to a question with no answer |
+| 2 | AC 6 let a resume tail a live turn from "now" | AC 6 requires replaying the frames the live turn has already published, then tailing | Tailing alone dropped every delta published before the reader attached; replaying the stored text as well sent the opening twice. Taking the backlog and the queue under one lock is what makes it gapless |
+| 3 | Nothing said where a terminal frame comes from when the task is cancelled | A cancelled task publishes its terminal frames from a `finally` | A coroutine cannot run code after the `await` it was cancelled at, so the closing frames were never sent and a subscriber waited forever for a turn that had already stopped |
+
+### Blockers
+
+One: the reply was unrecoverable after a reload, which is data loss from the member's
+point of view.
+
+### Should-fix (applied)
+
+1. The live registry keeps every published frame, so a resume is a replay plus a tail
+   rather than a guess about what the store has.

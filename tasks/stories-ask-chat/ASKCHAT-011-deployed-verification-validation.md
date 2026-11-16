@@ -40,3 +40,67 @@ None. The outcome is single — one recorded operator session that settles what 
 ## Note for `check-story-size`, not a finding here
 
 Thirteen acceptance criteria, all observations to record rather than code to write. As an operator session it is a single sitting with a laptop and a deployment.
+
+## Post-implementation validation (2026-11-15)
+
+- Validated: after the runbook was written (`ea90987`)
+- Verdict: **Pass as a prepared runbook; not executed**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | The story was listed among the build stories, as if it ended in code | Its Type says **operator runbook** and its Status says prepared, not run | A cloud agent has no deployment, no browser against it, and no provider account. Pretending otherwise would produce a document full of claims nobody made |
+| 2 | AC 10 asked whether the model honours `tool_choice: "required"` | Kept, and partly answered ahead of the session: on 2026-11-15 it did **not**, which is D-4a | The measurement that fixed the deployed defect also closed half of this AC; the runbook still records it on the real stack |
+| 3 | Nothing linked the runbook to the fix | Step 8 now names the provider behaviour as the thing to confirm live | The workaround shipped on a measurement taken outside a browser; a second, operator-run confirmation is cheap |
+
+### Blockers
+
+None. Every step in `docs/ask-chat-verification.md` records a command or action
+and a result field reading `NOT RUN`, so nothing in it can be mistaken for a
+passing result.
+
+### Should-fix (applied)
+
+1. `docs/README.md` lists the runbook, so it is discoverable from the docs index
+   rather than only from the story folder.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after an operator followed the runbook on the deployed stack
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | Step 10's History row said `/admin/interactions` | It says `/history`, and notes that `/admin/interactions` is that page's **API** | The operator typed the API path in the address bar and got a 404. The route exists; there is no browser page there, and the runbook named the wrong one |
+
+### Blockers
+
+None. The page it meant exists and works; only the instruction was wrong.
+
+### Nice-to-have
+
+1. The browser check that found this also found six UI defects the runbook's steps
+   do not cover — a stopped answer vanishing, citation glyphs, a mislabelled badge,
+   a failed import in the browser, and untitled rows. Those are now their own fixes
+   and story passes; a later runbook revision could fold a browser-visual pass into
+   step 3's stop check rather than leaving it to chance.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after a browser recheck on the deployed stack found two remaining defects
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 6 said a reload "resumes or shows its stored text", which accepted a cancelled turn | AC 6 requires the answer to continue, the row to settle `completed`, and the badge to describe that turn | The reload was closing the socket, the server was treating that as Stop, and the answer was lost. A runbook row that accepts "stored text" would have passed the broken behaviour |
+| 2 | No step looked at the layout | Step 6a checks a narrow width and the sources panel's own box | The panel overlapped the composer at about 630px and scrolled sideways at desktop width. Neither is reachable from a jsdom test, so no automated check could have caught either |
+
+### Blockers
+
+Two on the second pass: a reload lost the reply, and the panel covered the composer
+at a narrow width.
+
+### Nice-to-have
+
+1. Both defects were visual or lifecycle facts that only a browser shows. A later
+   revision could make the narrow-width check part of every deployed verification,
+   not only this story's.

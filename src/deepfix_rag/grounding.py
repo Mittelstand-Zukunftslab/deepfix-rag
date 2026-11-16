@@ -24,6 +24,11 @@ class Grounding(StrEnum):
     GROUNDED = "grounded"
     DECLINED = "declined"
     NO_RELEVANT_SOURCES = "no_relevant_sources"
+    # The turn answered without searching at all — a thanks, a small talk reply,
+    # or a rework of the assistant's own previous answer from content already in
+    # the thread. It is not "not found": nothing was looked for, so there is
+    # nothing to have failed to find. Never rendered as grounded.
+    NOT_SEARCHED = "not_searched"
 
 
 DEFLECTION_PHRASES = (
@@ -140,15 +145,25 @@ def is_deflection(answer: str) -> bool:
     return any(pattern.search(normalized) for pattern in DEFLECTION_PATTERNS)
 
 
-def grounding_for(answer: str | None) -> Grounding:
+def grounding_for(answer: str | None, *, cited: bool = False) -> Grounding:
     """Classify one answer: grounded, declined, or nothing to ground.
 
     ``None`` and blank mean no answer was produced from passages at all, which
     is also how a stored ``retrieval`` interaction (which never has an answer)
     reports itself.
+
+    ``cited`` says the answer carries at least one marker that resolves to a
+    passage the model was given. A cited answer is ``grounded`` even if it opens
+    with a refusal phrase, because the phrase list matches substrings: a live answer
+    that began "I do not have enough information *about X*, but …" and then wrote a
+    full, cited explanation was graded ``declined``. The caller that has the
+    passages passes ``cited``; a caller that only has the text cannot know, and the
+    phrase list is the best it can do.
     """
     if answer is None or not answer.strip():
         return Grounding.NO_RELEVANT_SOURCES
+    if cited:
+        return Grounding.GROUNDED
     if is_deflection(answer):
         return Grounding.DECLINED
     return Grounding.GROUNDED
