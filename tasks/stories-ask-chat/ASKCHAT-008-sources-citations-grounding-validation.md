@@ -85,3 +85,24 @@ None.
 1. The badge copy for `not_searched` is **Not searched** with the note "Answered
    without searching", in a neutral style. A warning style would read as a defect,
    and a thanks is not a defect.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after live testing found "Thanks!" in an answered thread reported
+  `no_relevant_sources`
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 15a described the four verdicts but not the order they are decided in | AC 15a states the order: whether this turn searched **first**, then what it found | The code tested "no passages" before the reuse rule, and a turn that did not search has no passages of its own — so every reuse turn was labelled `no_relevant_sources`, claiming a search ran and failed |
+
+### Blockers
+
+One: the badge told a member that the corpus had nothing when the thread already
+held a grounded answer they were thanking the assistant for.
+
+### Should-fix (applied)
+
+1. The test asserts both sides of the ordering — a thanks in an answered thread is
+   `grounded`, and a thanks in an empty thread is `not_searched` — because a test
+   of only one side would have passed with the bug in place.

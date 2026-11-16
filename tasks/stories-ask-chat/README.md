@@ -134,3 +134,21 @@ are the repository's standard ones:
 uv run --env-file .env pytest -v -m "not network and not e2e"
 cd web && bun run typecheck && bun run lint && bun run test && bun run build
 ```
+
+## Live findings after deployment
+
+`c755c67` ran end to end on the deployment: seven of seven real questions searched,
+grounded with citations, with correct traces and spans. Testing around that success
+found four more defects, each fixed and covered by an integration test that was
+mutation-checked:
+
+| # | Symptom | Fixed in |
+| :--- | :--- | :--- |
+| 1 | Every turn failed at step 0: the provider refused a forced tool choice | `3b5d24f`, then D-4b removed the forced step |
+| 2 | One tool call streamed as ~10 deltas was read as ~10 calls | the `tool_choice: auto` revision |
+| 3 | `ASK_CHAT_MAX_TOOL_CALLS=3` allowed 5 searches, because the cap was per step | the cap revision |
+| 4 | "Thanks!" in an answered thread showed **Not found in the documents** | the cap revision |
+| 5 | A cancelled turn kept its passages but lost its query and verdict | the cap revision |
+
+Every one of them was invisible to a suite that exercised the happy path, which is
+the lesson recorded in each story's `-validation.md`.

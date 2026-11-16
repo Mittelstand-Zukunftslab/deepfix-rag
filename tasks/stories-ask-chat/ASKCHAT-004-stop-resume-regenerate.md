@@ -24,7 +24,7 @@ Stop ends an answer without losing it. A reload mid-answer resumes the reply in 
 **Stop**
 
 1. Given a turn streaming to a browser, when the browser closes the connection, then the route's generator cancels the in-flight retrieval, closes the LiteLLM async generator so the upstream request is ended rather than left running, and stops writing.
-2. Given that same abort, when the database is read, then the turn's status is `cancelled` with an `ended_at`, the assistant text written so far is stored, and any tool results already received are stored as that turn's `interaction_hits` so the sources panel survives the stop.
+2. Given that same abort, when the database is read, then the turn's status is `cancelled` with an `ended_at`, the assistant text written so far is stored, and any tool results already received are stored as that turn's `interaction_hits` so the sources panel survives the stop. A turn that had already searched also records `retrieval_query` — the standalone query its last search ran — and a `grounding` verdict, so what it found is readable when the member comes back rather than looking like a turn that never retrieved.
 3. Given that same abort, when the stream has any remaining ability to write, then a terminal `data-deepfix-turn` with `status: "cancelled"` is emitted before the stream closes, so a later resume and the browser agree on the status.
 4. Given a stopped turn, when `POST /feedback` is called on its answer or on one of its passages, then the vote is accepted — a stopped answer is still votable, because it is a thing the member read.
 5. Given a stopped turn, when the log is read, then the disconnect produced one structured line and no exception traceback: a dropped connection is a normal end, not an error.

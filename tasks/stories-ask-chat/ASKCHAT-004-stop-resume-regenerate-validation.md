@@ -86,3 +86,23 @@ the export.
 ### Blockers
 
 None.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after live testing found a cancelled turn losing its query and verdict
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 2 kept the partial text and the hits only | AC 2 also requires `retrieval_query` and a `grounding` verdict when the turn had searched | A stopped turn that had found passages was indistinguishable from one that never retrieved, so a reload showed no verdict and a later vote had no query to file against |
+
+### Blockers
+
+None. This was the minor of the three live findings.
+
+### Should-fix (applied)
+
+1. The verdict for a turn stopped mid-answer is `grounded` when its search returned
+   passages, not `no_relevant_sources`. Classifying the unfinished answer's empty
+   string would have claimed the search found nothing, which is the opposite of what
+   the member had already been shown.

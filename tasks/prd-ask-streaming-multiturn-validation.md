@@ -237,3 +237,39 @@ AC 19(e) of ASKCHAT-003 now reproduces the provider's real stream shape.
 
 **Pass.** No blocker, no open question; the two should-fix items are closed in this
 pass.
+
+## Seventh pass: three live findings (2026-11-16)
+
+Validated after `c755c67` ran on the deployment end to end — seven of seven real
+questions searched and grounded, traces and spans correct — and live testing found
+three defects in the edges around that success.
+
+| Dimension | Status | Notes |
+|-----------|--------|-------|
+| Completeness | Green | FR-027 now defines the cap as individual searches with its refuse path; FR-009 states the order the verdict is decided in; FR-014 states what a cancelled turn keeps. Correction table to twenty rows. |
+| Consistency | Green | The three FRs now agree with D-4b: the model decides *whether* to search, the cap decides *how many*, and the verdict is computed in the order of the facts. No FR claims a step-level cap. |
+| Testability | Green | Each fix names its observation, and each has an integration test that was mutation-checked: removing the per-call check lets six searches run, restoring the old verdict order labels a thanks `no_relevant_sources`, and dropping the live wiring loses the cancelled turn's query. |
+| Traceability | Green | No FR changed owners; the three fixes stay inside ASKCHAT-003, 004 and 008. |
+| Feasibility | Green | Unchanged. |
+| Security & privacy | Green | Unchanged. The cap being enforced is itself a denial-of-service bound, which is why it belongs in NFR-3's envelope rather than only in D-8's numbers. |
+
+### Blockers
+
+All three were found on a deployment, not in review, and two of the three were
+edge cases around correct behaviour rather than failures: the turn answered, the
+badge was simply wrong about *why*. That is the finding worth carrying forward —
+the suite tested that a search happens and that an answer is grounded, but not that
+the verdict explains itself correctly in every path.
+
+### Should-fix (applied)
+
+1. The cap's unit was never stated. "At most `ASK_CHAT_MAX_TOOL_CALLS` calls per
+   turn" reads as a per-step budget when a model can issue several calls in one
+   step; FR-027 now says *searches across the turn* and names the refuse path.
+2. A cancelled turn's verdict is now computed from the evidence rather than from
+   the unfinished answer, so "stopped mid-sentence" cannot read as "the search found
+   nothing".
+
+## Verdict
+
+**Pass.** No blocker, no open question.

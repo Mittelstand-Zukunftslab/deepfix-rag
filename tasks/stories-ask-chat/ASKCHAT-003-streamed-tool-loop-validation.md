@@ -119,3 +119,33 @@ call" from "treats each delta as a call". AC 19(e) is that missing fixture.
    values, which would be a protocol violation. `stream_chunk_builder` would build
    two calls and the loop would run two searches, which is harmless but wasteful.
    Not worth defending against.
+
+## Post-implementation validation, third pass (2026-11-16)
+
+- Validated: after live testing on `c755c67` found the search cap unenforced
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 8 bounded "tool calls" without saying what a call is when a step issues several | AC 8 counts **individual searches across the turn**, refuses a call past the limit, and says the refuse path returns a short tool result | Live: one question ran five searches against a cap of three. A step issued two in parallel, the cap was checked only between steps, and the step marked last still ran a search |
+| 2 | The refuse path did not exist | A call past the cap is announced, answered with a one-sentence "limit reached" result, and never run | Failing the turn would punish the member for the model's burst; the model can answer from what it has |
+| 3 | Nothing said the last step cannot run tools | AC 8 says the step after the last permitted search is sent with `tool_choice: "none"` | It was already sent that way, but only the AC makes it a promise |
+
+### Blockers
+
+One, and it is a budget defect rather than a correctness one: five searches and
+21.5 s to first text on a question the cap says should run three.
+
+### Should-fix (applied)
+
+1. The per-step call handling was rewritten so one assistant message carries every
+   call a step made, before any of them runs. Building the message per call meant a
+   parallel step described itself to the model one call at a time, which is not the
+   call set the provider produced.
+
+### Nice-to-have
+
+1. The tool result for a refused call advertises `grounding:
+   "no_relevant_sources"` with no passages. It is never stored — only real searches
+   contribute hits — but a reader of the stream sees a result that does not fit the
+   D-2 shape exactly. It is deliberately distinguishable by its `limit_reached` flag.
