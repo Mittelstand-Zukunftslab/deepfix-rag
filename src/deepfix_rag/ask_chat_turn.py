@@ -34,12 +34,14 @@ would abandon the await and leave the upstream request running to ``max_tokens``
 A generator this module can close is what makes Stop stop the spend (D-4).
 """
 
+import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 import json
 import re
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import litellm
 
@@ -55,9 +57,12 @@ NON_USER_MESSAGE = "The last message must be a question from you."
 UNKNOWN_TOOL = "The assistant tried to use a tool this server does not offer."
 NO_SOURCES_ANSWER = "I do not have enough information in these documents to answer that question."
 TOOL_LIMIT_REACHED = "This reply used all its searches and was stopped."
-CANCELLED = "The browser closed the connection."
+CANCELLED = "Stopped by the user."
 TOO_LONG = "This reply took too long and was stopped."
 ALREADY_RUNNING = "That answer is still being written."
+# The status a step reports while the model is only reasoning. It reaches the page
+# as a `data-deepfix-status` part and is never stored (D-12).
+REASONING_STATUS = "reasoning"
 
 _CITATION = re.compile(r"\[(\d{1,2})\]")
 
@@ -246,7 +251,19 @@ def valid_citations(answer: str, passages: Sequence[ask_chat.Passage]) -> list[d
 
 
 class TurnCancelled(RuntimeError):
-    """The browser closed the connection or the turn ran past its bound."""
+    """The member stopped the turn, or the server decided it had no evidence left."""
+
+
+class TurnTimedOut(RuntimeError):
+    """The turn ran past ``ASK_CHAT_TURN_TIMEOUT_SECONDS``.
+
+    Separate from ``TurnCancelled`` because the two are different facts about the
+    turn: a cancel is the member's choice and is stored ``cancelled``, while a
+    timeout is the deployment's bound being reached and is stored ``failed`` with
+    the reason. Reporting a timeout as a cancel told a member they had stopped
+    something they had not, and a reviewer reading the row could not tell a slow
+    provider from an impatient one (FR-017, D-12).
+    """
 
 
 class TurnFailed(RuntimeError):
@@ -342,6 +359,7 @@ async def run_turn(
         # only calls a tool produces no prose, and an empty `text-start`/`text-end`
         # pair makes the runtime draw an empty bubble under the question.
         text_open = False
+        reasoning_noted = False
         step = _Step()
 
         def open_text() -> dict[str, Any] | None:
@@ -352,26 +370,45 @@ async def run_turn(
             return chat_stream.text_start(text_id)
 
         try:
-            async for chunk in _step_chunks(
-                settings,
-                model,
-                messages,
-                at_limit=at_limit,
-            ):
-                _check_deadline(deadline)
-                delta = _first_delta(chunk)
-                content = delta.get("content")
-                if isinstance(content, str) and content:
-                    opening = open_text()
-                    if opening is not None:
-                        yield opening
-                    step.text += content
-                    collected.append(content)
-                    if first_token_ms is None:
-                        first_token_ms = int((time.monotonic() - started) * 1000)
-                    # Forwarded as it arrives: a step is never buffered before sending.
-                    yield chat_stream.text_delta(text_id, content)
-                step.record(chunk, delta)
+            # The deadline is enforced here, not only per chunk. A provider that
+            # stops sending — the hidden-reasoning stall D-12 describes — gives the
+            # loop nothing to check between chunks, so `_check_deadline` alone let a
+            # silent step run past the turn's bound. The timeout covers the wait as
+            # well as the work.
+            async with asyncio.timeout(max(deadline - time.monotonic(), 0.001)):
+                async for chunk in _step_chunks(
+                    settings,
+                    model,
+                    messages,
+                    at_limit=at_limit,
+                ):
+                    delta = _first_delta(chunk)
+                    content = delta.get("content")
+                    if isinstance(content, str) and content:
+                        opening = open_text()
+                        if opening is not None:
+                            yield opening
+                        step.text += content
+                        collected.append(content)
+                        if first_token_ms is None:
+                            first_token_ms = int((time.monotonic() - started) * 1000)
+                        # Forwarded as it arrives: a step is never buffered.
+                        yield chat_stream.text_delta(text_id, content)
+                    elif _reasoning_text(delta) and not reasoning_noted:
+                        # The model is thinking and has written nothing yet. Say so,
+                        # once per step, so the page can show "Thinking…" rather than
+                        # looking hung; the reasoning text itself is never stored or
+                        # shown (D-12). It is a status part, not prose, so it cannot
+                        # land in the stored answer.
+                        reasoning_noted = True
+                        yield chat_stream.status_part(REASONING_STATUS)
+                    step.record(chunk, delta)
+        except TimeoutError as exc:
+            # `asyncio.timeout` raises the builtin TimeoutError, which would
+            # otherwise be caught by the generic handler and reported as an
+            # upstream failure. A timeout is its own terminal state: failed, with
+            # the reason, so an operator can tell a slow provider from a bad one.
+            raise TurnTimedOut(TOO_LONG) from exc
         except _ToolChoiceUnsupported:
             # A provider that refuses even `auto`. A refusal is a fact about the
             # provider, not about the member's question, so the turn is not failed:
@@ -529,12 +566,24 @@ async def _stream_completion(
 ) -> AsyncIterator[Any]:
     """One streamed model step, closed on the way out however it ends.
 
-    No step forces a tool any more, so the thinking-disabled flag that D-4a added
-    for the forced step is gone: it existed only because a reasoning provider
-    refuses ``tool_choice: "required"`` while thinking is on, and nothing now sends
-    ``"required"``. The provider recovery stays in ``_step_chunks``, because a
-    provider that rejects even ``"auto"`` must still not fail the turn.
+    Two provider controls ride along (D-12), and both are about latency:
+
+    * ``reasoning`` in ``extra_body``. On OpenRouter a reasoning model with no
+      control reasons in hidden mode by default and streams nothing but those
+      chunks — qwen3.8-flash spent 93 s of one turn that way after the searches had
+      already finished — so the member sat in front of a blank answer that looked
+      hung. ``off`` sends the provider's own disable flag; an effort level is
+      passed through for a deployment that wants it.
+    * ``max_tokens``. Reasoning tokens count against it, so a capped step fails
+      fast instead of running to the turn's wall clock, and a runaway step cannot
+      consume an unbounded spend.
+
+    Neither control collides with tool calling: ``reasoning`` changes what the
+    model may *think*, not whether it may emit a tool call, and ``extra_body`` is
+    an HTTP body field rather than a request parameter, so it does not make the
+    provider reject the arguments the D-4a recovery looks for.
     """
+    extra = reasoning_kwargs(settings)
     stream = await litellm.acompletion(
         model=model,
         api_base=settings.LLM_BASE_URL,
@@ -544,6 +593,8 @@ async def _stream_completion(
         messages=messages,
         tools=[ask_chat.SEARCH_DOCUMENTS_TOOL],
         tool_choice=tool_choice,
+        max_tokens=settings.ASK_CHAT_MAX_OUTPUT_TOKENS,
+        extra_body=extra["extra_body"],
         stream=True,
         # One attempt is one HTTP call. LiteLLM's default retries a request it has
         # already been told is invalid, which would send a refused call three times
@@ -560,6 +611,28 @@ async def _stream_completion(
         closer = getattr(stream, "aclose", None)
         if closer is not None:
             await closer()
+
+
+def reasoning_kwargs(settings: Settings) -> dict[str, dict[str, Any]]:
+    """The ``extra_body`` that tells the provider how much to reason (D-12).
+
+    OpenRouter takes ``reasoning: {"enabled": false}`` to turn hidden reasoning off
+    and ``{"effort": ...}`` to bound it. The level comes from
+    ``ASK_CHAT_REASONING``, so an operator can change the latency/quality trade
+    without a code change, and nothing here names a model.
+
+    The field is OpenRouter's, not part of the OpenAI-compatible schema, so it is
+    sent only to an OpenRouter endpoint. Another endpoint would answer 400 for an
+    unknown body field, and a member's question must not fail because the
+    deployment points at a different vendor. ``max_tokens`` is standard and is
+    always sent.
+    """
+    host = urlparse(settings.LLM_BASE_URL or "").hostname or ""
+    if not host.endswith("openrouter.ai"):
+        return {"extra_body": {}}
+    if settings.ASK_CHAT_REASONING == "off":
+        return {"extra_body": {"reasoning": {"enabled": False}}}
+    return {"extra_body": {"reasoning": {"effort": settings.ASK_CHAT_REASONING}}}
 
 
 class _ToolChoiceUnsupported(RuntimeError):
@@ -657,7 +730,23 @@ async def _server_search(
 
 def _check_deadline(deadline: float) -> None:
     if time.monotonic() > deadline:
-        raise TurnCancelled("turn timed out")
+        raise TurnTimedOut("turn timed out")
+
+
+def _reasoning_text(delta: dict[str, Any]) -> str:
+    """The hidden reasoning a delta carries, or an empty string.
+
+    OpenRouter and other OpenAI-compatible providers put it in
+    ``delta.reasoning_content``; some also use ``delta.reasoning``. Either is read
+    so a change of field name does not silently make the page look hung again. The
+    text is only ever used as a signal that the model is working — it is never
+    stored, forwarded or shown (D-12).
+    """
+    for key in ("reasoning_content", "reasoning"):
+        value = delta.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
 
 
 def _assistant_tool_message(text: str, call: ToolCall) -> dict[str, Any]:
@@ -795,7 +884,12 @@ def _has_prior_evidence(history: Sequence[ask_chat.Turn]) -> bool:
 
 
 def _first_delta(chunk: Any) -> dict[str, Any]:
-    """The first choice's delta, as a dict, whether LiteLLM gave a model or a mapping."""
+    """The first choice's delta, as a dict, whether LiteLLM gave a model or a mapping.
+
+    ``reasoning_content`` is carried through as well as the two standard fields:
+    LiteLLM normalises it onto the delta object, and dropping it here is what made
+    a reasoning-only step indistinguishable from a stalled one (D-12).
+    """
     choices = getattr(chunk, "choices", None)
     if not choices:
         return {}
@@ -807,6 +901,7 @@ def _first_delta(chunk: Any) -> dict[str, Any]:
     return {
         "content": getattr(delta, "content", None),
         "tool_calls": getattr(delta, "tool_calls", None),
+        "reasoning_content": getattr(delta, "reasoning_content", None),
     }
 
 

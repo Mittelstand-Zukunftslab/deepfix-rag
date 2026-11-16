@@ -237,6 +237,11 @@ services:
       ASK_CHAT_MAX_MESSAGE_CHARS: ${ASK_CHAT_MAX_MESSAGE_CHARS:-4000}
       ASK_CHAT_MAX_PASSAGE_CHARS: ${ASK_CHAT_MAX_PASSAGE_CHARS:-1200}
       ASK_CHAT_TURN_TIMEOUT_SECONDS: ${ASK_CHAT_TURN_TIMEOUT_SECONDS:-120}
+      # Reasoning budget and output cap (D-12). "off" is the default because a
+      # reasoning model left to its provider default streams nothing but hidden
+      # thinking, which reads as a hung page.
+      ASK_CHAT_REASONING: ${ASK_CHAT_REASONING:-off}
+      ASK_CHAT_MAX_OUTPUT_TOKENS: ${ASK_CHAT_MAX_OUTPUT_TOKENS:-2048}
     volumes:
       - api_data:/data
     restart: unless-stopped

@@ -158,7 +158,7 @@ async def resume_frames(
             for frame in published:
                 yield frame
             while True:
-                frame = await queue.get()
+                frame = await chat_stream.next_keepalive(queue)
                 if frame is None:
                     break
                 yield frame

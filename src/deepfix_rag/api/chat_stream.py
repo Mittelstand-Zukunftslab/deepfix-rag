@@ -23,6 +23,7 @@ The functions are pure: no HTTP, no database, no clock. ``tests
 /test_admin_chat_routes.py`` drives them directly and over a real socket.
 """
 
+import asyncio
 import json
 from typing import Any
 
@@ -30,6 +31,27 @@ STREAM_HEADER = "x-vercel-ai-ui-message-stream"
 STREAM_HEADER_VALUE = "v1"
 DONE_FRAME = "data: [DONE]\n\n"
 KEEPALIVE_FRAME = ": keepalive\n\n"
+
+# How long a forwarded stream may be silent before a keep-alive comment is sent.
+# It has to be shorter than the idle limit of whatever proxy sits in front: the
+# deployment is behind Cloudflare, which drops a proxied response after about 100
+# seconds with no bytes, and a reasoning model can be silent for longer than that
+# (D-12). 15 s is far enough under it to absorb a slow hop.
+KEEPALIVE_SECONDS = 15.0
+
+
+async def next_keepalive(queue: "asyncio.Queue[str | None]") -> str | None:
+    """The next queued frame, or ``KEEPALIVE_FRAME`` when nothing arrived in time.
+
+    ``None`` means the turn ended. Both streaming routes need this: the completion
+    relay and the resume tail. The keep-alive is an SSE comment rather than a data
+    part, so the AI SDK ignores it and a proxy still sees bytes moving.
+    """
+    try:
+        return await asyncio.wait_for(queue.get(), timeout=KEEPALIVE_SECONDS)
+    except TimeoutError:
+        return KEEPALIVE_FRAME
+
 
 # The parts the AI SDK's ``uiMessageChunkSchema`` accepts, by ``type``.
 TOOL_PART = "data-deepfix-tool"
@@ -72,6 +94,17 @@ def tool_part(progress: dict[str, Any]) -> dict[str, Any]:
 def step_start_part() -> dict[str, Any]:
     """Open one model step. A tool call and the prose after it are separate steps."""
     return {"type": "start-step"}
+
+
+def status_part(status: str) -> dict[str, Any]:
+    """A non-terminal note about what the turn is doing, e.g. ``reasoning``.
+
+    It is a ``data-*`` part rather than prose, so the UI can show it beside the
+    answer instead of inside it, and it never becomes part of the stored text. A
+    reasoning model can be silent for a while before its first word; without this
+    the page looks hung (D-12).
+    """
+    return {"type": "data-deepfix-status", "data": {"status": status}}
 
 
 def step_finish_part() -> dict[str, Any]:
