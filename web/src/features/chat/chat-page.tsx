@@ -97,6 +97,16 @@ type ThreadState = {
    * else — so the badge describes the turn rather than the absence of a message.
    */
   newestStoredSearched: boolean | null;
+  /**
+   * A non-terminal note about the step in flight, e.g. `reasoning`. It is what
+   * turns a silent model into "Thinking…" rather than a page that looks hung, and
+   * it is cleared by any terminal frame (D-12).
+   */
+  status_note: string | null;
+  /** The newest stored turn's status, so a stopped turn's badge can say so. */
+  newestStoredStatus: AskTurn["status"] | null;
+  /** The newest stored turn's answer text, so "stopped before answering" is decidable. */
+  newestStoredAnswer: string;
 };
 
 const COMPOSER_BUTTON =
@@ -454,6 +464,13 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
     ? (state.storedSearched[newestAnswer.id] ??
       newestAnswer.parts.some((part) => part.type === "tool-search_documents"))
     : (state.newestStoredSearched ?? false);
+  // The newest turn's status and text, so the badge can tell a stopped turn from a
+  // deficient one. A live turn's status arrives on the terminal frame; a stored
+  // one is on the message list's own text.
+  const newestStatus = state.status ?? state.newestStoredStatus;
+  const newestText = newestAnswer
+    ? newestAnswer.parts.map((part) => (part.type === "text" ? part.text : "")).join("")
+    : (state.newestStoredAnswer ?? "");
 
   useEffect(() => {
     if (!state.session.resumeTurnId.current) return;
@@ -477,7 +494,21 @@ function ThreadSurface({ threadId, state }: { threadId: string; state: ThreadSta
               // searched and "Reused earlier evidence" when it did not. The test is
               // the newest turn's own search, not whether the panel has passages.
               searched={newestSearched}
+              status={newestStatus ?? undefined}
+              answer={newestText}
             />
+          ) : null}
+          {state.status_note === "reasoning" ? (
+            // Unobtrusive: a quiet line, not a spinner or a banner. It exists so a
+            // long silent step reads as work in progress rather than a hung page,
+            // and it disappears the moment the first word arrives (D-12).
+            <span
+              role="status"
+              data-testid="ask-chat-thinking"
+              className="text-label-sm text-muted-foreground"
+            >
+              Thinking…
+            </span>
           ) : null}
           {sources.passages.length > 0 ? (
             <SourcesToggle
@@ -747,10 +778,20 @@ function threadState(
         };
         forceRender((value) => value + 1);
       },
+      onStatus: (status) => {
+        const entry = states.current.get(threadId);
+        if (!entry) return;
+        // A status is about the step in flight, so it is cleared on a terminal
+        // frame; storing it here is what lets the page say "Thinking…" instead of
+        // showing an empty bubble while the model reasons (D-12).
+        entry.status_note = status;
+        forceRender((value) => value + 1);
+      },
       onTurn: (frame) => {
         const entry = states.current.get(threadId);
         if (!entry) return;
         entry.status = frame.status;
+        entry.status_note = null;
         if (frame.grounding) {
           entry.verdict = {
             grounding: frame.grounding,
@@ -787,6 +828,11 @@ function threadState(
             );
             entry.storedSearched = searchedByTurn(detail.turns);
             entry.newestStoredSearched = newestSearchedOf(detail.turns);
+            const newestTurn = detail.turns[detail.turns.length - 1];
+            entry.newestStoredStatus = newestTurn?.status ?? null;
+            entry.newestStoredAnswer = newestTurn?.answer ?? "";
+            // The step is over, so its status note is stale whatever it said.
+            entry.status_note = null;
             // The store's passages for the turn that just ended, so a stopped
             // stream's sources panel survives the abort: the tool parts are gone
             // with the unfinished message, and these are the same hits (FR-007).
@@ -836,6 +882,9 @@ function threadState(
     storedCitations: Object.fromEntries(turns.map((turn) => [turn.turn_id, turn.citations])),
     storedSearched: searchedByTurn(turns),
     newestStoredSearched: newestSearchedOf(turns),
+    status_note: null,
+    newestStoredStatus: turns[turns.length - 1]?.status ?? null,
+    newestStoredAnswer: turns[turns.length - 1]?.answer ?? "",
   };
 }
 

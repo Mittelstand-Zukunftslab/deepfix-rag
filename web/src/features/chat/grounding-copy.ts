@@ -27,7 +27,9 @@ export type GroundingBadgeState =
   | "reused_evidence"
   | "declined"
   | "no_relevant_sources"
-  | "not_searched";
+  | "not_searched"
+  | "stopped_partial"
+  | "stopped_empty";
 
 export const GROUNDING_BADGE: Record<GroundingBadgeState, { label: string; className: string }> = {
   grounded: {
@@ -59,6 +61,17 @@ export const GROUNDING_BADGE: Record<GroundingBadgeState, { label: string; class
     label: "Not searched",
     className: "border-border bg-muted text-muted-foreground",
   },
+  // A stopped turn is a fact about the turn, not a verdict on its evidence. It
+  // must never read "Partly grounded" — that claims the answer was deficient —
+  // and a turn stopped before it wrote anything has no answer to judge at all.
+  stopped_partial: {
+    label: "Stopped, partial answer",
+    className: "border-border bg-muted text-muted-foreground",
+  },
+  stopped_empty: {
+    label: "Stopped before answering",
+    className: "border-border bg-muted text-muted-foreground",
+  },
 };
 
 /**
@@ -67,12 +80,29 @@ export const GROUNDING_BADGE: Record<GroundingBadgeState, { label: string; class
  * `searched` is whether this turn ran a search. Omitted, it is treated as `true`,
  * which is the pre-existing behaviour: a grounded answer with no citations after a
  * search is what "Partly grounded" was written for.
+ *
+ * `status` and `answer` exist for the stopped turn. A cancel leaves the evidence
+ * intact but the prose unfinished, and the pair `grounded` + no citations is
+ * exactly the shape that means "Partly grounded" for a completed turn — so a
+ * stopped turn was reported as a deficient answer, when in fact the member had
+ * asked it to stop. The turn's own status decides, before any judgement about
+ * citations, and "no answer yet" is its own state rather than a failed one.
  */
 export function badgeState(
   grounding: Grounding,
   citations: { marker: number; rank: number; doc_id: string }[],
   searched = true,
-): GroundingBadgeState {
+  status?: string,
+  answer = "",
+): GroundingBadgeState | null {
+  if (status === "cancelled") {
+    return answer.trim().length > 0 ? "stopped_partial" : "stopped_empty";
+  }
+  if (status === "failed") {
+    // A failed turn has no answer to be grounded in. Its error is shown as the
+    // error; claiming a verdict about it would be inventing one.
+    return null;
+  }
   if (grounding === "grounded" && citations.length === 0) {
     return searched ? "partly_grounded" : "reused_evidence";
   }

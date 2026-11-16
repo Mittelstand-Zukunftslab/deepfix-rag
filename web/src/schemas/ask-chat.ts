@@ -84,6 +84,12 @@ export const askTurnFrame = z.object({
 });
 export type AskTurnFrame = z.infer<typeof askTurnFrame>;
 
+/** The `data-deepfix-status` part: what the turn is doing before it has text. */
+export const askStatusFrame = z.object({
+  status: z.string(),
+});
+export type AskStatusFrame = z.infer<typeof askStatusFrame>;
+
 /** The `data-deepfix-grounding` part: the verdict, its citations, and the floor used. */
 export const askGroundingFrame = z.object({
   grounding: askGrounding,

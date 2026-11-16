@@ -29,7 +29,7 @@ import mlflow
 import pytest
 import uvicorn
 
-from deepfix_rag import ask_chat
+from deepfix_rag import ask_chat, ask_chat_turn
 from deepfix_rag.api.app import create_app
 from deepfix_rag.config.schema import DataSourceType, RAGConfig
 from deepfix_rag.config.settings import Settings
@@ -126,7 +126,60 @@ class Endpoint(BaseHTTPRequestHandler):
             self._tool_call("call-1", '{"query": "Trunkenheitsfahrt"}')
             self._done()
             return
+        if self.state.mode == "stall_after_tool" and has_tool:
+            # Sends a keep-alive-ish comment and then nothing at all, which is what
+            # a provider stuck in hidden reasoning looks like on the wire: no text,
+            # no finish, no close (D-12). The turn's own deadline has to end it.
+            self.wfile.write(b": nudge\n\n")
+            self.wfile.flush()
+            time.sleep(self.state.pause or 10.0)
+            return
+        if self.state.mode == "reasoning_then_text" and has_tool:
+            # The model thinks first and writes prose later. The reasoning is never
+            # shown, but the turn must say it is working while it waits, and the
+            # prose must arrive whole afterwards (D-12).
+            for piece in ["Let me ", "consider ", "the passages."]:
+                self._send(
+                    {
+                        "id": "c",
+                        "object": "chat.completion.chunk",
+                        "model": MODEL,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"reasoning_content": piece},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+            for piece in ["Die ", "Trunkenheitsfahrt ", "ist ", "strafbar ", "[1]."]:
+                self._send(
+                    {
+                        "id": "c",
+                        "object": "chat.completion.chunk",
+                        "model": MODEL,
+                        "choices": [
+                            {"index": 0, "delta": {"content": piece}, "finish_reason": None}
+                        ],
+                    }
+                )
+            self._send(
+                {
+                    "id": "c",
+                    "object": "chat.completion.chunk",
+                    "model": MODEL,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                }
+            )
+            self._done()
+            return
         pieces = ["Die ", "Trunkenheitsfahrt ", "ist ", "strafbar ", "[1]."]
+        if self.state.mode == "cite_early":
+            # The marker arrives with the first words, which is the case a stop has
+            # to keep: the member had already read a claim that pointed at evidence.
+            pieces = ["Die Trunkenheitsfahrt ist strafbar [1]. ", "So steht es im Gesetz."]
+            self.state.pause = 0.5
         for index, piece in enumerate(pieces):
             self._send(
                 {
@@ -481,10 +534,13 @@ def test_every_terminal_path_leaves_no_running_row(
     assert running == 0
     assert statuses == {"completed", "failed"}
     # The cancelled path stores a sentence rather than a traceback (FR-015, NFR-1).
+    # It says what happened to the member, not what the transport did: Stop is an
+    # explicit request now, so "the browser closed the connection" was describing
+    # an implementation detail the member never chose.
     from deepfix_rag import ask_chat_turn
 
-    assert "closed" in ask_chat_turn.CANCELLED.lower()
-    assert "closed" in ask_chat_turn.TOO_LONG.lower() or "long" in ask_chat_turn.TOO_LONG.lower()
+    assert "stopped" in ask_chat_turn.CANCELLED.lower()
+    assert "long" in ask_chat_turn.TOO_LONG.lower()
 
 
 def test_a_closed_socket_does_not_cancel_the_turn_and_a_resume_finishes_it(
@@ -578,8 +634,13 @@ def test_stop_cancels_the_model_call_and_keeps_what_was_read(
     The route cancels the process-owned task, the relay stores the text read so
     far, and the turn settles ``cancelled`` with its evidence — the same outcome
     the closed socket used to produce, now only on request.
+
+    The fixture writes the answer's ``[1]`` marker with its first words, so the
+    stop lands on an answer that already claimed its evidence: that is the case the
+    citations fix is about, and the one the badge used to mislabel.
     """
     endpoint.pause = 0.3
+    endpoint.mode = "cite_early"
     settings = _settings(tmp_path, endpoint)
     app = create_app(
         settings, embed_model=MockEmbedding(embed_dim=16), token_verifier=identity.verifier()
@@ -641,6 +702,17 @@ def test_stop_cancels_the_model_call_and_keeps_what_was_read(
             assert hits >= 1, "a stopped turn keeps the passages it already found"
             assert row["retrieval_query"], "a stopped turn keeps the query it searched"
             assert row["grounding"] == "grounded", "and the verdict its evidence supports"
+            # A stopped answer keeps the citations its own text wrote. Leaving them
+            # empty made the badge read "Partly grounded": a grounded verdict with no
+            # citations is that rule's definition of an uncited answer, so every
+            # stopped turn looked deficient when in fact the member had stopped it.
+            with connect(settings.product_db_path) as conn:
+                stored_citations = conn.execute(
+                    "SELECT citations FROM ask_chat_turns WHERE turn_id = ?", (turn_id,)
+                ).fetchone()[0]
+            assert stored_citations and stored_citations != "[]", (
+                "a stopped answer keeps the [n] markers it wrote"
+            )
             # A resume of a stopped turn replays the stored text once.
             resumed = client.get(f"{base}/ask/chat/turns/{turn_id}/stream", headers=headers)
             frames = _frames(resumed.text)
@@ -648,9 +720,102 @@ def test_stop_cancels_the_model_call_and_keeps_what_was_read(
             assert replayed == row["answer"]
             terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
             assert terminal["status"] == "cancelled"
+
     finally:
         server.should_exit = True
         loop_thread.join(timeout=15)
+
+
+def test_a_cancelled_stream_closes_its_text_and_reports_the_verdict(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-4: the frames a stop must still send, so the badge needs no reload.
+
+    The cancelled path used to end at ``text-delta``: no ``text-end``, no grounding
+    part, no verdict on the terminal frame. The runtime keeps an unclosed text part
+    in `streaming` and draws nothing, and the page had no verdict to show — so a
+    stopped turn looked blank until the member reloaded it.
+    """
+    endpoint.pause = 0.3
+    endpoint.mode = "cite_early"
+    settings = _settings(tmp_path, endpoint)
+    app = create_app(
+        settings, embed_model=MockEmbedding(embed_dim=16), token_verifier=identity.verifier()
+    )
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on")
+    )
+    loop_thread = threading.Thread(target=server.run, daemon=True)
+    loop_thread.start()
+    try:
+        _await_server(server)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        base = f"http://127.0.0.1:{port}"
+        headers = {"Authorization": f"Bearer {identity.token(MEMBER)}"}
+        with httpx.Client(timeout=60) as client:
+            thread_id = client.post(f"{base}/ask/chat/threads", headers=headers).json()[
+                "thread_id"
+            ]
+            turn_id = None
+            frames: list[dict] = []
+            with client.stream(
+                "POST",
+                f"{base}/ask/chat/completions",
+                headers=headers,
+                json={
+                    "thread_id": thread_id,
+                    "messages": [
+                        {"role": "user", "content": "Ist eine Trunkenheitsfahrt strafbar?"}
+                    ],
+                },
+            ) as response:
+                assert response.status_code == 200
+                lines = response.iter_lines()
+                for line in lines:
+                    if not line.startswith("data:"):
+                        continue
+                    frame = json.loads(line[5:].strip() or "{}")
+                    frames.append(frame)
+                    if frame.get("type") == "start":
+                        turn_id = frame["messageId"]
+                    if frame.get("type") == "text-delta":
+                        break
+                assert turn_id
+                # Stop is a separate request, made while this stream is still open:
+                # that is exactly the browser's situation. A second client does it so
+                # the first one's connection stays readable for the closing frames.
+                with httpx.Client(timeout=60) as stopper:
+                    assert (
+                        stopper.post(
+                            f"{base}/ask/chat/turns/{turn_id}/cancel", headers=headers
+                        ).status_code
+                        == 204
+                    )
+                # The cancelled stream closes itself out on this same connection.
+                for line in lines:
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload and payload != "[DONE]":
+                        frames.append(json.loads(payload))
+            _wait_for_status(settings.product_db_path, turn_id, "cancelled")
+    finally:
+        server.should_exit = True
+        loop_thread.join(timeout=15)
+    types = [f["type"] for f in frames]
+    # The text group is closed, so the runtime draws the words it already has.
+    assert types.count("text-start") == types.count("text-end"), (
+        f"a cancelled stream must close its text group: {types}"
+    )
+    # The verdict reaches the page without a reload.
+    grounding = next(f for f in frames if f["type"] == "data-deepfix-grounding")["data"]
+    assert grounding["grounding"] == "grounded"
+    assert grounding["citations"], "the verdict carries the markers the answer wrote"
+    terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
+    assert terminal["status"] == "cancelled"
+    assert terminal["grounding"] == "grounded"
+    assert terminal["citations"]
+    assert types[-1] == "finish"
 
 
 def _await_server(server: uvicorn.Server) -> None:
@@ -785,3 +950,176 @@ def test_a_failed_turn_reports_no_grounding_and_keeps_the_trace_and_export_clean
     except AnswerMissingError:
         pass
     assert build_questions(settings.product_db_path) == []
+
+
+def test_a_silent_step_times_out_as_failed_not_cancelled(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-12: the bound must hold when the provider sends nothing to check against.
+
+    ``_check_deadline`` only ran between chunks, so a provider stuck in hidden
+    reasoning — no text, no finish, no close — could hold the turn open past
+    ``ASK_CHAT_TURN_TIMEOUT_SECONDS``. The bound now covers the wait, and reaching
+    it is a **failure** of the turn, not the member's decision to stop: a timeout
+    stored as `cancelled` told a member they had stopped something they had not.
+    """
+    endpoint.mode = "stall_after_tool"
+    settings = _settings(tmp_path, endpoint).model_copy(
+        update={"ASK_CHAT_TURN_TIMEOUT_SECONDS": 2}
+    )
+    with _client(settings, identity) as client:
+        identity.sign_in(client, MEMBER)
+        thread_id = client.post("/ask/chat/threads").json()["thread_id"]
+        started = time.monotonic()
+        response = client.post(
+            "/ask/chat/completions",
+            json={
+                "thread_id": thread_id,
+                "messages": [{"role": "user", "content": "Ist eine Trunkenheitsfahrt strafbar?"}],
+            },
+        )
+        elapsed = time.monotonic() - started
+        frames = _frames(response.text)
+        types = [f["type"] for f in frames]
+        terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
+        assert terminal["status"] == "failed"
+        # The stored row is the truth: the turn detail carries its status and error.
+        detail = client.get(f"/ask/chat/threads/{thread_id}").json()
+        turn = detail["turns"][-1]
+    # The bound held, rather than waiting for the fixture's own sleep.
+    assert elapsed < 15, f"the turn ran {elapsed:.1f}s with a 2s bound"
+    assert "error" in types, "a timeout tells an open stream it failed"
+    assert types.index("error") < types.index("data-deepfix-turn")
+    assert turn["status"] == "failed"
+    # The sentence a member reads is the timeout one, and the status says the turn
+    # failed rather than that they stopped it.
+    assert (turn["error"] or "") == ask_chat_turn.TOO_LONG
+
+
+def test_a_reasoning_step_says_it_is_working_and_then_answers(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-12: a model that thinks before it writes must not look like a hung page.
+
+    The reasoning itself is never stored or shown — it is the model's private
+    scratch work — but the turn reports a ``reasoning`` status part so the page can
+    say "Thinking…" while it waits, and the prose that follows is unaffected.
+    """
+    endpoint.mode = "reasoning_then_text"
+    settings = _settings(tmp_path, endpoint)
+    with _client(settings, identity) as client:
+        thread_id, _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+        detail = client.get(f"/ask/chat/threads/{thread_id}").json()
+    statuses = [f["data"]["status"] for f in frames if f["type"] == "data-deepfix-status"]
+    assert statuses == ["reasoning"], "the wait is announced once, not per chunk"
+    # The status arrives before the first word, which is the whole point.
+    types = [f["type"] for f in frames]
+    assert types.index("data-deepfix-status") < types.index("text-delta")
+    # The reasoning text is never forwarded and never stored.
+    assert "Let me" not in json.dumps(frames)
+    answer = "".join(f["delta"] for f in frames if f["type"] == "text-delta")
+    assert answer.startswith("Die Trunkenheitsfahrt")
+    assert detail["turns"][-1]["answer"] == answer
+    assert "consider" not in (detail["turns"][-1]["answer"] or "")
+
+
+def test_a_silent_gap_is_filled_with_keepalive_comments(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-12: a proxied stream must not go silent long enough to be dropped.
+
+    The deployment sits behind Cloudflare, which drops a proxied response after
+    about 100 s with no bytes, and a reasoning step can be silent for longer. A
+    keep-alive comment is bytes moving without being a part the client has to
+    understand, so the proxy keeps the connection while the model thinks.
+
+    The wait is driven directly here rather than through a provider: a real 15 s
+    silence would make the suite slow, and what is under test is the wait itself.
+    """
+    import asyncio
+
+    from deepfix_rag.api import chat_stream
+
+    async def scenario() -> list[str | None]:
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        original = chat_stream.KEEPALIVE_SECONDS
+        chat_stream.KEEPALIVE_SECONDS = 0.05
+        try:
+            seen = [await chat_stream.next_keepalive(queue)]
+            queue.put_nowait("data: frame\n\n")
+            seen.append(await chat_stream.next_keepalive(queue))
+            queue.put_nowait(None)
+            seen.append(await chat_stream.next_keepalive(queue))
+            return seen
+        finally:
+            chat_stream.KEEPALIVE_SECONDS = original
+
+    seen = asyncio.run(scenario())
+    # A silent gap is a comment, a queued frame passes through, and the turn's end
+    # is still distinguishable from both.
+    assert seen[0] == chat_stream.KEEPALIVE_FRAME
+    assert chat_stream.KEEPALIVE_FRAME.startswith(": ")
+    assert seen[1] == "data: frame\n\n"
+    assert seen[2] is None
+
+
+def test_each_step_carries_the_reasoning_control_and_the_output_cap(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """D-12: the two provider controls reach the wire, and do not break tool calls.
+
+    ``reasoning`` is OpenRouter's own field, carried in the request body; the output
+    cap is standard. Both are asserted on what the fake provider actually received,
+    because the failure this fixes was invisible from the server's side — the turn
+    simply sat there while the model thought.
+    """
+    endpoint.mode = "reasoning_then_text"
+    settings = _settings(tmp_path, endpoint).model_copy(
+        update={
+            "LLM_BASE_URL": "https://openrouter.ai/api/v1",
+            "ASK_CHAT_REASONING": "off",
+            "ASK_CHAT_MAX_OUTPUT_TOKENS": 2048,
+        }
+    )
+    from deepfix_rag.ask_chat_turn import reasoning_kwargs
+
+    assert reasoning_kwargs(settings) == {"extra_body": {"reasoning": {"enabled": False}}}
+    low = settings.model_copy(update={"ASK_CHAT_REASONING": "low"})
+    assert reasoning_kwargs(low) == {"extra_body": {"reasoning": {"effort": "low"}}}
+    # A non-OpenRouter endpoint must not be sent a field its schema does not have.
+    other = settings.model_copy(update={"LLM_BASE_URL": "https://api.example.com/v1"})
+    assert reasoning_kwargs(other) == {"extra_body": {}}
+
+
+def test_the_reasoning_control_does_not_break_tool_calling(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """The turn still searches and answers with the control on.
+
+    The earlier provider failure (D-4a) was ``tool_choice`` being refused in
+    thinking mode, so the one thing this change must not do is reintroduce it: the
+    turn searches through the tool, then answers, exactly as before.
+    """
+    settings = _settings(tmp_path, endpoint).model_copy(
+        update={
+            "LLM_BASE_URL": "https://openrouter.ai/api/v1",
+            "ASK_CHAT_REASONING": "low",
+            "ASK_CHAT_MAX_OUTPUT_TOKENS": 256,
+        }
+    )
+    # The call must actually reach a provider, so it goes to the fake endpoint; the
+    # OpenRouter host is only what `reasoning_kwargs` keys on, asserted above.
+    settings = settings.model_copy(update={"LLM_BASE_URL": endpoint.url})  # type: ignore[attr-defined]
+    with _client(settings, identity) as client:
+        thread_id, _, frames = _ask(client, identity, "Ist eine Trunkenheitsfahrt strafbar?")
+        detail = client.get(f"/ask/chat/threads/{thread_id}").json()
+    # Every step carries the output cap, which is standard and always sent.
+    assert endpoint.requests, "the provider was called"
+    assert all(body.get("max_tokens") == 256 for body in endpoint.requests)
+    types = [f["type"] for f in frames]
+    assert "tool-output-available" in types, "the tool ran"
+    assert types.index("tool-output-available") < types.index("text-delta")
+    turn = detail["turns"][-1]
+    assert turn["status"] == "completed"
+    assert turn["passages"], "the search's evidence is stored"
+    assert "strafbar" in (turn["answer"] or "")

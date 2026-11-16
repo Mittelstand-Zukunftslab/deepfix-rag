@@ -21,6 +21,7 @@ member who tidies their history does not delete the optimizer's evidence.
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -417,7 +418,7 @@ async def _relay(
     registry = registry_for(app_state)
     try:
         while True:
-            frame = await queue.get()
+            frame = await chat_stream.next_keepalive(queue)
             if frame is None:
                 break
             yield frame
@@ -511,6 +512,11 @@ async def _run_turn(
     live_calls: list[ask_chat_turn.ToolCall] = []
     live_grounding: list[str | None] = [None]
     live_query: list[str | None] = [None]
+    # When the first visible character arrived. `_settle` used to read this from
+    # the outcome, which does not exist after a cancel, so every stopped turn stored
+    # NULL and an operator could not tell a slow provider from a broken one.
+    first_token_ms: list[int | None] = [None]
+    started = time.monotonic()
 
     def store_hits(calls: list[ask_chat_turn.ToolCall]) -> None:
         """Persist the hits as each search completes, so a stop keeps the evidence."""
@@ -547,6 +553,11 @@ async def _run_turn(
         live_query[0] = ask_chat_turn.last_query(calls)
 
     publish(chat_stream.sse(chat_stream.start_part(turn_id)))
+    # The text group's id, and whether it is open. A cancel lands between a
+    # `text-start` and its `text-end`, so the closing frame has to be synthesised
+    # from here; without it the runtime keeps the part `streaming` and draws
+    # nothing at all, which is what a stopped turn used to look like (D-4).
+    open_text_id: list[str | None] = [None]
     try:
         async for produced in ask_chat_turn.run_turn(
             coordinator=app_state.index,
@@ -558,7 +569,14 @@ async def _run_turn(
             if isinstance(produced, ask_chat_turn.TurnOutcome):
                 outcome = produced
                 continue
-            if produced.get("type") == "text-delta":
+            kind = produced.get("type")
+            if kind == "text-start":
+                open_text_id[0] = str(produced.get("id") or "")
+            elif kind == "text-end":
+                open_text_id[0] = None
+            elif kind == "text-delta":
+                if first_token_ms[0] is None:
+                    first_token_ms[0] = int((time.monotonic() - started) * 1000)
                 seen_text.append(str(produced.get("delta") or ""))
                 # Written per delta, so a resume and a cancel both see what was read.
                 update_answer(settings.product_db_path, interaction_id, "".join(seen_text))
@@ -570,9 +588,17 @@ async def _run_turn(
         status = "cancelled"
         failure = ask_chat_turn.CANCELLED
         raise
-    except ask_chat_turn.TurnCancelled as exc:
+    except ask_chat_turn.TurnTimedOut as exc:
+        # The turn's wall clock ran out. It is a failure of the turn, not the
+        # member's decision to stop, so it settles `failed` with the reason and the
+        # member is told it timed out (FR-017, D-12). It is published as an error
+        # part too, because the stream is still open and a silent truncation would
+        # read as a finished answer.
+        failure = str(exc) or ask_chat_turn.TOO_LONG
+        publish(chat_stream.sse(chat_stream.error_part(failure)))
+    except ask_chat_turn.TurnCancelled:
         status = "cancelled"
-        failure = ask_chat_turn.CANCELLED if "browser" in str(exc) else ask_chat_turn.TOO_LONG
+        failure = ask_chat_turn.CANCELLED
     except ask_chat_turn.TurnFailed as exc:
         failure = str(exc)
         publish(chat_stream.sse(chat_stream.error_part(failure)))
@@ -603,8 +629,16 @@ async def _run_turn(
             trace=trace,
             live_grounding=live_grounding[0],
             live_query=live_query[0],
+            first_token_ms=first_token_ms[0],
         )
-        _publish_terminal(publish, turn_id, status, outcome, stored)
+        _publish_terminal(
+            publish,
+            turn_id,
+            status,
+            outcome,
+            stored,
+            open_text_id=open_text_id[0],
+        )
 
 
 def _publish_terminal(
@@ -613,24 +647,41 @@ def _publish_terminal(
     status: str,
     outcome: ask_chat_turn.TurnOutcome | None,
     stored: ask_chat.Turn,
+    *,
+    open_text_id: str | None = None,
 ) -> None:
     """Send the frames that end a turn.
 
     ``stored`` is the settled row, so the verdict these frames carry is the one
     that was written rather than the one the loop was about to write.
+
+    ``open_text_id`` closes a text group the cancelled step never closed. The
+    frames go out in the order the runtime expects — ``text-end``, then the
+    grounding part, then the turn and ``finish`` — so the page can draw the
+    stopped badge without a reload (D-4, FR-014).
     """
+    if open_text_id:
+        publish(chat_stream.sse(chat_stream.text_end(open_text_id)))
     grounding = stored.grounding or Grounding.NO_RELEVANT_SOURCES.value
     citations = [
         {"marker": c.marker, "rank": c.rank, "doc_id": c.doc_id} for c in stored.citations
     ]
-    if outcome is not None:
+    # The grounding part is sent for a settled turn even when the loop never
+    # returned an outcome: a cancelled or failed turn that searched still reached a
+    # verdict, and that verdict is what the badge is drawn from. It is not sent for
+    # a turn still `running`, because there is nothing to claim yet.
+    # The grounding part and the terminal frame must agree about whether there is a
+    # verdict, or the page draws one and the store says another. A settled turn
+    # always has one; a turn still running has nothing to claim.
+    has_verdict = stored.status != "running" and stored.grounding is not None
+    if has_verdict:
         publish(
             chat_stream.sse(
                 chat_stream.grounding_part(
                     grounding,
                     citations,
-                    max_score=outcome.max_score,
-                    cutoff=outcome.cutoff,
+                    max_score=outcome.max_score if outcome is not None else 0.0,
+                    cutoff=outcome.cutoff if outcome is not None else 0.0,
                 )
             )
         )
@@ -639,7 +690,7 @@ def _publish_terminal(
             chat_stream.turn_part(
                 turn_id,
                 status,
-                grounding=grounding if outcome is not None else None,
+                grounding=grounding if has_verdict else None,
                 citations=citations,
             )
         )
@@ -663,6 +714,7 @@ def _settle(
     trace: TurnTrace,
     live_grounding: str | None = None,
     live_query: str | None = None,
+    first_token_ms: int | None = None,
 ) -> ask_chat.Turn:
     """Finish the turn's one ``interactions`` row and its terminal state.
 
@@ -671,6 +723,12 @@ def _settle(
     without ever adding a second row for the turn (FR-019). It goes through
     ``interactions.replace_interaction`` so votes, history, the MLflow assessment
     mirror, and the optimizer's export keep reading one shape.
+
+    A turn with no outcome still gets its **validated citations**, from the text it
+    did write and the passages it did find. Leaving them empty made every stopped
+    turn render "Partly grounded": the verdict says `grounded`, the citations are
+    absent, and the badge rule reads that pair as an uncited answer. The citations
+    were there all along — they just were not being computed for this path (D-4).
     """
     if outcome is not None:
         replace_interaction(
@@ -682,6 +740,7 @@ def _settle(
             trace_id=trace_id,
         )
         update_answer(settings.product_db_path, interaction_id, outcome.answer)
+        citations = _citations(outcome)
     else:
         # A turn with no outcome keeps the question, whatever text was read, and —
         # if it managed any searches before it stopped — the passages they found.
@@ -689,6 +748,7 @@ def _settle(
         # turn would have seen (FR-006, D-4).
         update_answer(settings.product_db_path, interaction_id, partial)
         set_trace_id(settings.product_db_path, interaction_id, trace_id)
+        citations = _partial_citations(settings, partial, interaction_id)
     # The trace's terminal half: what it produced and how it ended, so a cancelled
     # or failed turn is accounted for too (FR-020, AC 5).
     grounding = outcome.grounding if outcome else live_grounding
@@ -712,9 +772,9 @@ def _settle(
         status=status,
         error=failure,
         grounding=outcome.grounding if outcome else live_grounding,
-        citations=None if outcome is None else _citations(outcome),
+        citations=citations,
         retrieval_query=outcome.retrieval_query if outcome else live_query,
-        first_token_ms=None if outcome is None else outcome.first_token_ms,
+        first_token_ms=outcome.first_token_ms if outcome is not None else first_token_ms,
     )
 
 
@@ -724,6 +784,46 @@ def _citations(outcome: ask_chat_turn.TurnOutcome) -> list[ask_chat.Citation]:
             marker=int(item["marker"]), rank=int(item["rank"]), doc_id=str(item["doc_id"])
         )
         for item in outcome.citations
+    ]
+
+
+def _partial_citations(
+    settings: Settings, partial: str, interaction_id: str
+) -> list[ask_chat.Citation]:
+    """The citations a stopped or failed turn can honestly claim.
+
+    ``ask_chat_turn.valid_citations`` is the one validator, and it needs the
+    passages the turn actually found — which are already stored against the
+    interaction as its hits, written as each search completed. An empty answer has
+    no markers, so this returns nothing and the turn stores none: a cancel before
+    the first word is honestly uncited, and the web badge says so in its own words
+    rather than calling it "Partly grounded" (D-4, D-10).
+    """
+    if not partial.strip():
+        return []
+    interaction = get_interaction(settings.product_db_path, interaction_id)
+    if interaction is None:
+        return []
+    # `valid_citations` matches markers against a passage's rank, which is the one
+    # field the stored hit and the delivered passage agree on. The other fields
+    # (`filename`, `truncated`) are not in the hit row, so they are not invented
+    # here; the helper only needs the ranks.
+    passages = [
+        ask_chat.Passage(
+            rank=hit.rank,
+            doc_id=hit.doc_id,
+            filename="",
+            text=hit.text,
+            score=hit.score,
+            truncated=False,
+        )
+        for hit in interaction.hits
+    ]
+    return [
+        ask_chat.Citation(
+            marker=int(item["marker"]), rank=int(item["rank"]), doc_id=str(item["doc_id"])
+        )
+        for item in ask_chat_turn.valid_citations(partial, passages)
     ]
 
 

@@ -20,13 +20,22 @@ export function GroundingBadge({
   grounding,
   citations = [],
   searched = true,
+  status,
+  answer = "",
 }: {
   grounding: Grounding;
   citations?: { marker: number; rank: number; doc_id: string }[];
   /** Whether this turn ran a search. A reuse turn did not, so it has no passages. */
   searched?: boolean;
+  /** The turn's status. A cancelled turn says so instead of judging its evidence. */
+  status?: string;
+  /** The answer text so far, so a stopped turn can be told from an empty one. */
+  answer?: string;
 }) {
-  const state: GroundingBadgeState = badgeState(grounding, citations, searched);
+  const state = badgeState(grounding, citations, searched, status, answer);
+  // `null` means there is nothing honest to claim — a failed turn's error is the
+  // message, not a badge — so the header shows no badge at all.
+  if (state === null) return null;
   const badge = GROUNDING_BADGE[state];
   return (
     <Badge

@@ -34,6 +34,25 @@ function streamResponse(chunks: string[], gate?: Promise<void>): Response {
 }
 
 /**
+ * A stream that sends its first `before` chunks, then waits for the gate, then the
+ * rest. It is what a real turn looks like while the model is still writing, and it
+ * is how a test observes the state in between — a gate on every chunk would hold
+ * the whole stream before anything reached the page.
+ */
+function streamGatedAt(chunks: string[], before: number, gate: Promise<void>): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      chunks.slice(0, before).forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+      await gate;
+      chunks.slice(before).forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
+
+/**
  * A stream that keeps writing after its first words and never closes — what a
  * provider looks like while it is still answering. Stop has to cancel that from
  * the client side, which is the case the reported bug happened in.
@@ -632,5 +651,170 @@ describe("what a reloaded or stopped answer shows", () => {
       const nav = screen.getByRole("navigation", { name: "Conversations" });
       expect(nav.textContent).toContain("Ist eine Trunkenheitsfahrt strafbar?");
     });
+  });
+});
+
+describe("a stopped turn's badge", () => {
+  it("says the answer was stopped, rather than calling it partly grounded", async () => {
+    // The reported defect: every stopped turn read "Partly grounded". A cancel
+    // leaves the evidence intact but the prose unfinished, and `grounded` with no
+    // citations is exactly the pair that means "the answer ignored its evidence" —
+    // so the member was told their answer was deficient when they had asked it to
+    // stop. The turn's own status has to decide before any judgement about
+    // citations.
+    const stoppedPartial = {
+      ...STORED_TURN,
+      turn_id: "turn-9",
+      status: "cancelled" as const,
+      // Text read so far, with no marker: the shape that used to read as defective.
+      answer: "Die Trunkenheitsfahrt ist",
+      citations: [],
+      grounding: "grounded" as const,
+      passages: PASSAGES,
+      retrieval_query: "Trunkenheitsfahrt",
+    };
+    stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [stoppedPartial] } }, () =>
+      streamResponse(answerFrames()),
+    );
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => {
+      expect(screen.getByText("Stopped, partial answer")).toBeTruthy();
+    });
+    expect(screen.queryByText("Partly grounded")).toBeNull();
+    expect(screen.queryByText("Grounded")).toBeNull();
+  });
+
+  it("says a stop that produced no words produced no answer", async () => {
+    // Stopped before the first token. There is nothing to judge, so there is no
+    // verdict — and certainly not "Partly grounded", which describes an answer.
+    const stoppedEmpty = {
+      ...STORED_TURN,
+      turn_id: "turn-8",
+      status: "cancelled" as const,
+      answer: "",
+      citations: [],
+      grounding: "grounded" as const,
+      passages: PASSAGES,
+      retrieval_query: "Trunkenheitsfahrt",
+    };
+    stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [stoppedEmpty] } }, () =>
+      streamResponse(answerFrames()),
+    );
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => {
+      expect(screen.getByText("Stopped before answering")).toBeTruthy();
+    });
+    expect(screen.queryByText("Partly grounded")).toBeNull();
+  });
+
+  it("draws the stopped badge from the stream, without a reload", async () => {
+    // The cancelled stream now closes its text group and sends the verdict, so a
+    // member who pressed Stop sees what the turn reached immediately. Before this
+    // the frames stopped at `text-delta` and the view only filled in on reload.
+    const stopped = {
+      ...STORED_TURN,
+      turn_id: "turn-7",
+      status: "cancelled" as const,
+      answer: "Ein halber Satz.",
+      citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+      grounding: "grounded" as const,
+      passages: PASSAGES,
+      retrieval_query: "Trunkenheitsfahrt",
+    };
+    stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [] } }, () =>
+      streamResponse([
+        frame({ type: "start", messageId: "turn-7" }),
+        frame({ type: "start-step" }),
+        frame({ type: "text-start", id: "s" }),
+        frame({ type: "text-delta", id: "s", delta: "Ein halber Satz." }),
+        // The stop's own closing frames: this is what the fix adds.
+        frame({ type: "text-end", id: "s" }),
+        frame({ type: "finish-step" }),
+        frame({
+          type: "data-deepfix-grounding",
+          data: {
+            grounding: "grounded",
+            citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+            max_score: 0.8,
+            cutoff: 0.3,
+          },
+        }),
+        frame({ type: "data-deepfix-turn", data: { turn_id: "turn-7", status: "cancelled" } }),
+        frame({ type: "finish", finishReason: "error" }),
+        "data: [DONE]\n\n",
+      ]),
+    );
+    let reads = 0;
+    vi.spyOn(askChatService, "getThread").mockImplementation(async () => {
+      reads += 1;
+      return (
+        reads === 1 ? { thread: THREAD, turns: [] } : { thread: THREAD, turns: [stopped] }
+      ) as never;
+    });
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
+      target: { value: "Lange Frage" },
+    });
+    fireEvent.submit(screen.getByRole("textbox", { name: "Ask" }).closest("form")!);
+    // The badge describes the stopped turn, and it is not a judgement of its prose.
+    await waitFor(() => {
+      expect(screen.getByText("Stopped, partial answer")).toBeTruthy();
+    });
+    expect(screen.queryByText("Partly grounded")).toBeNull();
+  });
+});
+
+describe("a reasoning model", () => {
+  it("says it is thinking while the model reasons, then shows the answer", async () => {
+    // A reasoning model can be silent for a long time before its first word. The
+    // turn reports a `reasoning` status so the page says "Thinking…" instead of
+    // looking hung, and the note disappears once prose arrives (D-12).
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stubApi({ threads: [THREAD], detail: { thread: THREAD, turns: [] } }, () =>
+      streamGatedAt(
+        [
+          frame({ type: "start", messageId: "turn-6" }),
+          frame({ type: "start-step" }),
+          frame({ type: "data-deepfix-status", data: { status: "reasoning" } }),
+          frame({ type: "text-start", id: "s" }),
+          frame({ type: "text-delta", id: "s", delta: "Die Antwort [1]." }),
+          frame({ type: "text-end", id: "s" }),
+          frame({ type: "finish-step" }),
+          frame({
+            type: "data-deepfix-grounding",
+            data: {
+              grounding: "grounded",
+              citations: [{ marker: 1, rank: 1, doc_id: "doc_de_001" }],
+              max_score: 0.8,
+              cutoff: 0.3,
+            },
+          }),
+          frame({ type: "data-deepfix-turn", data: { turn_id: "turn-6", status: "completed" } }),
+          frame({ type: "finish", finishReason: "stop" }),
+          "data: [DONE]\n\n",
+        ],
+        // Everything up to and including the status arrives before the gate; the
+        // prose and the terminal frames wait, which is the silent gap a reasoning
+        // model produces.
+        3,
+        gate,
+      ),
+    );
+    renderPage(<AskPage indexReady />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask" }), {
+      target: { value: "Lange Frage" },
+    });
+    fireEvent.submit(screen.getByRole("textbox", { name: "Ask" }).closest("form")!);
+    await screen.findByTestId("ask-chat-thinking");
+    expect(screen.getByRole("status").textContent).toContain("Thinking");
+    release();
+    // The note is gone once the turn ends, and the answer is there.
+    await waitFor(() => expect(screen.queryByTestId("ask-chat-thinking")).toBeNull());
+    expect(screen.getByText(/Die Antwort/)).toBeTruthy();
   });
 });

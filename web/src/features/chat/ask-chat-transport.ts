@@ -4,6 +4,7 @@ import { AssistantChatTransport } from "@assistant-ui/react-ai-sdk";
 
 import {
   askGroundingFrame,
+  askStatusFrame,
   askTurnFrame,
   type AskGroundingFrame,
   type AskTurn,
@@ -27,6 +28,8 @@ import { RESUME_PATH, STREAM_PATH } from "@/services/ask-chat-sse";
 export type AskChatHooks = {
   onGrounding: (frame: AskGroundingFrame) => void;
   onTurn: (frame: AskTurnFrame) => void;
+  /** A non-terminal status, e.g. `reasoning` while the model thinks (D-12). */
+  onStatus?: (status: string) => void;
   onError: (message: string) => void;
   onFinished: () => void;
 };
@@ -126,6 +129,13 @@ export function createAskChat(
       if (part.type === "data-deepfix-grounding") {
         const frame = askGroundingFrame.safeParse(part.data);
         if (frame.success) hooks.current.onGrounding(frame.data);
+        return;
+      }
+      if (part.type === "data-deepfix-status") {
+        // The model is reasoning but has not written a word yet. The page shows
+        // this so a long silent step does not look like a hung request (D-12).
+        const frame = askStatusFrame.safeParse(part.data);
+        if (frame.success) hooks.current.onStatus?.(frame.data.status);
       }
     },
     onFinish: () => hooks.current.onFinished(),
