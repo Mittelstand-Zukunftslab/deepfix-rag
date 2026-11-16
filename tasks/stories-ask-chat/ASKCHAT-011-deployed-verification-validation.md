@@ -62,3 +62,24 @@ passing result.
 
 1. `docs/README.md` lists the runbook, so it is discoverable from the docs index
    rather than only from the story folder.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after an operator followed the runbook on the deployed stack
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | Step 10's History row said `/admin/interactions` | It says `/history`, and notes that `/admin/interactions` is that page's **API** | The operator typed the API path in the address bar and got a 404. The route exists; there is no browser page there, and the runbook named the wrong one |
+
+### Blockers
+
+None. The page it meant exists and works; only the instruction was wrong.
+
+### Nice-to-have
+
+1. The browser check that found this also found six UI defects the runbook's steps
+   do not cover — a stopped answer vanishing, citation glyphs, a mislabelled badge,
+   a failed import in the browser, and untitled rows. Those are now their own fixes
+   and story passes; a later runbook revision could fold a browser-visual pass into
+   step 3's stop check rather than leaving it to chance.

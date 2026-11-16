@@ -56,3 +56,30 @@ None.
 1. **The page had to keep the result view's votes working.** `AskResultView` owns
    its own vote state and submits through `feedbackService`, so the Search hand-off
    did not regress when the conversation page took over `chat-page.tsx`.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after a browser check on the deployed stack found three page bugs
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 7 said the partial answer "stays visible" without saying how | AC 7 requires the page to re-read the thread after a turn and rebuild the answer from the store | An aborted stream leaves the answer's text part unfinished, and the runtime declines to draw an unfinished part — so the answer the server had already stored vanished along with its sources |
+| 2 | Nothing said a stored answer's markers are controls | AC 7a requires each assistant message to use the citations **its own turn** recorded | The page handed every message the newest verdict's citations, so an older answer's markers matched nothing and rendered as raw characters |
+| 3 | Nothing said where a thread's title comes from | AC 7b requires the list to take the title the server derived from the first question, on open and after a turn | The client kept the empty title it created the thread with, so every row said "Untitled conversation" until renamed by hand |
+
+### Blockers
+
+All three were visible on the deployed page and none of them failed a test, because
+no test asserted the *content* surviving a stop, an older answer's citation
+controls, or a row's title.
+
+### Should-fix (applied)
+
+1. The stop test was rewritten to reproduce the bug rather than surround it. Its
+   first version let the stream close after Stop, so the answer arrived through the
+   normal finish path and the test passed with the fix reverted. It now serves a
+   stream that keeps the text part open — what a provider looks like while it is
+   still writing — and the stored answer is deliberately different text from the
+   streamed one, so the assertion can only pass if the text came back from the
+   store. With the fix reverted, that test fails.

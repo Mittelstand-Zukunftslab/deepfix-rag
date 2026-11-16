@@ -106,3 +106,28 @@ held a grounded answer they were thanking the assistant for.
 1. The test asserts both sides of the ordering — a thanks in an answered thread is
    `grounded`, and a thanks in an empty thread is `not_searched` — because a test
    of only one side would have passed with the bug in place.
+
+## Post-implementation validation, fourth pass (2026-11-16)
+
+- Validated: after a browser check found citation glyphs and a mislabelled thanks
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 9 said only that a marker inside prose becomes a control | Every prose-bearing element is walked — paragraph, list item, heading, table cell, bold, italic | The walker overrode `p` alone, so a marker inside a bold phrase, a list item, or a heading kept its private-use token and the browser drew it as two hollow boxes around the number |
+| 2 | AC 12 made every grounded-but-uncited answer "Partly grounded" | AC 12 is the **searched** case; AC 12a adds **Reused earlier evidence** for the unsearched one | A thanks that reworks an earlier grounded answer made no new claims and has no markers of its own. Warning about it is wrong, and "Grounded" with no citation would be untrue |
+
+### Blockers
+
+One: the citation glyphs made every answer containing a bold phrase or a list
+unreadable as evidence, which is most of them.
+
+### Should-fix (applied)
+
+1. The badge's rendered state is a *rendered* state over the same stored `grounded`
+   value, discriminated by `searched` **read per turn** — the turn that just ended,
+   from its own tool parts while live and from its stored `retrieval_query` and
+   passages after a reload. The thread's passages cannot answer this: a "thanks"
+   after an answered question still shows the earlier answer's passages, which is
+   exactly how the reported thread kept saying "Partly grounded". No new server
+   field was needed.

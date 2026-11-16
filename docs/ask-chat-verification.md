@@ -246,7 +246,12 @@ This is the residual cost R-1 and R-2 describe. If the stopped turn bills the fu
 | Single-turn `POST /ask` | ask a question | one answer with passages and a grounding badge | NOT RUN |
 | Admin Hermes chat (`/admin/chat`) | send a message | replies stream, action cards render if proposed | NOT RUN |
 | Optimization (`/admin`) | read the schedule and champion | renders, `next_run_at` present | NOT RUN |
-| History (`/admin/interactions`) | open one ask | the review screen loads with its votes | NOT RUN |
+| History (`/history`) | open one ask | the review screen loads with its votes | NOT RUN |
+
+The History page is `/history`; `GET /admin/interactions` is its **API**, not a page.
+Typing the API path into the address bar is a 404 by design — there is no browser
+route there, and this runbook named the wrong one before the deployed check found
+it.
 
 This is FR-022 and it is verified **here and nowhere else**: every other story's definition of done runs the
 unchanged suites, which cannot prove the deployed surfaces still work.

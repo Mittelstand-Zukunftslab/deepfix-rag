@@ -56,3 +56,23 @@ Eleven acceptance criteria, one route and one client effect — comfortably with
 
 None. The ownership check in AC 2 was mutation-checked: dropping it lets a member
 attach another member's interaction to their own thread.
+
+## Post-implementation validation, second pass (2026-11-16)
+
+- Validated: after a browser check found the import failing for real members
+- Verdict: **Pass with actions, applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 1 said `createdAt` is a string, without saying it must also accept a number | AC 1 accepts an ISO string **or** a millisecond epoch | The retired page wrote `Date.now()` numbers. A string-only field rejected every real payload with a 422, which the browser showed as "Your earlier conversations could not be carried over" — the API passed only because a hand-written `curl` used strings |
+
+### Blockers
+
+One: the import never worked from a real browser, and the only signal was a
+frightening sentence that named no cause.
+
+### Should-fix (applied)
+
+1. The client's error sentence stays, but it is now shown only when there was
+   something to import — a failure with nothing to carry over is a no-op and must
+   not alarm anyone.

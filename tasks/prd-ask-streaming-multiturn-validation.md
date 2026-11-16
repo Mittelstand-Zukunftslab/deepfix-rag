@@ -273,3 +273,42 @@ the verdict explains itself correctly in every path.
 ## Verdict
 
 **Pass.** No blocker, no open question.
+
+## Eighth pass: a browser check on the deployment (2026-11-16)
+
+Validated after an operator checked `/chat` in a browser on `333870c`. The
+server-side checks all passed — seven of seven questions searched, grounded, and
+traced correctly — and the browser found six UI defects around that success.
+
+| Dimension | Status | Notes |
+|-----------|--------|-------|
+| Completeness | Green | D-10's badge table grows a third row for a reuse answer; FR-009 states it; FR-033 accepts the payload the retired page actually wrote; the correction table reaches twenty-six rows. |
+| Consistency | Green | The badge's six rendered states now each describe a distinct fact, and none of them borrows another's label. FR-014's "keeps the text" now has a client half: the page rebuilds from the store after a stop. |
+| Testability | Green | Each fix has a test that fails without it, mutation-checked: the title row, the older answer's citation control, the numeric-timestamp import, and the empty text group. |
+| Traceability | Green | No FR changed owner. |
+| Feasibility | Green | Unchanged. |
+| Security & privacy | Green | Unchanged; the import still checks ownership. |
+
+### Blockers
+
+None in the server. All six were client-side or documentation, and the pattern is
+worth recording: **the suite proved that the server did the right thing and never
+asked what the page showed**. A stopped turn's answer was stored correctly and
+disappeared from the screen; a grounded reuse answer was stored correctly and was
+badged as a defect; a citation was validated correctly and rendered as a glyph.
+
+### Should-fix (applied)
+
+1. **The badge's "Partly grounded" carried two meanings.** It now covers only the
+   searched case, and a reuse answer gets **Reused earlier evidence**. The
+   discriminator needed no new server field.
+2. **The runbook named an API path as a page.** `/admin/interactions` is the History
+   page's API; `/history` is the page. Corrected in the runbook, which is the only
+   document that named it as something to click.
+3. **The import's timestamp type was narrower than the payload it exists to
+   read.** It is the clearest of the six: the feature could not have worked from a
+   browser, and the failure was reported as a sentence with no cause.
+
+## Verdict
+
+**Pass.** No blocker, no open question.
