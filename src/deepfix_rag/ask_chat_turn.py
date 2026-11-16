@@ -1,20 +1,24 @@
-"""The Ask chat's turn: retrieve first, then write, streamed as AI SDK parts.
+"""The Ask chat's turn: search when the question needs it, then write, streamed as AI SDK parts.
 
 The loop lives here rather than in a route for the same reason the admin chat's
 stream builders do: it is the feature's one piece of behaviour that several tests
 drive directly, and the route above it must stay a thin adaptor.
 
-Shape of a turn (D-1, D-2):
+Shape of a turn (D-1, D-4b):
 
 * The upstream conversation is **built on the server** — the policy prompt, the
   last ``ASK_CHAT_MAX_HISTORY_MESSAGES`` stored messages, and the new question.
   The client's array is never the prompt, so a browser cannot rewrite the policy
   or claim a history that never happened (FR-011).
-* The first step is sent with ``tool_choice: "required"``. If the model still
-  answers without calling ``search_documents``, the server runs the tool itself
-  and continues, so no turn answers without a retrieval having happened (FR-005).
-* The last permitted call is followed by a step with ``tool_choice: "none"``,
-  which forces prose and makes the loop terminate.
+* Every step is sent with ``tool_choice: "auto"``; the last permitted one is
+  ``"none"``, which forces prose and makes the loop terminate. **No step forces a
+  tool call**: the policy prompt is what makes a question about the documents
+  search first, and what makes a thanks or a rework of the assistant's own answer
+  legitimate without one (D-4b). A turn that answers without searching and without
+  reusing evidence is ``not_searched`` and is never reported as grounded.
+* A tool call may arrive as many deltas at one ``index``; a step assembles them
+  once its stream has ended, through ``litellm.stream_chunk_builder``, so one call
+  is one ``tool-input-available`` with the whole input.
 * Passages reach the model inside explicit delimiters and labelled untrusted, and
   the policy says their instructions are not to be followed (FR-013).
 * The answer's ``[n]`` markers are validated against the passages that actually
