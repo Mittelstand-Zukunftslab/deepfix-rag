@@ -21,9 +21,11 @@ Do not raise `hermes`'s limits to make a round faster or a chat turn survive. If
 
 Keep Dokploy's automatic deploy on push disabled. A full-stack redeploy stops and rebuilds every service, and the pull, build, and container-start burst is what exhausts 7.6 GB. Deploy by hand instead.
 
+Auto Deploy must stay off for a second reason now that routing lives in the compose file: a push-triggered redeploy rewrites every container at once, and a label mistake then takes all three sites down together rather than one at a time.
+
 ## Rebuild one service at a time
 
-Use `--no-deps` so Compose does not restart the services the target depends on:
+Use `--no-deps` so Compose does not restart the services the target depends on. This is also safe for routing: each service's routers and its `dokploy-network` membership are labels in `docker-compose.yml`, so rebuilding one service recreates it with its own routers and never depends on another service being recreated first.
 
 ```bash
 docker compose up -d --no-deps --build backend-api
@@ -37,6 +39,8 @@ docker compose up -d --no-deps --build web
 | `docker/hermes/**`, `.agents/skills/**`, `compose.hermes.yml`, `configs/hpo_retrieval_small.yaml` | `hermes` |
 | `web/**` | `web` |
 | `MLFLOW_SERVER_*`, MLflow image or command | `mlflow` |
+| `traefik.*` labels, `DEEPFIX_WEB_HOST`, `DEEPFIX_API_HOST` | the service whose labels changed |
+| `MLFLOW_PUBLIC_HOST`, `MLFLOW_BASIC_AUTH_USERS` | `mlflow` |
 | RustFS settings | `rustfs` |
 
 `.agents/skills/**` is baked into the Hermes image, so a skill edit needs a Hermes rebuild. The backend image bakes `configs/` and `scripts/` too, so a config change needs a backend rebuild.
@@ -68,13 +72,23 @@ Every key in the "Environment variables" table of `README.md` is set as a Dokplo
 
 Two keys are required for the stack to boot at all: `API_SERVER_KEY` and `HERMES_MODEL` (`compose.hermes.yml` fails on a missing value), and `HERMES_S3_ACCESS_KEY_ID` / `HERMES_S3_SECRET_ACCESS_KEY` for the run bundle. `OPENROUTER_API_KEY` is required for the sandbox's model calls and for reranking: `backend-api` receives it so the rerank call authorizes with it, and `COHERE_API_KEY` is only the fallback the client reads when it is empty. A deployment that has been reranking with `COHERE_API_KEY` alone can set `OPENROUTER_API_KEY` and rebuild `backend-api` and `hermes`; both take it from the same variable.
 
-## Domains
+## Routing and domains
 
-Nothing in the Compose stack publishes a host port, so every public route is a Traefik router that proxies to the container port named in that service's `traefik.http.services.<name>.loadbalancer.server.port` label. See "Published ports" in `README.md`.
+**Routing is defined in `docker-compose.yml`; Dokploy holds no Domain entries for this stack.** Each of `web`, `backend-api`, and `mlflow` joins `dokploy-network`, sets `traefik.docker.network=dokploy-network`, declares an http router on the `web` entrypoint with `redirect-to-https@file`, and declares an https router on `websecure` with `tls.certresolver=letsencrypt`. Each also names its backend with `traefik.http.services.<name>.loadbalancer.server.port`. Nothing publishes a host port, so a single-service `docker compose up -d --no-deps <service>` from the plain repo file keeps the sites up.
 
-- The web app has one public domain on `web:8080`. Dokploy supplies the router and `Host` rule.
-- The API has one public domain on `backend-api:8000` only if a browser or an external tool must reach it directly. The web app proxies `/api/*` itself, so the common deployment does not need one.
-- MLflow keeps **one** router, declared in `docker-compose.yml` with the `deepfix-mlflow-auth` basic-auth middleware attached. It is not a Dokploy Domain entry: remove one if it exists. The host comes from `MLFLOW_PUBLIC_HOST` and must also stay in `MLFLOW_SERVER_ALLOWED_HOSTS`, with its origin in `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS`. `MLFLOW_BASIC_AUTH_USERS` holds the htpasswd list and fails closed when empty. See "MLflow and RustFS lockdown" in `README.md`.
+| Service | Host variable | https router | Port |
+| :--- | :--- | :--- | :--- |
+| `web` | `DEEPFIX_WEB_HOST` | `deepfix-web-tls` | `8080` |
+| `backend-api` | `DEEPFIX_API_HOST` | `deepfix-api-tls` | `8000` |
+| `mlflow` | `MLFLOW_PUBLIC_HOST` | `deepfix-mlflow-tls`, plus `deepfix-mlflow-auth` | `5000` |
+
+- **Delete the Dokploy Domain entry for `web`, `backend-api`, and `mlflow`.** A leftover entry injects a second router (`digitalizationhub-deepfixrag-hvi1a8-N-web` and `-websecure`) for the same `Host`. Traefik picks one, so the result is either an unauthenticated MLflow router or a stale port. The compose file is now the only source.
+- **An unset host fails closed.** Each router rule falls back to a `*.invalid` name that matches no request, so a missing variable darkens the site instead of publishing it on a guessed hostname. Set all three host variables before deploying.
+- **Router names are `deepfix-*`**, which cannot collide with Dokploy's `digitalizationhub-deepfixrag-hvi1a8-*` names. Keep that prefix if you add one.
+- **`dokploy-network` must exist.** Compose declares it `external`, and it is created by Dokploy. On any other host, run `docker network create dokploy-network` once.
+- **`MLFLOW_BASIC_AUTH_USERS` doubles every `$`.** The server's docker-compose v1 re-interpolates `.env`, so `htpasswd -nbB admin 'pass' | sed -e 's/\$/\$\$/g'` is the required form, in Dokploy's Environment tab as well. A single-`$` hash resolves corrupted and every login fails.
+- **Do not change `WEB_ORIGIN`, `BETTER_AUTH_URL`, or `API_INTERNAL_URL` to the public API host.** The web server reaches FastAPI only over `API_INTERNAL_URL` (`http://backend-api:8000`) and the browser calls the web app's own `/api/*` proxy; no web code reads `DEEPFIX_API_HOST`. `WEB_ORIGIN` stays the public web origin (`https://` + `DEEPFIX_WEB_HOST`) because Better Auth uses it as the token issuer and audience.
+- The API's public host is only needed if a browser or an external tool must reach it directly. The web app proxies `/api/*` itself, so the common deployment can leave `DEEPFIX_API_HOST` at its fail-closed default and the `deepfix-api` routers simply match nothing.
 - RustFS has no domain. The console stays off.
 
 Never put a real hostname, IP address, or credential in a document in this repository.

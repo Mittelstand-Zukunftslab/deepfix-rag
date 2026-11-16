@@ -324,8 +324,8 @@ Names and purpose only; `example.env` carries the values and one comment per gro
 | `MLFLOW_DEV_RAG_EXPERIMENT` | Experiment `deepfix eval` logs to. |
 | `MLFLOW_ENABLE_ASYNC_TRACE_LOGGING` | Enables MLflow's async trace flush. |
 | `MLFLOW_BACKEND_STORE_URI` | SQLite store for the `mlflow` service. |
-| `MLFLOW_PUBLIC_HOST` | Host the `mlflow` service's Traefik router matches. Must also appear in `MLFLOW_SERVER_ALLOWED_HOSTS`. |
-| `MLFLOW_BASIC_AUTH_USERS` | htpasswd user list for the `deepfix-mlflow-auth` Traefik middleware in front of the MLflow UI. A secret: generate with `htpasswd -nbB user pass`. Empty fails closed. |
+| `MLFLOW_PUBLIC_HOST` | Host the `mlflow` service's Traefik routers match. Must also appear in `MLFLOW_SERVER_ALLOWED_HOSTS`. Empty keeps the fail-closed `deepfix-mlflow.invalid` default. |
+| `MLFLOW_BASIC_AUTH_USERS` | htpasswd user list for the `deepfix-mlflow-auth` Traefik middleware in front of the MLflow UI. A secret: generate with `htpasswd -nbB admin 'pass' \| sed -e 's/\$/\$\$/g'` and paste the output as-is. The `$$` doubling is required, because the server's docker-compose v1 re-interpolates `.env`. Empty fails closed. |
 | `MLFLOW_SERVER_ALLOWED_HOSTS`, `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS` | `Host` allow-list and CORS origins for the `mlflow` service. MLflow 3.x matches `Host` exactly, so `host` and `host:port` are separate entries. |
 
 **Models and reranking**
@@ -396,6 +396,7 @@ Names and purpose only; `example.env` carries the values and one comment per gro
 | `ALLOWED_EMAIL_DOMAINS` | Comma-separated domains allowed to register. Empty allows anyone. |
 | `PRODUCT_DATA_DIR`, `WORKSPACE_DIR` | SQLite database directory and the shared corpus/index/config workspace. |
 | `DEEPFIX_LOG_LEVEL` | Console level for the `deepfix_rag` and `apscheduler` loggers. One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; an unknown value warns and falls back to `INFO`. |
+| `DEEPFIX_WEB_HOST`, `DEEPFIX_API_HOST` | Public hostnames the `web` and `backend-api` Traefik routers match. Routing lives in `docker-compose.yml`, so these replace the Dokploy Domain entries. Empty keeps the fail-closed `*.invalid` default. |
 
 The web app also reads `web/.env.example` for local development: `VITE_API_BASE_URL`, `API_INTERNAL_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `AUTH_DATABASE_PATH`, and `ALLOWED_EMAIL_DOMAINS`.
 
@@ -581,24 +582,18 @@ Product search, ask, and feedback also trace to `deepfix_product` and `deepfix_p
 
 | Service | Container port | Published | How traffic arrives |
 | :--- | :--- | :--- | :--- |
-| `web` | `8080` | none | Traefik router from Dokploy's domain setting |
-| `backend-api` | `8000` | none | Traefik router from Dokploy's domain setting, if one exists |
-| `mlflow` | `5000` | none | The one router declared in `docker-compose.yml`, behind basic auth |
+| `web` | `8080` | none | Routers declared in `docker-compose.yml`, host from `DEEPFIX_WEB_HOST` |
+| `backend-api` | `8000` | none | Routers declared in `docker-compose.yml`, host from `DEEPFIX_API_HOST` |
+| `mlflow` | `5000` | none | Routers declared in `docker-compose.yml`, behind basic auth |
 | `rustfs` | `9000`, `9001` | none | Compose network only; the console stays off |
 
-Because a container has no published port for Traefik to infer, each service that a router can reach declares its backend port itself:
+Routing for all three is defined in `docker-compose.yml`, not in Dokploy. Each service joins `dokploy-network`, sets `traefik.docker.network`, and declares an http router (`web`, with `redirect-to-https@file`) and an https router (`websecure`, `tls.certresolver=letsencrypt`), plus `traefik.http.services.<name>.loadbalancer.server.port`. `mlflow`'s https router also carries `deepfix-mlflow-auth`. The Dokploy Domain entries for these services must be **removed**, or a second router claims the same host.
 
-```yaml
-labels:
-  - "traefik.enable=true"
-  - "traefik.http.services.<name>.loadbalancer.server.port=<port>"
-```
+The repo is therefore the single source of routing: a single-service `docker compose up --no-deps` from the plain compose file keeps the sites up. `mlflow`'s basic-auth user list is `MLFLOW_BASIC_AUTH_USERS`, a deployment secret; every `$` in the bcrypt hash must be doubled (`$$`), because the server's docker-compose v1 re-interpolates `.env`. Empty fails closed, so a missing secret leaves the UI shut rather than open.
 
-The `web` and `backend-api` routers and their `Host` rules come from Dokploy's domain settings; compose only supplies the load-balancer port, under the same name Dokploy derives from the compose service (`web`, `backend-api`). The `mlflow` router is declared in `docker-compose.yml`, because its basic-auth middleware must be version-controlled rather than a manual edit that a redeploy can lose; that service therefore also declares `dokploy-network` itself, since Dokploy only attaches a service to it when the service has a Domain.
+Nothing here binds a host port for these four services. If a deployment genuinely needs host access for a probe, bind it to loopback (`127.0.0.1:8000:8000`) so it is not reachable from outside the machine.
 
-Nothing in this repository binds a host port for these four services. Local work uses `uv run uvicorn` and the Vite dev server directly, not the Compose stack; if a deployment genuinely needs host access for a debugger or a probe, bind it to loopback (`127.0.0.1:8000:8000`) so it is not reachable from outside the machine.
-
-`docker-compose.yml` declares `dokploy-network` as an external network because the `mlflow` router joins it. A laptop that runs the Compose stack instead of the dev servers needs that network to exist first:
+`docker-compose.yml` declares `dokploy-network` as external. A laptop that runs the Compose stack instead of the dev servers needs that network to exist first:
 
 ```bash
 docker network create dokploy-network   # once, on a host that is not Dokploy
@@ -618,11 +613,11 @@ MLflow has no authentication of its own, and the RustFS console has no IAM polic
 | RustFS S3 API | none | `S3_ENDPOINT_URL` on the Compose network | `backend-api`, `hermes`, LanceDB in both |
 | RustFS console | none | not started | nothing in this repository |
 
-Machine-to-machine traffic never leaves the host. A human reads the MLflow UI through the `mlflow` service's own Traefik router, which terminates TLS and requires the `deepfix-mlflow-auth` basic-auth middleware; both are labels in `docker-compose.yml`. Keep that domain's `Host` in `MLFLOW_SERVER_ALLOWED_HOSTS` and its origin in `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS`, or MLflow rejects the request before the UI loads.
+Machine-to-machine traffic never leaves the host. A human reads the MLflow UI through the `mlflow` service's own Traefik routers: the `web` entrypoint redirects to HTTPS, and `websecure` terminates TLS and requires the `deepfix-mlflow-auth` basic-auth middleware. Both are labels in `docker-compose.yml`. Keep that domain's `Host` in `MLFLOW_SERVER_ALLOWED_HOSTS` and its origin in `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS`, or MLflow rejects the request before the UI loads.
 
-The middleware's user list is `MLFLOW_BASIC_AUTH_USERS`, a deployment secret. Generate it with `htpasswd -nbB user pass` and set the output verbatim: a value passed as an environment variable must **not** have its `$` characters doubled. Doubling is only for a literal pasted into a Compose file or an expanding shell. Empty fails closed: a user list with no entries authenticates nobody, so the UI refuses to open rather than opening unprotected.
+The middleware's user list is `MLFLOW_BASIC_AUTH_USERS`, a deployment secret. Generate it with `htpasswd -nbB admin 'pass' | sed -e 's/\$/\$\$/g'` and paste the output: every `$` in the bcrypt hash must be doubled, because the server's docker-compose v1 re-interpolates `.env` and a single-`$` hash is corrupted, failing every login. Doubling is also required in Dokploy's Environment tab, which writes that value into the same `.env`. Empty fails closed: a user list with no entries authenticates nobody, so the UI refuses to open rather than opening unprotected.
 
-The router is declared here, not in Dokploy, so a redeploy cannot drop the middleware. `mlflow` therefore has **no Dokploy Domain entry**: remove one if it exists, or two routers claim the same `Host` and which one answers is undefined.
+The routers are declared here, not in Dokploy, so a redeploy cannot drop the middleware. `mlflow` therefore has **no Dokploy Domain entry**: remove one if it exists, or two routers claim the same `Host` and which one answers is undefined.
 
 `mlflow_run_url()` builds the admin *open run* link from `MLFLOW_TRACKING_URI`. With an internal host it returns nothing and the admin table shows a dash instead of an unopenable link. `S3_URI`, `S3_REGION`, and the IAM keys do not depend on the endpoint: the URI names a bucket and key, not a host.
 
