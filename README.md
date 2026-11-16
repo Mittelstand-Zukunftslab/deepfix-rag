@@ -2,6 +2,10 @@
 
 DeepFix answers questions over a company's own documents — and keeps getting better at finding them. It is a RAG system for German SMEs built on [LlamaIndex](https://www.llamaindex.ai/) with a [LanceDB](https://lancedb.com/) vector store on [RustFS](https://rustfs.com/), wrapped in a product people can sign in to, plus an optimizer that tunes retrieval on their own feedback.
 
+[![DeepFix admin mode tour: Ask, Optimization, History and the Hermes chat](docs/media/deepfix-admin-tour-preview.gif)](docs/media/deepfix-admin-tour.mp4)
+
+The clip above is a 2 fps sample of the [104-second recording](docs/media/deepfix-admin-tour.mp4), every frame of which is captioned. GitHub does not play a committed MP4 inline, so that link downloads the file for your own player; the chapter list, the subtitle file, and the written guide sit in [Admin mode tour](#admin-mode-tour) below.
+
 The pipeline is deterministic: chunking, dense/BM25/hybrid retrieval, optional reranking, and synthesis are configured by one validated YAML file. Around it sit three things that are kept deliberately separate:
 
 1. **The `deepfix` CLI** — `dataset`, `index`, `eval`, `gate`, `hpo`, `mutate-config`, `diff-config`, `schema`, `run-diagnostic`. Scriptable, JSON on stdout, fixed exit codes.
@@ -16,7 +20,7 @@ Developed by **Mittelstand Zukunftslab & AI Service Center (AISC) — HPI**.
 
 ## What you get
 
-| | |
+| Feature | What it does |
 | :--- | :--- |
 | **Search** | Dense, BM25, or hybrid retrieval over a shared corpus, with optional reranking and a relevance floor once reranking is on. |
 | **Ask** | A chat over the same corpus. Answers cite the passages they came from, each passage stays votable, and a grounding badge says whether the answer is backed by the corpus. [Streaming, multi-turn Ask chat is coming with PR #23](https://github.com/Mittelstand-Zukunftslab/deepfix-rag/pull/23). |
@@ -34,9 +38,9 @@ Accounts and roles live in the web app (Better Auth, `member` and `admin`). Admi
 
 A 104-second recording of the live admin experience: Ask, Optimization, History, and the Hermes chat, in that order. Captions are burned in at the bottom, and the same cues ship as a subtitle file.
 
-[![DeepFix admin mode tour](docs/media/deepfix-admin-tour-preview.gif)](docs/media/deepfix-admin-tour.mp4)
+**[Watch the full recording (MP4, 104 s)](docs/media/deepfix-admin-tour.mp4)** · **[Preview GIF](docs/media/deepfix-admin-tour-preview.gif)** · **[Subtitles](docs/media/deepfix-admin-tour.srt)**
 
-**[Watch the full recording (MP4, 104 s)](docs/media/deepfix-admin-tour.mp4)** · **[Subtitles](docs/media/deepfix-admin-tour.srt)**
+The preview at the top of this page is the same recording sampled at 2 fps and scaled to 768 px wide, so it loads as an image everywhere; the MP4 is the readable copy, with the full frame and the captions at their original size.
 
 | Time | Segment |
 | --- | :--- |
@@ -57,21 +61,21 @@ The recording was made from a stack running the Ask chat from PR #23, so that se
 ## Architecture
 
 ```mermaid
-flowchart TB
-    user["Browser"] -->|HTTPS| web["web<br/>TanStack Start + Better Auth"]
-    web -->|"same-origin /api proxy<br/>Ed25519 identity token"| api["backend-api<br/>FastAPI"]
-    api -->|"SQLite product.db"| workspace["workspace volume<br/>corpus, indexes, configs, runs"]
-    api -->|"MLFLOW_TRACKING_URI"| mlflow["mlflow<br/>basic auth, one domain"]
-    api -->|"S3_ENDPOINT_URL"| rustfs["rustfs<br/>S3 API"]
-    api -->|"POST /v1/runs"| hermes["hermes<br/>optimization gateway"]
-    api -->|"chat completions<br/>when enabled"| chat["hermes chat profile"]
-    hermes -->|"optimization/runs/*"| rustfs
-    hermes -->|"hermes-otel spans"| mlflow
-    hermes -->|"deepfix eval / index / hpo"| hermesvol["hermes_data volume"]
-    api -.->|"run-diagnostic only"| diag["diagnostic-agent"]
-    api -->|"OPENROUTER_API_KEY"| llm["OpenRouter<br/>generation, judge,<br/>embeddings, rerank"]
-    hermes -->|"OPENROUTER_API_KEY"| llm
+flowchart TD
+    browser["Browser"] -->|HTTPS| web["web<br/>TanStack Start + Better Auth"]
+    web -->|"/api proxy<br/>Ed25519 identity token"| api["backend-api<br/>FastAPI"]
+    api --> data["product.db<br/>+ workspace volume"]
+    api --> s3["rustfs<br/>S3 bundles"]
+    api --> mflow["mlflow"]
+    api -->|"POST /v1/runs"| hermes["hermes<br/>optimizer"]
+    hermes --> s3
+    hermes --> mflow
+    api -.->|"model calls"| llm["OpenRouter"]
 ```
+
+Only `web` is reachable from a browser. It signs the user in with Better Auth, then proxies every other `/api/*` call to `backend-api` with a short-lived Ed25519 identity token, so the API trusts the web app's session without holding a cookie itself.
+
+`backend-api` owns the state: SQLite `product.db`, the workspace volume that holds the corpus, the indexes, `configs/champion.yaml`, and `runs/`, plus the object store and the tracker. It starts a round by posting to `hermes` and then polls the gateway's event stream, so the sandbox never holds the promotion decision. `hermes` writes its run bundle and its spans to `rustfs` and `mlflow` under keys scoped to `optimization/runs/*`, and both it and the API call OpenRouter for generation, judging, embeddings, and rerank.
 
 | Service | Role | Host port |
 | :--- | :--- | :--- |
@@ -89,49 +93,42 @@ flowchart TB
 
 Every model id is deployment configuration read from the environment. No model id has a default in the package: an empty value fails at the point of use and names the variable.
 
-| Purpose | Variable | Default in `example.env` | Endpoint |
-| :--- | :--- | :--- | :--- |
-| Answer generation and query expansion | `LLM_MODEL` | `qwen/qwen3.8-flash` | `LLM_BASE_URL` (OpenRouter) |
-| DeepEval judge | `LLM_JUDGE_MODEL` | `z-ai/glm-5.3-flash` | `LLM_BASE_URL` |
-| Hermes optimization agent | `HERMES_MODEL` | `deepseek/deepseek-v4.1-flash-1017` | `HERMES_MODEL_BASE_URL`, optional |
-| Admin chat | `HERMES_CHAT_MODEL` | unset, falls back to `HERMES_MODEL` | as `HERMES_MODEL` |
-| Embeddings | `EMBEDDING_MODEL` | `perplexity/pplx-embed-v1-4b` | `EMBEDDING_BASE_URL` |
-| Reranker | `COHERE_MODEL` | `cohere/rerank-4-fast` | `POST <COHERE_BASE_URL>/rerank` |
+| Purpose | Variable | Default in `example.env` |
+| :--- | :--- | :--- |
+| Answer generation and query expansion | `LLM_MODEL` | `qwen/qwen3.8-flash` |
+| DeepEval judge | `LLM_JUDGE_MODEL` | `z-ai/glm-5.3-flash` |
+| Hermes optimization agent | `HERMES_MODEL` | `deepseek/deepseek-v4.1-flash-1017` |
+| Admin chat | `HERMES_CHAT_MODEL` | unset, falls back to `HERMES_MODEL` |
+| Embeddings | `EMBEDDING_MODEL` | `perplexity/pplx-embed-v1-4b` |
+| Reranker | `COHERE_MODEL` | `cohere/rerank-4-fast` |
+
+Each row is read from the environment and reaches its own endpoint, so the endpoint is a variable rather than a column: generation and the judge use `LLM_BASE_URL`, embeddings use `EMBEDDING_BASE_URL`, the reranker posts to `<COHERE_BASE_URL>/rerank`, and `HERMES_MODEL_BASE_URL` is an optional override for the agent (unset means OpenRouter).
 
 `embedding.model`, `rerank.model`, and `generation.model` are not config keys; `deepfix mutate-config` rejects them. The reranker is DeepFix's own HTTP client for OpenRouter's rerank API, authorized by `OPENROUTER_API_KEY`; the native Cohere `/v2/rerank` path is never called, and `COHERE_API_KEY` is only a fallback the client reads when `OPENROUTER_API_KEY` is empty. `rerank.min_relevance_score` (default `0.3`) is the relevance floor applied while reranking is on: a passage below it is dropped before generation and before display. With rerank off nothing is filtered by score, because the retriever's own scale is different.
 
 ### Repository layout
 
-```
-deepfix-rag/
-├── .agents/skills/                 <- The twelve agent skills (optimization-loop/ is the entry point)
-├── configs/                        <- RAG and HPO configuration (see configs/README.md)
-├── docker/hermes/                  <- Hermes sandbox image, boot script, shim, run-tag plugin
-├── docs/                           <- Admin guide, deployment notes, verification runbooks, media
-├── plugins/deepfix-rag/plugin.yaml <- Plugin manifest: the twelve skills plus their aliases
-├── src/deepfix_rag/
-│   ├── api/                        <- FastAPI app, routes, schemas, identity, chat relay
-│   ├── cli/                        <- Typer subcommands and exit-code helpers
-│   ├── config/                     <- Pydantic schema, settings, mutator, HPO space
-│   ├── diagnostics/                <- Failure analysis client for deepfix-server
-│   ├── evaluation/                 <- DeepEval runner, judge, MLflow tracker
-│   ├── admin_chat.py               <- Chat store, audit trail, rate limits, prompt, digest
-│   ├── data.py, documents.py       <- Loader strategies; workspace layout, uploads, seeding
-│   ├── feedback.py                 <- Votes to dev/holdout questions, snapshot export
-│   ├── indexing.py                 <- Blue-green workspace builds, index coordinator
-│   ├── optimization.py             <- Run rows, Hermes supervision, stall detection
-│   ├── optimization_schedule.py    <- APScheduler nightly job and audit prune
-│   ├── pipeline.py                 <- LlamaIndex Workflow RAG pipeline
-│   ├── promotion.py                <- Dev and holdout scoring, the gate, champion writes
-│   └── run_bundle.py               <- Bundle layout, object store, holdout leak check
-├── tasks/                          <- PRDs, stories, plans, implementation notes
-├── tests/                          <- pytest suite (markers in pyproject.toml)
-├── web/                            <- TanStack Start product UI (Bun, TypeScript)
-├── compose.hermes.yml              <- The hermes service
-├── compose.graphdb.yml             <- Optional memgraph and falkordb services
-├── docker-compose.yml              <- web, backend-api, mlflow, rustfs, diagnostic-agent
-└── example.env                     <- Environment template; copy to .env
-```
+- `.agents/skills/` — the twelve agent skills; `optimization-loop/` is the entry point.
+- `configs/` — RAG and HPO configuration, described in `configs/README.md`.
+- `docker/hermes/` — sandbox image, boot script, CLI shim, run-tag plugin.
+- `docs/` — admin guide, deployment notes, runbooks, and the tour media.
+- `plugins/deepfix-rag/` — plugin manifest: the twelve skills and their aliases.
+- `src/deepfix_rag/` — the domain layer: `pipeline.py` (the LlamaIndex Workflow),
+  `indexing.py` (blue-green builds), `promotion.py` (scores, gate, champion),
+  `optimization.py` (run rows, Hermes supervision), `optimization_schedule.py`,
+  `admin_chat.py`, `data.py`, `documents.py`, `feedback.py`, `run_bundle.py`.
+  - `api/` — FastAPI app, routes, schemas, identity, chat relay.
+  - `cli/` — Typer subcommands and the exit-code helpers.
+  - `config/` — Pydantic schema, settings, mutator, HPO space.
+  - `diagnostics/` — failure-analysis client for `deepfix-server`.
+  - `evaluation/` — DeepEval runner, judge, MLflow tracker.
+- `tasks/` — PRDs, stories, plans, and implementation notes.
+- `tests/` — pytest suite; markers are registered in `pyproject.toml`.
+- `web/` — the TanStack Start product UI (Bun, TypeScript).
+- `compose.hermes.yml` — the `hermes` service.
+- `compose.graphdb.yml` — optional `memgraph` and `falkordb` services.
+- `docker-compose.yml` — `web`, `backend-api`, `mlflow`, `rustfs`, `diagnostic-agent`.
+- `example.env` — environment template; copy it to `.env`.
 
 ---
 
@@ -556,11 +553,13 @@ Votes on passages and answers become the dev and holdout evaluation questions, w
 ## Documentation
 
 - [`AGENTS.md`](AGENTS.md) — how work is planned, committed, and tested.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — branching, commits, pull requests, and what a test has to cover.
+- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability privately.
 - [`docs/admin-mode.md`](docs/admin-mode.md) — the admin user guide, with stills from the tour.
 - [`docs/deployment.md`](docs/deployment.md) — Dokploy, memory caps, rebuild order, secrets.
 - [`docs/README.md`](docs/README.md) — the docs index.
 - [`configs/README.md`](configs/README.md) — every shipped configuration and when to use it.
-- [`tasks/`](tasks/) — PRDs, stories, plans, and implementation notes.
+- [`tasks/`](./tasks/) — the directory of PRDs, stories, plans, and implementation notes, starting with [`tasks/prd-hermes-optimizer.md`](./tasks/prd-hermes-optimizer.md).
 
 ## License
 
