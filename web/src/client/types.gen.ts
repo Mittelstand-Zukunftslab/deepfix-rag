@@ -5,6 +5,262 @@ export type ClientOptions = {
 };
 
 /**
+ * AskChatCitationResponse
+ *
+ * One ``[n]`` marker in an answer and the passage it resolved to.
+ */
+export type AskChatCitationResponse = {
+    /**
+     * Doc Id
+     */
+    doc_id: string;
+    /**
+     * Marker
+     *
+     * The number inside the marker, as the member sees it.
+     */
+    marker: number;
+    /**
+     * Rank
+     *
+     * The passage's rank in that turn's tool output.
+     */
+    rank: number;
+};
+
+/**
+ * AskChatCompletionRequest
+ *
+ * One Ask chat turn.
+ *
+ * ``messages`` carries the browser's view for the AI SDK's own bookkeeping; the
+ * prompt is rebuilt from the store, so the array is not trusted and only its
+ * last entry's role is checked (FR-011). ``regenerate`` marks the AI SDK's
+ * reload trigger, which replaces the newest answered turn in place (FR-015).
+ */
+export type AskChatCompletionRequest = {
+    /**
+     * Messages
+     */
+    messages: Array<ChatMessageModel>;
+    /**
+     * Regenerate
+     */
+    regenerate?: boolean;
+    /**
+     * Thread Id
+     */
+    thread_id: string;
+};
+
+/**
+ * AskChatImportRequest
+ *
+ * The browser's legacy sessions, imported once (FR-033).
+ *
+ * The list is bounded rather than unbounded: an import is one write per stored
+ * turn, so a payload past the bound is a 400 naming it instead of a long write.
+ * An empty list is accepted and creates nothing, which is what a member with
+ * nothing to import produces.
+ */
+export type AskChatImportRequest = {
+    /**
+     * Sessions
+     */
+    sessions?: Array<LegacySessionRequest>;
+};
+
+/**
+ * AskChatImportResponse
+ *
+ * What the import created and what it skipped, so the client can say so.
+ */
+export type AskChatImportResponse = {
+    /**
+     * Threads Created
+     */
+    threads_created: number;
+    /**
+     * Turns Created
+     */
+    turns_created: number;
+    /**
+     * Turns Skipped
+     */
+    turns_skipped: number;
+};
+
+/**
+ * AskChatPassageResponse
+ *
+ * One stored passage: the hit snapshot a turn's answer was built from.
+ *
+ * The text is the whole chunk, not the truncated copy sent to the model, so a
+ * reload shows what the vote records under that rank (FR-006).
+ */
+export type AskChatPassageResponse = {
+    /**
+     * Doc Id
+     */
+    doc_id: string;
+    /**
+     * Filename
+     */
+    filename: string;
+    /**
+     * Rank
+     */
+    rank: number;
+    /**
+     * Score
+     */
+    score: number;
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Truncated
+     */
+    truncated: boolean;
+};
+
+/**
+ * AskChatRenameRequest
+ *
+ * A new thread title.
+ *
+ * The bound is on the **trimmed** title, and the store is the one that applies
+ * it: whitespace is collapsed and stripped, and only then is the length checked
+ * against 120. That is why this field's `max_length` is a payload guard rather
+ * than the rule — a title of exactly 120 characters arriving with trailing
+ * spaces is a valid rename, and a field that measured the raw string would
+ * refuse it. `min_length` is 1 so an entirely empty body field is still a
+ * validation error; a whitespace-only title passes here and is refused by the
+ * store as empty-after-trimming, which is the same 400 either way.
+ */
+export type AskChatRenameRequest = {
+    /**
+     * Title
+     *
+     * The new title. Leading and trailing whitespace is removed before the 1 to 120 character limit is applied.
+     */
+    title: string;
+};
+
+/**
+ * AskChatThreadDetailResponse
+ *
+ * A thread and its turns in order, with each turn's grounding and citations.
+ *
+ * One load is enough to draw the whole conversation, including the badges, so
+ * a reload does not issue a request per turn (FR-010).
+ */
+export type AskChatThreadDetailResponse = {
+    thread: AskChatThreadResponse;
+    /**
+     * Turns
+     */
+    turns: Array<AskChatTurnResponse>;
+};
+
+/**
+ * AskChatThreadResponse
+ *
+ * One of the member's conversations.
+ */
+export type AskChatThreadResponse = {
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Thread Id
+     */
+    thread_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
+ * AskChatTurnResponse
+ *
+ * One question and the answer stored for it.
+ *
+ * ``interaction_id``, ``question`` and ``answer`` are null until the turn's
+ * ``interactions`` row exists, which is how a turn still ``running`` reports.
+ * ``passages`` is that turn's stored hit snapshot, which is what lets a reload
+ * rebuild the sources panel without a second request per answer (FR-007).
+ */
+export type AskChatTurnResponse = {
+    /**
+     * Answer
+     */
+    answer: string | null;
+    /**
+     * Citations
+     */
+    citations: Array<AskChatCitationResponse>;
+    /**
+     * Ended At
+     */
+    ended_at: string | null;
+    /**
+     * Error
+     */
+    error: string | null;
+    /**
+     * First Token Ms
+     */
+    first_token_ms: number | null;
+    grounding: Grounding | null;
+    /**
+     * Interaction Id
+     *
+     * The interactions row that holds this turn's question and answer.
+     */
+    interaction_id: string | null;
+    /**
+     * Passages
+     */
+    passages: Array<AskChatPassageResponse>;
+    /**
+     * Question
+     */
+    question: string | null;
+    /**
+     * Retrieval Query
+     */
+    retrieval_query: string | null;
+    /**
+     * Retry Of
+     */
+    retry_of: string | null;
+    /**
+     * Seq
+     */
+    seq: number;
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Status
+     */
+    status: 'running' | 'completed' | 'failed' | 'cancelled';
+    /**
+     * Turn Id
+     */
+    turn_id: string;
+};
+
+/**
  * AskResponse
  *
  * One single-turn answer and the passages it used.
@@ -694,7 +950,7 @@ export type FeedbackSummaryResponse = {
  *
  * How much the corpus supports the answer that was returned.
  */
-export type Grounding = 'grounded' | 'declined' | 'no_relevant_sources';
+export type Grounding = 'grounded' | 'declined' | 'no_relevant_sources' | 'not_searched';
 
 /**
  * HTTPValidationError
@@ -926,6 +1182,60 @@ export type InteractionReviewResponse = {
      * Trace Id
      */
     trace_id: string | null;
+};
+
+/**
+ * LegacySessionRequest
+ *
+ * One session from the browser's old localStorage sessions.
+ *
+ * ``createdAt`` and ``updatedAt`` are accepted as **either** an ISO string or a
+ * millisecond epoch number, because the retired page wrote ``Date.now()`` values
+ * and a strict string field rejected every real payload with a 422 — which reached
+ * the member as "your earlier conversations could not be carried over". The store
+ * only reads them as display timestamps, so both forms are normalised to a string.
+ */
+export type LegacySessionRequest = {
+    /**
+     * Createdat
+     */
+    createdAt?: string | number | number | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Title
+     */
+    title?: string;
+    /**
+     * Turns
+     */
+    turns?: Array<LegacyTurnRequest>;
+    /**
+     * Updatedat
+     */
+    updatedAt?: string | number | number | null;
+};
+
+/**
+ * LegacyTurnRequest
+ *
+ * One turn from the browser's old localStorage sessions.
+ */
+export type LegacyTurnRequest = {
+    /**
+     * Answer
+     */
+    answer?: string | null;
+    /**
+     * Interactionid
+     */
+    interactionId?: string | null;
+    /**
+     * Userquery
+     */
+    userQuery?: string;
 };
 
 /**
@@ -2033,6 +2343,310 @@ export type AskQuestionResponses = {
 };
 
 export type AskQuestionResponse = AskQuestionResponses[keyof AskQuestionResponses];
+
+export type AskChatCompletionData = {
+    body: AskChatCompletionRequest;
+    path?: never;
+    query?: never;
+    url: '/ask/chat/completions';
+};
+
+export type AskChatCompletionErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+    /**
+     * The request conflicts with the current state.
+     */
+    409: ErrorResponse;
+    /**
+     * Too many requests; wait and try again.
+     */
+    429: ErrorResponse;
+    /**
+     * An upstream dependency answered with an error.
+     */
+    502: ErrorResponse;
+    /**
+     * A required dependency is not ready.
+     */
+    503: ErrorResponse;
+};
+
+export type AskChatCompletionError = AskChatCompletionErrors[keyof AskChatCompletionErrors];
+
+export type AskChatCompletionResponses = {
+    /**
+     * The AI SDK UI message stream for one turn.
+     */
+    200: string;
+};
+
+export type AskChatCompletionResponse = AskChatCompletionResponses[keyof AskChatCompletionResponses];
+
+export type ListAskChatThreadsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/ask/chat/threads';
+};
+
+export type ListAskChatThreadsErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type ListAskChatThreadsError = ListAskChatThreadsErrors[keyof ListAskChatThreadsErrors];
+
+export type ListAskChatThreadsResponses = {
+    /**
+     * Response List Ask Chat Threads
+     *
+     * Successful Response
+     */
+    200: Array<AskChatThreadResponse>;
+};
+
+export type ListAskChatThreadsResponse = ListAskChatThreadsResponses[keyof ListAskChatThreadsResponses];
+
+export type CreateAskChatThreadData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/ask/chat/threads';
+};
+
+export type CreateAskChatThreadErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type CreateAskChatThreadError = CreateAskChatThreadErrors[keyof CreateAskChatThreadErrors];
+
+export type CreateAskChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    201: AskChatThreadResponse;
+};
+
+export type CreateAskChatThreadResponse = CreateAskChatThreadResponses[keyof CreateAskChatThreadResponses];
+
+export type ImportAskChatSessionsData = {
+    body: AskChatImportRequest;
+    path?: never;
+    query?: never;
+    url: '/ask/chat/threads/import';
+};
+
+export type ImportAskChatSessionsErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+};
+
+export type ImportAskChatSessionsError = ImportAskChatSessionsErrors[keyof ImportAskChatSessionsErrors];
+
+export type ImportAskChatSessionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: AskChatImportResponse;
+};
+
+export type ImportAskChatSessionsResponse = ImportAskChatSessionsResponses[keyof ImportAskChatSessionsResponses];
+
+export type DeleteAskChatThreadData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/threads/{thread_id}';
+};
+
+export type DeleteAskChatThreadErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type DeleteAskChatThreadError = DeleteAskChatThreadErrors[keyof DeleteAskChatThreadErrors];
+
+export type DeleteAskChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type DeleteAskChatThreadResponse = DeleteAskChatThreadResponses[keyof DeleteAskChatThreadResponses];
+
+export type GetAskChatThreadData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/threads/{thread_id}';
+};
+
+export type GetAskChatThreadErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type GetAskChatThreadError = GetAskChatThreadErrors[keyof GetAskChatThreadErrors];
+
+export type GetAskChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    200: AskChatThreadDetailResponse;
+};
+
+export type GetAskChatThreadResponse = GetAskChatThreadResponses[keyof GetAskChatThreadResponses];
+
+export type RenameAskChatThreadData = {
+    body: AskChatRenameRequest;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/threads/{thread_id}';
+};
+
+export type RenameAskChatThreadErrors = {
+    /**
+     * Invalid input.
+     */
+    400: ErrorResponse;
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type RenameAskChatThreadError = RenameAskChatThreadErrors[keyof RenameAskChatThreadErrors];
+
+export type RenameAskChatThreadResponses = {
+    /**
+     * Successful Response
+     */
+    200: AskChatThreadResponse;
+};
+
+export type RenameAskChatThreadResponse = RenameAskChatThreadResponses[keyof RenameAskChatThreadResponses];
+
+export type CancelAskChatTurnData = {
+    body?: never;
+    path: {
+        /**
+         * Turn Id
+         */
+        turn_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/turns/{turn_id}/cancel';
+};
+
+export type CancelAskChatTurnErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type CancelAskChatTurnError = CancelAskChatTurnErrors[keyof CancelAskChatTurnErrors];
+
+export type CancelAskChatTurnResponses = {
+    /**
+     * The turn was stopped, or had already ended.
+     */
+    204: void;
+};
+
+export type CancelAskChatTurnResponse = CancelAskChatTurnResponses[keyof CancelAskChatTurnResponses];
+
+export type ResumeAskChatTurnData = {
+    body?: never;
+    path: {
+        /**
+         * Turn Id
+         */
+        turn_id: string;
+    };
+    query?: never;
+    url: '/ask/chat/turns/{turn_id}/stream';
+};
+
+export type ResumeAskChatTurnErrors = {
+    /**
+     * No valid session.
+     */
+    401: ErrorResponse;
+    /**
+     * Unknown id.
+     */
+    404: ErrorResponse;
+};
+
+export type ResumeAskChatTurnError = ResumeAskChatTurnErrors[keyof ResumeAskChatTurnErrors];
+
+export type ResumeAskChatTurnResponses = {
+    /**
+     * The AI SDK UI message stream, replayed and then tailed.
+     */
+    200: string;
+};
+
+export type ResumeAskChatTurnResponse = ResumeAskChatTurnResponses[keyof ResumeAskChatTurnResponses];
 
 export type ListDocumentsData = {
     body?: never;

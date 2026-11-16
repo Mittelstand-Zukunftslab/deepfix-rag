@@ -16,5 +16,9 @@ export const Route = createFileRoute("/chat")({
 function ChatRoute() {
   const index = useSuspenseQuery(indexQueryOptions());
   const { currentUser } = Route.useRouteContext();
-  return <AskPage indexReady={index.data.serving_build_id != null} ownerId={currentUser?.id} />;
+  // The conversations are server objects; the owner id is passed only so the
+  // page can find and retire this browser's pre-server sessions (FR-033).
+  return (
+    <AskPage indexReady={index.data.serving_build_id != null} ownerId={currentUser?.id ?? null} />
+  );
 }

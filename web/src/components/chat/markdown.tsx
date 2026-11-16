@@ -1,5 +1,6 @@
 "use client";
 
+import { cloneElement, Fragment, isValidElement } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -17,15 +18,33 @@ import { cn } from "@/lib/utils";
  * `prose={false}` because its assistant messages are already spaced by the
  * message column.
  */
+export type CitationTokens = {
+  /** Wrap one marker in the private tokens the renderer recognises. */
+  token: (marker: number) => string;
+  /** The markers the server validated; anything else stays plain text. */
+  markers: Set<number>;
+  /** A control for one validated marker, or `null` to leave it as text. */
+  render: (marker: number) => React.ReactNode;
+};
+
 export function ChatMarkdown({
   children,
   prose = true,
   className,
+  citations,
 }: {
   children: string;
   prose?: boolean;
   className?: string;
+  /**
+   * When present, `[n]` markers the server validated become citation controls.
+   * The substitution happens on the markdown source, before parsing, so the
+   * marker cannot be eaten by emphasis or link syntax — and it is the one
+   * renderer both chats share, so there is no second markdown pipeline.
+   */
+  citations?: CitationTokens;
 }) {
+  const source = citations ? prepareCitations(children, citations) : children;
   return (
     <div
       className={cn(
@@ -34,10 +53,106 @@ export function ChatMarkdown({
         className,
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
-        {children}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={
+          (citations ? citationComponents(citations) : MARKDOWN_COMPONENTS) as React.ComponentProps<
+            typeof ReactMarkdown
+          >["components"]
+        }
+      >
+        {source}
       </ReactMarkdown>
     </div>
+  );
+}
+
+/**
+ * The shared components plus a walker that resolves citation tokens in text.
+ *
+ * The tokens are private-use characters, so they must never survive to the page —
+ * a browser draws each as a hollow box, which is exactly what a member saw when a
+ * marker fell inside a bold phrase, a list item, or a heading. Overriding only `p`
+ * missed all three, because `react-markdown` renders those containers itself.
+ *
+ * So every element that can *own* prose is overridden with one walker, and the
+ * walker recurses through any host element of its own, so a marker inside a link,
+ * a blockquote, or a table cell is reached too. `p`, `li`, and the headings are
+ * listed explicitly because they are the containers an answer actually uses; a
+ * component of this module's own — `code`, say — is never rebuilt this way.
+ */
+function citationComponents(
+  citations: CitationTokens,
+): React.ComponentProps<typeof ReactMarkdown>["components"] {
+  const withTokens =
+    (tag: "p" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "strong" | "em") =>
+    ({ children }: { children?: React.ReactNode }) => {
+      const Tag = tag;
+      return <Tag>{withCitations(children, citations)}</Tag>;
+    };
+  return {
+    ...MARKDOWN_COMPONENTS,
+    ...Object.fromEntries(
+      (["p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "strong", "em"] as const).map(
+        (tag) => [tag, withTokens(tag)],
+      ),
+    ),
+  };
+}
+
+/** Rebuild a node's children, replacing citation tokens with their controls. */
+function withCitations(node: React.ReactNode, citations: CitationTokens): React.ReactNode {
+  if (typeof node === "string") return <CitationText text={node} citations={citations} />;
+  if (Array.isArray(node)) {
+    return node.map((child, index) => (
+      <Fragment key={index}>{withCitations(child, citations)}</Fragment>
+    ));
+  }
+  // A nested element whose own text still carries a token: `<strong>` inside a
+  // paragraph is the common case, and its children are host nodes by now.
+  if (isElementWithChildren(node)) {
+    return cloneElement(node, { children: withCitations(node.props.children, citations) });
+  }
+  return node;
+}
+
+function isElementWithChildren(
+  node: React.ReactNode,
+): node is React.ReactElement<{ children?: React.ReactNode }> {
+  return (
+    isValidElement<{ children?: React.ReactNode }>(node) &&
+    typeof node.type === "string" &&
+    node.props.children !== undefined
+  );
+}
+
+/**
+ * Rewrite validated markers into a token the component map can replace.
+ *
+ * The token survives markdown parsing as ordinary text, and the component map
+ * below turns it into the caller's control. A marker that was not validated is
+ * not rewritten, so it renders as the characters the answer wrote.
+ */
+function prepareCitations(text: string, citations: CitationTokens): string {
+  return text.replace(/\[(\d{1,2})\]/g, (whole, digits: string) => {
+    const marker = Number(digits);
+    return citations.markers.has(marker) ? citations.token(marker) : whole;
+  });
+}
+
+/** A text node, with any citation token replaced by its control. */
+function CitationText({ text, citations }: { text: string; citations?: CitationTokens }) {
+  if (!citations) return <>{text}</>;
+  const pieces = text.split(/(\uE000\d{1,2}\uE001)/g);
+  if (pieces.length === 1) return <>{text}</>;
+  return (
+    <>
+      {pieces.map((piece, index) => {
+        const match = /^\uE000(\d{1,2})\uE001$/.exec(piece);
+        if (!match) return <Fragment key={index}>{piece}</Fragment>;
+        return <Fragment key={index}>{citations.render(Number(match[1])) ?? piece}</Fragment>;
+      })}
+    </>
   );
 }
 

@@ -116,6 +116,48 @@ class Settings(BaseSettings):
     AUTH_ISSUER: str | None = None
     AUTH_AUDIENCE: str | None = None
     MAX_DISPLAYED_HITS: int = 10
+    # The Ask chat's bounds (D-8), documented and plumbed in example.env and the
+    # backend-api Compose environment. Members outnumber admins and share one API
+    # process, so these are smaller than the admin chat's.
+    #
+    # Turns one member may start inside the window; the next is a 429.
+    ASK_CHAT_MAX_TURNS_PER_WINDOW: int = 20
+    # The window itself, in seconds, so operators learn one number.
+    ASK_CHAT_TURN_WINDOW_SECONDS: int = 300
+    # Turns running across the whole deployment at once.
+    ASK_CHAT_MAX_CONCURRENT_TURNS: int = 4
+    # Tool calls one turn may make; the next model step is forced to prose.
+    ASK_CHAT_MAX_TOOL_CALLS: int = 3
+    # Stored messages from earlier turns sent as context.
+    ASK_CHAT_MAX_HISTORY_MESSAGES: int = 12
+    # Longest question accepted; a longer one is a 400 naming this limit.
+    ASK_CHAT_MAX_MESSAGE_CHARS: int = 4000
+    # One passage as sent to the model. The stored hit keeps the full text.
+    ASK_CHAT_MAX_PASSAGE_CHARS: int = 1200
+    # Wall clock one answer may take before the turn is stopped and failed.
+    ASK_CHAT_TURN_TIMEOUT_SECONDS: int = 120
+    # How much the model may think before it answers (D-12). A reasoning model at
+    # its provider default spends the whole output budget thinking and emits no
+    # prose until that budget is gone — qwen3.8-flash did exactly that for 93 s on
+    # one turn — so this is a latency control, not a quality knob. "off" sends the
+    # provider's own disable flag; the other values pass the effort level through.
+    # It is a setting because a deployment may genuinely want the reasoning.
+    #
+    # This is the level for the **answer** step. A step that may call a tool uses
+    # ASK_CHAT_TOOL_STEP_REASONING instead: with thinking off, the model was
+    # observed opening with a refusal or role prose before any tool call in 4 of 7
+    # live turns, so the searching steps keep a little room to reason (D-12).
+    ASK_CHAT_REASONING: Literal["off", "low", "medium", "high"] = "off"
+    # How much a step that may call `search_documents` may think. `low` is the
+    # measured setting: six of six live first steps called the tool cleanly with no
+    # prose first, in 1.1–2.2 s. Off is not the default here because it makes the
+    # model answer before it looks.
+    ASK_CHAT_TOOL_STEP_REASONING: Literal["off", "low", "medium", "high"] = "low"
+    # Most tokens one step may produce. Reasoning tokens count against it, which is
+    # why an uncapped reasoning step produced no visible text at all: the whole
+    # budget went to the hidden part. Bounded so a runaway step fails fast instead
+    # of running to the turn's wall clock.
+    ASK_CHAT_MAX_OUTPUT_TOKENS: int = 2048
     # Omit sampling params the provider rejects. Claude Haiku 5.5 allows only
     # temperature=1. Read by llm.py for every LiteLLM completion, not only the
     # optimization agent, so it stays after OpenHands was removed.

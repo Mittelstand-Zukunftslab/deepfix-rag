@@ -15,7 +15,8 @@ from deepfix_rag.config.hpo import (
     HybridSearchSpace,
     load_hpo_config,
 )
-from deepfix_rag.config.schema import RAGConfig
+from deepfix_rag.config.schema import QUERY_EXPANSION_MAX, RAGConfig
+from deepfix_rag.query_expansion import ExpansionCache
 
 pytestmark = [pytest.mark.unit]
 
@@ -59,7 +60,7 @@ def test_the_shipped_small_space_declares_what_the_prd_specifies() -> None:
 
     hybrid = config.search_space.hybrid
     assert hybrid.query_expansion_num_min == 1
-    assert hybrid.query_expansion_num_max == 1
+    assert hybrid.query_expansion_num_max == 3
     assert hybrid.top_k_choices == [10, 20, 50]
     assert hybrid.rerank_choices == [False, True]
     assert hybrid.rerank_top_n_choices == [5, 10]
@@ -73,9 +74,23 @@ def test_the_shipped_small_space_declares_what_the_prd_specifies() -> None:
     assert hybrid.tune_bm25_params is False
 
 
-def test_the_shipped_small_space_never_expands_a_query() -> None:
-    for params in _samples(_small().search_space.hybrid):
-        assert params["retrieval.query_expansion_num"] == 1
+def test_the_shipped_small_space_samples_expansion_only_up_to_three() -> None:
+    """Expansion 2 and 3 are sampled; 4 is out because it costs without paying back."""
+    seen = {
+        params["retrieval.query_expansion_num"]
+        for params in _samples(_small().search_space.hybrid)
+    }
+    assert seen == {1, 2, 3}
+
+
+def test_every_expanded_query_is_a_completion_the_pipeline_can_cache() -> None:
+    """Expansion above 1 is an LLM call, so the space's cap is what bounds it."""
+    assert _small().search_space.hybrid.query_expansion_num_max <= QUERY_EXPANSION_MAX
+    assert ExpansionCache().stats() == {
+        "expansion_llm_calls": 0,
+        "expansion_cache_hits": 0,
+        "expansion_prompts_cached": 0,
+    }
 
 
 def test_the_shipped_small_space_never_samples_bm25_saturation() -> None:

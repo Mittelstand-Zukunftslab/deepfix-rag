@@ -395,7 +395,7 @@ class RerankConfig(StrictModel):
         default=5, ge=1, description="Final number of top passages passed to generation."
     )
     min_relevance_score: float = Field(
-        default=0.2,
+        default=0.3,
         ge=0.0,
         le=1.0,
         description=(
@@ -403,7 +403,8 @@ class RerankConfig(StrictModel):
             "rerank.enabled is true. A passage scoring below it is dropped before "
             "generation and before display. Without rerank the retriever's own score is "
             "on a different scale (hybrid fusion scores sit near 0.03), so no floor is "
-            "applied there. 0.0 disables the floor."
+            "applied there. 0.0 disables the floor. The default is the value measured "
+            "on the live biology corpus with the served reranker through OpenRouter."
         ),
     )
 

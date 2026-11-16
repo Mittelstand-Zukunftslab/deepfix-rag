@@ -137,14 +137,15 @@ Stories are ordered below. Each of HPO-001 through HPO-006 is one implementation
 
 - [ ] `HPOSearchSpace` / `HybridSearchSpace` in `src/deepfix_rag/config/hpo.py` can sample `rerank.enabled`, and when enabled `rerank.top_n` and a widened `retrieval.top_k`, subject to the existing `RAGConfig` validator in `src/deepfix_rag/config/schema.py` (`rerank.top_n <= retrieval.top_k` and `eval.cutoff_k <= rerank.top_n`). Invalid combinations are not suggested, or they are pruned before eval.
 - [ ] `retrieval.dense_weight` (and the complementary `bm25_weight`) are suggested **only** when `retrieval.fusion_mode` is `relative_score` or `dist_based_score`. They are not sampled under `reciprocal_rerank` or `simple` (documented no-ops in `.agents/skills/hybrid-fusion-tuning/SKILL.md`).
-- [ ] A shipped file `configs/hpo_retrieval_small.yaml` sets `retrieval_only: true`, `tune_chunking: false`, `n_trials: 12`, `limit: 20`, `query_expansion_num_min` and `query_expansion_num_max` of 1, and the following hybrid space:
+- [ ] A shipped file `configs/hpo_retrieval_small.yaml` sets `retrieval_only: true`, `tune_chunking: false`, `n_trials: 12`, `limit: 20`, `query_expansion_num_min: 1` and `query_expansion_num_max: 3`, and the following hybrid space:
   - `rerank.enabled`: false, true
   - `rerank.top_n`: 5, 10 (only if rerank is on)
   - `retrieval.top_k`: 10, 20, 50
   - `retrieval.fusion_mode`: `reciprocal_rerank`, `relative_score`, `dist_based_score` (not `simple`)
   - `retrieval.dense_weight`: 0.3, 0.5, 0.7, only under score-based fusion
-- [ ] The shipped space does **not** include `bm25_k1`, `bm25_b`, `query_expansion_num` other than 1, or any `chunking.*` keys. `configs/hpo.yaml` may keep its broader manual-use bounds, but the agent is pointed at the small file.
-- [ ] Tests assert the small space never emits expansion > 1, never emits chunking keys, never emits `bm25_k1` / `bm25_b`, never emits weights under `reciprocal_rerank`, and that enabled rerank always satisfies the window constraints. `uv run ruff check` and `uv run ruff format --check` pass. `uv run --env-file .env pytest -m "not network and not e2e"` includes these tests.
+  - `retrieval.query_expansion_num`: 1, 2, 3
+- [ ] The shipped space does **not** include `bm25_k1`, `bm25_b`, `query_expansion_num` above 3, or any `chunking.*` keys. `configs/hpo.yaml` may keep its broader manual-use bounds, but the agent is pointed at the small file.
+- [ ] Tests assert the small space samples expansion only within 1..3, never emits chunking keys, never emits `bm25_k1` / `bm25_b`, never emits weights under `reciprocal_rerank`, and that enabled rerank always satisfies the window constraints. `uv run ruff check` and `uv run ruff format --check` pass. `uv run --env-file .env pytest -m "not network and not e2e"` includes these tests.
 
 ### HPO-006: Skills and prompt use one HPO call
 
@@ -185,7 +186,7 @@ Stories are ordered below. Each of HPO-001 through HPO-006 is one implementation
 - FR-3: The Hermes terminal secret scrub must remain enabled. Model ids and the OpenRouter key used by `deepfix` children must come from the shim / boot-time files, not from command-line `VAR=value` prefixes and not from the agent reading s6’s `container_environment`.
 - FR-4: `deepfix hpo` must support `--retrieval-only`, `--limit`, `--seed`, `--timeout`, `--n-trials`, `--storage-uri`, `--output`, and `--json`. The shipped agent workflow is 12 trials, 20 questions, seed 0, file-backed SQLite under the run directory, and a timeout the operator or skill can set.
 - FR-5: HPO trials must reuse a local index copy under the run directory when the champion index is remote. They must not re-download the S3 index on every trial. They must not write a default cache outside that run directory.
-- FR-6: The v1 agent search space is exactly the small space in HPO-005. Weights are sampled only for fusion modes that read them. `bm25_k1`, `bm25_b`, query expansion above 1, and chunking are absent.
+- FR-6: The v1 agent search space is exactly the small space in HPO-005. Weights are sampled only for fusion modes that read them. Query expansion is sampled 1 to 3 and its completions are cached for the whole study. `bm25_k1`, `bm25_b`, and chunking are absent.
 - FR-7: An API-driven Hermes round may run `deepfix hpo` once for query-time search, then must confirm the best trial on the **full** dev set and apply `deepfix gate` with the existing thresholds. Subsample metrics must not be used to recommend. Hermes still writes at most one `candidate_config_path` (or null) in `result.json`.
 - FR-8: `result.json` must exist before the 40-turn budget is exhausted if HPO has already produced a best-so-far or the baseline has failed. The required keys stay `candidate_config_path`, `primary_metric`, `summary`, and `mlflow_run_id`.
 - FR-9: Hermes must not promote, must not receive holdout, and must not write `configs/champion.yaml` or `indexes/current`. The API remains the only promoter. `OPTIMIZATION_MIN_PRIMARY_DELTA` (0.025), `OPTIMIZATION_SECONDARY_TOLERANCE` (-0.01), holdout rules, and `agent.max_turns` (40) must not change.
@@ -199,6 +200,7 @@ Stories are ordered below. Each of HPO-001 through HPO-006 is one implementation
 - Letting subsample HPO scores replace the full-dev gate or the API holdout check.
 - Promoting any Bundestag (or other) candidate from HPO-007, or changing the live champion as part of this work.
 - Including `bm25_k1`, `bm25_b`, or `chunking.*` in the v1 agent search space, or running `--tune-chunking` inside an API-driven round.
+- Query expansion above 3, HyDE, or a second generation model: the sweep reuses `LLM_MODEL` and caches each paraphrase.
 - Native Cohere rerank (`https://api.cohere.com`, `COHERE_API_KEY`) and any client that appends `/v2/rerank` to OpenRouter’s `/api/v1` base.
 - Caching the index on the Hermes volume or any path outside the run directory, as a default.
 - Turning the Hermes dashboard on, publishing Hermes ports, mounting `api_data` / `rustfs_data` into Hermes, or changing Auto Deploy.

@@ -16,9 +16,10 @@ and Dokploy routed a public domain to each. Neither had authentication:
 | RustFS S3 API | `9000` | S3 signature |
 | RustFS console | `9001` | none |
 
-Hostnames are deliberately not repeated here. They lived in Dokploy's domain
-settings, not in this repository: there is no Traefik label or config file
-anywhere in the repo, so all routing was Dokploy-side.
+Hostnames are deliberately not repeated here. At the time, they lived in
+Dokploy's domain settings rather than in this repository: there was no Traefik
+label or config file anywhere in the repo, so all routing was Dokploy-side. The
+MLflow router and its basic-auth middleware now live in `docker-compose.yml`.
 
 ## What was already safe
 
@@ -61,12 +62,15 @@ UI. Nothing needs the RustFS console or a public S3 endpoint.
   documented in `example.env`. The console is not started.
 - **`MLFLOW_TRACKING_URI` and `S3_ENDPOINT_URL` point at the internal names** in
   `example.env`, so no caller depends on a public hostname.
-- **One MLflow domain remains**, behind a Traefik `basicAuth` middleware managed
-  in Dokploy. Its `Host` stays in `MLFLOW_SERVER_ALLOWED_HOSTS` and its origin in
+- **One MLflow router exists, declared in `docker-compose.yml`**, behind the
+  `deepfix-mlflow-auth` basic-auth middleware that is also declared there. Its
+  `Host` comes from `MLFLOW_PUBLIC_HOST` and stays in
+  `MLFLOW_SERVER_ALLOWED_HOSTS` with its origin in
   `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS`, because MLflow 3.x rejects an unlisted
-  `Host` before the UI loads. The middleware is defence in depth: the port
-  removal is the control, since a repo-level `ports:` entry would bypass a
-  middleware this repository cannot see.
+  `Host` before the UI loads. The router is version-controlled rather than a
+  Dokploy-side edit so a redeploy cannot detach the middleware, and the
+  `mlflow` service joins `dokploy-network` itself because Dokploy only attaches
+  a service that has a Domain.
 - **`mlflow_run_url()` returns nothing for an internal tracking URI**, so the
   admin run table shows a dash instead of a link a browser cannot open, rather
   than gaining a second setting.
@@ -95,7 +99,7 @@ Every step is reversible and touches no data:
 | `ports:` removed | re-add the entry and `docker compose up -d <service>` |
 | `RUSTFS_CONSOLE_ENABLE=false` | set it to `true` and rebuild `rustfs` |
 | Dokploy domain removed | re-add it in the UI |
-| Traefik middleware | detach it from the router |
+| Traefik middleware, now a label in `docker-compose.yml` | delete the `deepfix-mlflow-auth` labels and redeploy `mlflow` |
 | Internal endpoints | restore the public values and restart `backend-api` and `hermes` |
 
 Nothing here deletes the `mlflow_artifacts` or `rustfs_data` volume, changes a

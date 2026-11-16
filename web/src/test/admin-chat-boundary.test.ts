@@ -33,14 +33,18 @@ describe("admin chat stream boundary", () => {
     expect(source).toContain("data-deepfix-turn");
   });
 
-  it("is the only module under src/services that reads an event stream", () => {
+  it("is one of the two stream readers under src/services", () => {
     const files = readdirSync(join(SRC, "services")).filter((name) => name.endsWith(".ts"));
-    const readers = files.filter((name) => {
-      if (name === "admin-chat-sse.ts") return false;
-      const text = readFileSync(join(SRC, "services", name), "utf-8");
-      return /getReader\s*\(/.test(text);
-    });
-    expect(readers.map((name) => relative(SRC, join("services", name))).sort()).toEqual([]);
+    const readers = files
+      .filter((name) => {
+        if (name === "admin-chat-sse.ts" || name === "ask-chat-sse.ts") return false;
+        const text = readFileSync(join(SRC, "services", name), "utf-8");
+        return /getReader\s*\(/.test(text);
+      })
+      .sort();
+    // The admin chat and the Ask chat each own one reader, and `ask-chat-sse.ts`
+    // pins its targets to `/api/ask/chat/...` in its own test.
+    expect(readers).toEqual([]);
     expect(sep).toBeTruthy();
   });
 

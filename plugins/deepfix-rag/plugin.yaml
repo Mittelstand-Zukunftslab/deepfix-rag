@@ -22,7 +22,6 @@ skills:
   - "../../.agents/skills/multi-hop-aggregation/SKILL.md"
 aliases:
   embedding-selection: retrieval-backend-selection
-  query-rewriting: hybrid-fusion-tuning
 tool_requirements:
   - command: deepfix
     purpose: "Deterministic CLI execution layer for RAG operations."

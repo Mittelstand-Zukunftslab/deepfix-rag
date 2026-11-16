@@ -1,0 +1,154 @@
+# Ask chat — story index
+
+Stories for `tasks/prd-ask-streaming-multiturn.md`, produced with the `create-story` skill and reviewed with the
+`validate-story` skill from `https://github.com/Mittelstand-Zukunftslab/awesome-skills` (the repository's closest
+available names; there is no `create-stories` or `validate-stories` upstream — a `404` — so the singular skills are the
+real ones and one file per story is their unit either way). The PRD itself was drafted and validated with `create-prd`
+and `validate-prd` from the same repository, whose default `docs/prd.md` and `docs/prd-validation.md` paths are
+overridden to `tasks/prd-ask-streaming-multiturn.md` and `tasks/prd-ask-streaming-multiturn-validation.md`.
+
+Skill adaptations, stated once here so the files do not need to repeat them:
+
+- The skill's default directory is `docs/stories/`. This repository keeps PRDs and stories in `tasks/`, so the
+  stories live in `tasks/stories-ask-chat/`, beside the PRD they trace to — the same arrangement as
+  `tasks/stories-ask-page/` and `tasks/stories-admin-hermes-chat/`.
+- The skill's id convention is project-wide `S-001…`. The PRD already assigns `ASKCHAT-001…ASKCHAT-011` and its
+  "Story to FR map" is keyed on those ids, so the PRD ids are kept. They are project-unique and do not collide with
+  `ASK-001…006` (the Ask page defects) or `CHAT-001…023` (the admin Hermes chat).
+- The skill calls for a `## Type`, `## Status`, `## Summary`, `## PRD traceability`, `## Acceptance criteria`,
+  `## Out of scope`, `## Notes`, `## Definition of done` file. Each file here has those, plus a `## Dependencies`
+  section, which `validate-story` asks for as a check even though the template omits it.
+- Each story has a sibling `*-validation.md` from `validate-story`.
+
+## PRD
+
+`tasks/prd-ask-streaming-multiturn.md` is the PRD, and its validation report is
+`tasks/prd-ask-streaming-multiturn-validation.md`. The PRD carries all eleven decisions (D-1 … D-11); no story here
+reopens one.
+
+## What this feature is
+
+The Ask page becomes a streaming, multi-turn chat, and the DeepFix RAG becomes a tool the model calls. The agent loop
+runs in FastAPI, not in the web server, and streams the Vercel AI SDK's UI message stream — the protocol the admin
+Hermes chat already speaks.
+
+## Order
+
+Stories are implemented one at a time, each built, tested and committed before the next starts. They were built on
+`feat/ask-chat-streaming` (not `feat/hermes-optimizer`, so a review could be a branch rather than a moving target). The
+order below is a topological sort of the dependencies; there are no cycles.
+
+| # | Id | Title | Depends on | Commit |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | ASKCHAT-001 | Keep conversations on the server, private to their owner | — | `ff9434e` |
+| 2 | ASKCHAT-002 | Give the model one read-only tool over the champion index | ASK-001, ASK-002 (landed) | `033e834` |
+| 3 | ASKCHAT-003 | Stream the answer as the AI SDK UI message stream | ASKCHAT-001, 002 | `09cd26f` |
+| 4 | ASKCHAT-004 | Stop, resume, regenerate, and fail honestly | ASKCHAT-003 | `98eddf0` |
+| 5 | ASKCHAT-005 | Bound one member and one deployment, and plumb every bound | ASKCHAT-003, 004 | `289974a` |
+| 6 | ASKCHAT-006 | One typed web data layer and one Chat per thread | ASKCHAT-001 … 005 | `206e36c` |
+| 7 | ASKCHAT-007 | Make the Ask page a streaming, stoppable conversation | ASKCHAT-006 | `d10c656` |
+| 8 | ASKCHAT-008 | Show the evidence, follow its citations, and say how grounded it is | ASKCHAT-007, 003 | `838fdbf` |
+| 9 | ASKCHAT-009 | Bring the browser's existing conversations across, once | ASKCHAT-001, 006 | `2fb98d5` |
+| 10 | ASKCHAT-010 | Trace the tool calls and export the standalone question | ASKCHAT-003, 004 | `7368a7b` |
+| 11 | ASKCHAT-011 | Prove it on the deployed stack (operator runbook) | ASKCHAT-001 … 010, a deployment | `ea90987` (prepared, not run) |
+
+**Every story above is implemented and its tests are green.** ASKCHAT-011 is not code: `docs/ask-chat-verification.md`
+is a runbook an operator executes, and every result in it reads `NOT RUN`.
+
+Three commits after the series fix defects the deployed stack exposed in ASKCHAT-003:
+
+- `3b5d24f` — OpenRouter routed `LLM_MODEL` to a provider that refuses
+  `tool_choice: "required"` while its reasoning mode is on, so **every** Ask turn failed at step 0. It also fixed a
+  failed turn misreporting its cutoff, its grounding, its trace state, and its place in the feedback export.
+- `cadf518` — the documentation pass that made the PRD and these stories describe what was built.
+- the `tool_choice: auto` revision — no step forces a tool call any more. The system prompt steers when to search, a
+  turn that answers without searching is the new `not_searched` grounding state and is never Grounded, and a tool call
+  streamed as many deltas is assembled into one call rather than read as several.
+
+The PRD's D-4a and D-4b record both measurements; each story's `-validation.md` records what it corrected, including the
+fixtures that let the second defect through.
+
+ASKCHAT-009 is the only Should story and is ordered ninth rather than last because it depends on the client layer, not
+on tracing. If it is cut, the fallback is in the PRD's D-5: delete the legacy keys with a one-time notice, so no member
+is left on a store the server cannot see.
+
+## Fixed decisions (do not re-open in a story)
+
+These are the eleven PRD decisions and the owner's four answers of 2026-11-15, restated in the form a story needs.
+
+- **The loop runs in deepfix-api** and streams the AI SDK UI message stream (D-1). The browser never holds a model
+  key or a model id, and the BFF adds the identity bearer as it does for every `/api/*` call.
+- **`search_documents` is the only tool, it is read-only, and a turn always retrieves** (D-2). `tool_choice:
+  "required"` on the first step, and if the model produces no call the server runs the tool itself. At most
+  `ASK_CHAT_MAX_TOOL_CALLS` calls; the last permitted step is sent with `tool_choice: "none"`.
+- **Grounding is ASK-001's enum plus a validated citation list** (D-3). `grounding.Grounding` and
+  `grounding.grounding_for` are the only classifier; no story adds a fourth status or a second phrase list.
+- **Stop cancels the model stream, not just the wait** (D-4). `CustomLiteLLM.achat` is `asyncio.to_thread`, so the
+  loop calls `litellm.acompletion(stream=True)` directly and closes the generator.
+- **Threads are server-side and per member** (D-5), and `interactions` keeps `kind='ask'` with two nullable columns
+  rather than a new kind, because the `CHECK` cannot be altered in place.
+- **Served retrieval equals scored retrieval** (D-6). The tool reads the champion config through
+  `QueryService.retrieve`; `deepfix eval` and the gate are unchanged and single-turn eval remains valid.
+- **The chat resolves `LLM_MODEL`** — the owner's answer, and there is no `ASK_CHAT_MODEL` (D-7). `qwen/qwen3.8-27b`
+  is only a documented manual fallback via `LLM_MODEL`, as one comment in `example.env`. ASKCHAT-005 guards this with
+  a test.
+- **The limits are D-8's numbers**, in `Settings`, in the `backend-api` Compose environment with non-empty defaults,
+  and in `example.env`. No new container and no cap change.
+- **A thread delete keeps the `interactions` rows and the votes** — the owner's answer (D-9). The thread and its turns
+  go; the feedback the optimizer reads stays.
+- **A grounded but uncited answer shows as Partly grounded** — the owner's answer (D-10). It extends the landed
+  `GROUNDING_BADGE` / `groundingNote` copy with one rendered state over three stored values.
+- **Threads are unbounded, with a 50-item list cap and no prune** — the owner's answer (D-11). The 50 is a display
+  cap, not a lifecycle rule.
+
+## What has already landed
+
+The stories build on three Ask fixes that are on `feat/hermes-optimizer` at `223a122`, and none of them re-opens or
+re-implements any of it:
+
+| Story | Landed | What the stories consume |
+| :--- | :--- | :--- |
+| ASK-001 | `97aef60` | `src/deepfix_rag/grounding.py` — `Grounding` (`grounded` / `declined` / `no_relevant_sources`), `DEFLECTION_PHRASES`, `DEFLECTION_PATTERNS`, `grounding_for`; a required `grounding` field on `AskResponse` and `InteractionResponse`; `GroundingBadge` + `groundingNote` in `web/src/features/chat/` |
+| ASK-002 | `00aba89` | `RAGConfig.rerank.min_relevance_score` (0.2, set in `configs/champion.yaml`), `RAGWorkflow._ranker_split` / `split_by_relevance_floor`, `QueryService._search_split`, `RAGResult.dropped_results` |
+| ASK-006 | `223a122` | `pendingBySession: Record<sessionId, query>` in `chat-page.tsx`, so a story that keeps per-session state keeps this shape rather than reintroducing a page-level flag |
+
+## Tests
+
+Only meaningful integration and end-to-end tests count as a story's evidence. A narrow unit test of a helper is not
+acceptance evidence, and no story asks for one.
+
+On the Python side that means a real SQLite file, the real FastAPI app built through `create_app` against `tmp_path`,
+and a real local OpenAI-compatible HTTP endpoint — no `unittest.mock`, `Mock`, `AsyncMock`, or `monkeypatch`, per
+`AGENTS.md`.
+
+On the web side the repository's established practice is what the stories name: the real component, the real
+Assistant UI runtime and the real AI SDK transport, with `vi.stubGlobal("fetch", …)` speaking frames copied from a
+real streamed response. That is the transport boundary, not a stub of domain logic, and it is how
+`web/src/test/admin-chat-session.test.tsx` already proves the admin chat. A story that stubbed the transport's own
+parser would be testing the stub.
+
+Each story names its required test in an acceptance criterion, so the tester can map a check to a line. The commands
+are the repository's standard ones:
+
+```bash
+uv run --env-file .env pytest -v -m "not network and not e2e"
+cd web && bun run typecheck && bun run lint && bun run test && bun run build
+```
+
+## Live findings after deployment
+
+`c755c67` ran end to end on the deployment: seven of seven real questions searched,
+grounded with citations, with correct traces and spans. Testing around that success
+found four more defects, each fixed and covered by an integration test that was
+mutation-checked:
+
+| # | Symptom | Fixed in |
+| :--- | :--- | :--- |
+| 1 | Every turn failed at step 0: the provider refused a forced tool choice | `3b5d24f`, then D-4b removed the forced step |
+| 2 | One tool call streamed as ~10 deltas was read as ~10 calls | the `tool_choice: auto` revision |
+| 3 | `ASK_CHAT_MAX_TOOL_CALLS=3` allowed 5 searches, because the cap was per step | the cap revision |
+| 4 | "Thanks!" in an answered thread showed **Not found in the documents** | the cap revision |
+| 5 | A cancelled turn kept its passages but lost its query and verdict | the cap revision |
+
+Every one of them was invisible to a suite that exercised the happy path, which is
+the lesson recorded in each story's `-validation.md`.

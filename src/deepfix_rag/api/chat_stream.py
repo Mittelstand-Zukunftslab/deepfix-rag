@@ -23,6 +23,7 @@ The functions are pure: no HTTP, no database, no clock. ``tests
 /test_admin_chat_routes.py`` drives them directly and over a real socket.
 """
 
+import asyncio
 import json
 from typing import Any
 
@@ -31,9 +32,31 @@ STREAM_HEADER_VALUE = "v1"
 DONE_FRAME = "data: [DONE]\n\n"
 KEEPALIVE_FRAME = ": keepalive\n\n"
 
+# How long a forwarded stream may be silent before a keep-alive comment is sent.
+# It has to be shorter than the idle limit of whatever proxy sits in front: the
+# deployment is behind Cloudflare, which drops a proxied response after about 100
+# seconds with no bytes, and a reasoning model can be silent for longer than that
+# (D-12). 15 s is far enough under it to absorb a slow hop.
+KEEPALIVE_SECONDS = 15.0
+
+
+async def next_keepalive(queue: "asyncio.Queue[str | None]") -> str | None:
+    """The next queued frame, or ``KEEPALIVE_FRAME`` when nothing arrived in time.
+
+    ``None`` means the turn ended. Both streaming routes need this: the completion
+    relay and the resume tail. The keep-alive is an SSE comment rather than a data
+    part, so the AI SDK ignores it and a proxy still sees bytes moving.
+    """
+    try:
+        return await asyncio.wait_for(queue.get(), timeout=KEEPALIVE_SECONDS)
+    except TimeoutError:
+        return KEEPALIVE_FRAME
+
+
 # The parts the AI SDK's ``uiMessageChunkSchema`` accepts, by ``type``.
 TOOL_PART = "data-deepfix-tool"
 TURN_PART = "data-deepfix-turn"
+GROUNDING_PART = "data-deepfix-grounding"
 
 # Hermes' progress event can arrive at the top level of a chunk or inside the
 # first choice's delta. Both are read, so a change of nesting on the image does
@@ -68,16 +91,86 @@ def tool_part(progress: dict[str, Any]) -> dict[str, Any]:
     return {"type": TOOL_PART, "data": progress}
 
 
+def step_start_part() -> dict[str, Any]:
+    """Open one model step. A tool call and the prose after it are separate steps."""
+    return {"type": "start-step"}
+
+
+def status_part(status: str) -> dict[str, Any]:
+    """A non-terminal note about what the turn is doing, e.g. ``reasoning``.
+
+    It is a ``data-*`` part rather than prose, so the UI can show it beside the
+    answer instead of inside it, and it never becomes part of the stored text. A
+    reasoning model can be silent for a while before its first word; without this
+    the page looks hung (D-12).
+    """
+    return {"type": "data-deepfix-status", "data": {"status": status}}
+
+
+def step_finish_part() -> dict[str, Any]:
+    """Close one model step, before the next one's tool call or the final prose."""
+    return {"type": "finish-step"}
+
+
+def tool_input_start(tool_call_id: str, tool_name: str) -> dict[str, Any]:
+    """Announce one tool call before its arguments are known."""
+    return {"type": "tool-input-start", "toolCallId": tool_call_id, "toolName": tool_name}
+
+
+def tool_input_available(
+    tool_call_id: str, tool_name: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """The call's arguments, once the model has finished writing them."""
+    return {
+        "type": "tool-input-available",
+        "toolCallId": tool_call_id,
+        "toolName": tool_name,
+        "input": arguments,
+    }
+
+
+def tool_output_available(tool_call_id: str, output: Any) -> dict[str, Any]:
+    """The tool's result. The object is the tool's own output verbatim (D-2)."""
+    return {"type": "tool-output-available", "toolCallId": tool_call_id, "output": output}
+
+
+def grounding_part(
+    grounding: str,
+    citations: list[dict[str, Any]],
+    *,
+    max_score: float,
+    cutoff: float,
+) -> dict[str, Any]:
+    """The turn's grounding verdict, its validated citations, and the floor it used (D-3)."""
+    return {
+        "type": GROUNDING_PART,
+        "data": {
+            "grounding": grounding,
+            "citations": list(citations),
+            "max_score": max_score,
+            "cutoff": cutoff,
+        },
+    }
+
+
 def turn_part(
     turn_id: str,
     status: str,
     actions: list[dict[str, Any]] | None = None,
+    *,
+    grounding: str | None = None,
+    citations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The turn's terminal information, as a ``data-*`` part."""
-    return {
-        "type": TURN_PART,
-        "data": {"turn_id": turn_id, "status": status, "actions": list(actions or [])},
+    data: dict[str, Any] = {
+        "turn_id": turn_id,
+        "status": status,
+        "actions": list(actions or []),
     }
+    if grounding is not None:
+        data["grounding"] = grounding
+        data["citations"] = list(citations or [])
+    return {"type": TURN_PART, "data": data}
 
 
 def error_part(message: str) -> dict[str, Any]:

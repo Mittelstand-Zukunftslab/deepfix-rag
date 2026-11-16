@@ -46,6 +46,14 @@ class FailingLLM(MockLLM):
 
 DECLINED = 'No explanation of "rerank off" is available.'
 
+# Refusals the live server returned and the badge labelled "Grounded": the first
+# carries U+2019 instead of an ASCII apostrophe, and the second's wording was not
+# in the phrase list at all.
+LIVE_REFUSALS = (
+    "I don\u2019t have enough information to answer this question from the provided passages.",
+    "There is no information available to answer the question in the provided documents.",
+)
+
 
 class _LowScores(BaseNodePostprocessor):
     """A reranker that scores every candidate below any realistic floor.
@@ -67,13 +75,19 @@ class _LowScores(BaseNodePostprocessor):
 
 
 class RefusingLLM(MockLLM):
-    """Local model that answers with a refusal instead of using the passages."""
+    """Local model that answers with a fixed refusal instead of using the passages."""
+
+    answer: str = DECLINED
+
+    def __init__(self, answer: str = DECLINED, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.answer = answer
 
     def complete(self, prompt: str, formatted: bool = False, **kwargs) -> CompletionResponse:
-        return CompletionResponse(text=DECLINED)
+        return CompletionResponse(text=self.answer)
 
     def chat(self, messages, **kwargs) -> ChatResponse:
-        return ChatResponse(message=ChatMessage(role="assistant", content=DECLINED))
+        return ChatResponse(message=ChatMessage(role="assistant", content=self.answer))
 
 
 @pytest.fixture
@@ -171,17 +185,23 @@ def test_generation_failure_keeps_the_passages(
         assert stored.hits
 
 
+@pytest.mark.parametrize("refusal", (DECLINED, *LIVE_REFUSALS))
 def test_a_refusal_is_declined_and_a_stored_ask_keeps_its_grounding(
-    ask_settings: Settings, identity: IdentityIssuer
+    refusal: str, ask_settings: Settings, identity: IdentityIssuer
 ) -> None:
-    """A model refusal is text, but it is not grounded in the corpus."""
-    with _client(ask_settings, RefusingLLM(), identity) as client:
+    """A model refusal is text, but it is not grounded in the corpus.
+
+    Covers the two refusals the live server produced that were badged
+    "Grounded": one written with U+2019, and one whose wording was missing from
+    the phrase list.
+    """
+    with _client(ask_settings, RefusingLLM(answer=refusal), identity) as client:
         identity.sign_in(client, "ada@example.com")
         _index_note(client)
         asked = client.post("/ask", json={"query": "what does the harbor budget say"})
         assert asked.status_code == 200, asked.text
         body = asked.json()
-        assert body["answer"] == DECLINED
+        assert body["answer"] == refusal
         assert body["error"] is None
         assert body["grounding"] == "declined"
 

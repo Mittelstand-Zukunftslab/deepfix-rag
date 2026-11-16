@@ -15,6 +15,7 @@ import Stemmer
 from typer.testing import CliRunner
 import yaml
 
+from deepfix_rag.config.hpo import load_hpo_config
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.config.settings import Settings
 from deepfix_rag.evaluation.runner import RAGFailureMode
@@ -345,11 +346,22 @@ def test_only_hpo_search_and_the_loop_offer_hpo_as_a_round_action() -> None:
     ], "hpo-search must carry the sweep as its round action"
 
 
-def test_agent_skills_never_enable_query_expansion() -> None:
-    """The agent has no generation LLM, so routed skills never set expansion above 1."""
+def test_agent_skills_may_sample_expansion_only_through_the_sweep() -> None:
+    """A round samples expansion through `hpo-search`; nothing hand-sets it above 3.
+
+    The sweep's small space samples `retrieval.query_expansion_num` 1..3 and the
+    pipeline caches each paraphrase across trials, so an API round can use
+    expansion. A hand-written `--set retrieval.query_expansion_num=N` stays at 1
+    or below: outside the sweep there is no shared cache, so a hand-set value
+    pays a completion per question per pass and is not what a round should do.
+    """
     for name in (LOOP_SKILL, *ROUTED_SKILLS):
         values = re.findall(r"retrieval\.query_expansion_num=(\d+)", _read(name))
-        assert all(int(value) <= 1 for value in values), f"{name} sets query expansion"
+        assert all(int(value) <= 1 for value in values), f"{name} hand-sets expansion"
+    # The sweep is where expansion is sampled, and the space caps it at 3.
+    space = load_hpo_config(REPO_ROOT / "configs" / "hpo_retrieval_small.yaml").search_space.hybrid
+    assert space.query_expansion_num_max == 3
+    assert re.search(r"1 to 3|1\.\.3|`1`, `2`, `3`", _read(HPO_SKILL))
 
 
 def test_diagnostic_server_binds_to_loopback() -> None:

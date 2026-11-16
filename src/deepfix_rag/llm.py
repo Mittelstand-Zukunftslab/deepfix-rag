@@ -80,3 +80,8 @@ def litellm_additional_kwargs(extra: dict[str, Any] | None = None) -> dict[str, 
 # Apply once on import so later litellm calls in this process drop unsupported
 # params unless the operator turned the flag off.
 configure_litellm_drop_params()
+
+# LiteLLM prints a "Provider List" table to stdout on its first call. The API's
+# stdout carries the JSON contract and its diagnostics go to stderr, so a vendor's
+# banner in the middle of it is noise at best and a broken pipe at worst.
+litellm.suppress_debug_info = True

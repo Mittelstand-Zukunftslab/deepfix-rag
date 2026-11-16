@@ -54,7 +54,7 @@ deepfix hpo --config <hpo_yaml> --dataset <dataset_path> --retrieval-only --limi
 
 - Without `--tune-chunking` (or `tune_chunking: true` in the YAML) chunking is not searched.
 - The default storage is `sqlite:///:memory:`, so the study is lost when the process ends; pass `--storage-uri sqlite:///hpo.db` to keep it, and `--seed` with `--limit` for a reproducible subsample. `--timeout` caps the wall clock, and `--run-dir` keeps `hpo_trials.json` plus a best-so-far YAML after every trial.
-- The dense and hybrid search spaces also sample `query_expansion_num` (1-5), which calls an LLM. Set `query_expansion_num_min` and `query_expansion_num_max` to 1 under `search_space.<paradigm>` when no LLM is configured.
+- The dense and hybrid search spaces also sample `query_expansion_num` (1-5), which calls an LLM. Set `query_expansion_num_min` and `query_expansion_num_max` to 1 under `search_space.<paradigm>` when no generation model is configured.
 - The run logs to the MLflow experiment named by `MLFLOW_DEV_RAG_EXPERIMENT`, which must already exist.
 - `--output` writes the best config, not a recommendation. Take it through the `optimization-loop` compare on the full dev set before trusting it.
 

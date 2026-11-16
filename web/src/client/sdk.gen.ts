@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type ServerSentEventsResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AdminChatCompletionData, AdminChatCompletionErrors, AdminChatCompletionResponse, AdminChatCompletionResponses, AskQuestionData, AskQuestionErrors, AskQuestionResponses, CancelOptimizationRunData, CancelOptimizationRunErrors, CancelOptimizationRunResponses, ConfirmAdminChatActionData, ConfirmAdminChatActionErrors, ConfirmAdminChatActionResponses, CreateAdminChatThreadData, CreateAdminChatThreadErrors, CreateAdminChatThreadResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteAdminChatThreadData, DeleteAdminChatThreadErrors, DeleteAdminChatThreadResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetAdminChatThreadData, GetAdminChatThreadErrors, GetAdminChatThreadResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, LinkAdminChatThreadRunData, LinkAdminChatThreadRunErrors, LinkAdminChatThreadRunResponses, ListAdminChatAuditData, ListAdminChatAuditErrors, ListAdminChatAuditResponses, ListAdminChatThreadRunsData, ListAdminChatThreadRunsErrors, ListAdminChatThreadRunsResponses, ListAdminChatThreadsData, ListAdminChatThreadsErrors, ListAdminChatThreadsResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RejectAdminChatActionData, RejectAdminChatActionErrors, RejectAdminChatActionResponses, ResumeAdminChatTurnData, ResumeAdminChatTurnErrors, ResumeAdminChatTurnResponse, ResumeAdminChatTurnResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
+import type { AdminChatCompletionData, AdminChatCompletionErrors, AdminChatCompletionResponse, AdminChatCompletionResponses, AskChatCompletionData, AskChatCompletionErrors, AskChatCompletionResponse, AskChatCompletionResponses, AskQuestionData, AskQuestionErrors, AskQuestionResponses, CancelAskChatTurnData, CancelAskChatTurnErrors, CancelAskChatTurnResponses, CancelOptimizationRunData, CancelOptimizationRunErrors, CancelOptimizationRunResponses, ConfirmAdminChatActionData, ConfirmAdminChatActionErrors, ConfirmAdminChatActionResponses, CreateAdminChatThreadData, CreateAdminChatThreadErrors, CreateAdminChatThreadResponses, CreateAskChatThreadData, CreateAskChatThreadErrors, CreateAskChatThreadResponses, CreateDocumentData, CreateDocumentErrors, CreateDocumentResponses, DeleteAdminChatThreadData, DeleteAdminChatThreadErrors, DeleteAdminChatThreadResponses, DeleteAskChatThreadData, DeleteAskChatThreadErrors, DeleteAskChatThreadResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, GetAdminChatThreadData, GetAdminChatThreadErrors, GetAdminChatThreadResponses, GetAskChatThreadData, GetAskChatThreadErrors, GetAskChatThreadResponses, GetFeedbackSummaryData, GetFeedbackSummaryErrors, GetFeedbackSummaryResponses, GetIndexStatusData, GetIndexStatusErrors, GetIndexStatusResponses, GetInteractionData, GetInteractionErrors, GetInteractionResponses, GetOptimizationStatusData, GetOptimizationStatusErrors, GetOptimizationStatusResponses, HealthData, HealthResponses, ImportAskChatSessionsData, ImportAskChatSessionsErrors, ImportAskChatSessionsResponses, LinkAdminChatThreadRunData, LinkAdminChatThreadRunErrors, LinkAdminChatThreadRunResponses, ListAdminChatAuditData, ListAdminChatAuditErrors, ListAdminChatAuditResponses, ListAdminChatThreadRunsData, ListAdminChatThreadRunsErrors, ListAdminChatThreadRunsResponses, ListAdminChatThreadsData, ListAdminChatThreadsErrors, ListAdminChatThreadsResponses, ListAskChatThreadsData, ListAskChatThreadsErrors, ListAskChatThreadsResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListInteractionHistoryData, ListInteractionHistoryErrors, ListInteractionHistoryResponses, RebuildIndexData, RebuildIndexErrors, RebuildIndexResponses, RejectAdminChatActionData, RejectAdminChatActionErrors, RejectAdminChatActionResponses, RenameAskChatThreadData, RenameAskChatThreadErrors, RenameAskChatThreadResponses, ResumeAdminChatTurnData, ResumeAdminChatTurnErrors, ResumeAdminChatTurnResponse, ResumeAdminChatTurnResponses, ResumeAskChatTurnData, ResumeAskChatTurnErrors, ResumeAskChatTurnResponse, ResumeAskChatTurnResponses, RetrieveData, RetrieveErrors, RetrieveResponses, ReviewInteractionData, ReviewInteractionErrors, ReviewInteractionResponses, StartOptimizationRunData, StartOptimizationRunErrors, StartOptimizationRunResponses, SubmitFeedbackCommentData, SubmitFeedbackCommentErrors, SubmitFeedbackCommentResponses, SubmitFeedbackData, SubmitFeedbackErrors, SubmitFeedbackResponses, UpdateOptimizationScheduleData, UpdateOptimizationScheduleErrors, UpdateOptimizationScheduleResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -191,6 +191,135 @@ export const askQuestion = <ThrowOnError extends boolean = false>(options: Optio
         ...options.headers
     }
 });
+
+/**
+ * Ask one question and stream the answer
+ *
+ * Open a turn, then stream the model's answer as AI SDK UI message parts.
+ *
+ * A failure discovered before the first byte is a JSON status with a sentence:
+ * another member's thread is 404, a last message that is not the member's is
+ * 400, and no serving index is 503 with the sentence the Search page shows.
+ * Once the stream has started, the only honest failure is an ``error`` part.
+ */
+export const askChatCompletion = <ThrowOnError extends boolean = false>(options: Options<AskChatCompletionData, ThrowOnError, AskChatCompletionResponse>): Promise<ServerSentEventsResult<AskChatCompletionResponses>> => (options.client ?? client).sse.post<AskChatCompletionResponses, AskChatCompletionErrors, ThrowOnError>({
+    url: '/ask/chat/completions',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * List this member's conversations
+ *
+ * The member's threads, newest first, capped at 50 with no pagination (D-11).
+ *
+ * The cap is display-only: a thread past it is not hidden, expired, or deleted,
+ * and ``GET /ask/chat/threads/{thread_id}`` still loads it.
+ */
+export const listAskChatThreads = <ThrowOnError extends boolean = false>(options?: Options<ListAskChatThreadsData, ThrowOnError>): RequestResult<ListAskChatThreadsResponses, ListAskChatThreadsErrors, ThrowOnError> => (options?.client ?? client).get<ListAskChatThreadsResponses, ListAskChatThreadsErrors, ThrowOnError>({ url: '/ask/chat/threads', ...options });
+
+/**
+ * Start a new conversation
+ *
+ * Open one empty thread. Its title is derived from the first question later.
+ */
+export const createAskChatThread = <ThrowOnError extends boolean = false>(options?: Options<CreateAskChatThreadData, ThrowOnError>): RequestResult<CreateAskChatThreadResponses, CreateAskChatThreadErrors, ThrowOnError> => (options?.client ?? client).post<CreateAskChatThreadResponses, CreateAskChatThreadErrors, ThrowOnError>({ url: '/ask/chat/threads', ...options });
+
+/**
+ * Import the browser's old conversations once
+ *
+ * Bring a member's legacy localStorage sessions across, best effort (FR-033).
+ *
+ * The caller's own interactions only: a turn whose interaction is missing or
+ * belongs to somebody else is skipped and counted. The import never fabricates an
+ * interaction, so it cannot create a question the optimizer would score with no
+ * passages behind it.
+ */
+export const importAskChatSessions = <ThrowOnError extends boolean = false>(options: Options<ImportAskChatSessionsData, ThrowOnError>): RequestResult<ImportAskChatSessionsResponses, ImportAskChatSessionsErrors, ThrowOnError> => (options.client ?? client).post<ImportAskChatSessionsResponses, ImportAskChatSessionsErrors, ThrowOnError>({
+    url: '/ask/chat/threads/import',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Delete a conversation, keeping the votes it recorded
+ *
+ * Remove the thread and its turns. The interactions and votes behind them stay (D-9).
+ *
+ * A delete is idempotent for the member who owns the thread: the second call
+ * answers 204 exactly as the first did, because "it is gone" is the outcome the
+ * caller asked for. An id that was never this member's — another member's, or one
+ * that never existed — answers 404, so a delete is still not a way to probe for
+ * somebody else's ids. The two are told apart by a marker row written in the same
+ * transaction as the delete, not by the thread's absence.
+ */
+export const deleteAskChatThread = <ThrowOnError extends boolean = false>(options: Options<DeleteAskChatThreadData, ThrowOnError>): RequestResult<DeleteAskChatThreadResponses, DeleteAskChatThreadErrors, ThrowOnError> => (options.client ?? client).delete<DeleteAskChatThreadResponses, DeleteAskChatThreadErrors, ThrowOnError>({ url: '/ask/chat/threads/{thread_id}', ...options });
+
+/**
+ * Show one conversation with its turns
+ *
+ * The thread and its turns in order, each with its grounding and citations.
+ *
+ * Each turn also carries its stored passages, so a reload rebuilds the sources
+ * panel from the interaction snapshot instead of issuing a request per answer
+ * (FR-007). The texts are the full chunks, because that is what the vote's rank
+ * resolves to.
+ */
+export const getAskChatThread = <ThrowOnError extends boolean = false>(options: Options<GetAskChatThreadData, ThrowOnError>): RequestResult<GetAskChatThreadResponses, GetAskChatThreadErrors, ThrowOnError> => (options.client ?? client).get<GetAskChatThreadResponses, GetAskChatThreadErrors, ThrowOnError>({ url: '/ask/chat/threads/{thread_id}', ...options });
+
+/**
+ * Rename a conversation
+ *
+ * Rename a conversation.
+ *
+ * The title is trimmed first and measured after: one to 120 characters once
+ * surrounding whitespace is gone. A title that is empty after trimming, or
+ * longer than 120 then, is a 400 and the stored title is unchanged.
+ */
+export const renameAskChatThread = <ThrowOnError extends boolean = false>(options: Options<RenameAskChatThreadData, ThrowOnError>): RequestResult<RenameAskChatThreadResponses, RenameAskChatThreadErrors, ThrowOnError> => (options.client ?? client).patch<RenameAskChatThreadResponses, RenameAskChatThreadErrors, ThrowOnError>({
+    url: '/ask/chat/threads/{thread_id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Stop a turn that is still being written
+ *
+ * Stop the model call for one of the caller's turns.
+ *
+ * Stop used to be a closed socket, which is indistinguishable from a reload —
+ * and a reload must *not* stop the answer, or the member loses the reply they
+ * were reading (FR-016). So stopping is an explicit request, and this is it:
+ * the running task is cancelled, which unwinds the relay, settles the row
+ * ``cancelled`` with the text read so far, and keeps the passages it found
+ * (FR-014, D-4).
+ *
+ * A turn that is not running here answers 204: it may have finished already,
+ * or it may be running in another worker, and neither is the caller's mistake.
+ * Another member's id is 404, never 403.
+ */
+export const cancelAskChatTurn = <ThrowOnError extends boolean = false>(options: Options<CancelAskChatTurnData, ThrowOnError>): RequestResult<CancelAskChatTurnResponses, CancelAskChatTurnErrors, ThrowOnError> => (options.client ?? client).post<CancelAskChatTurnResponses, CancelAskChatTurnErrors, ThrowOnError>({ url: '/ask/chat/turns/{turn_id}/cancel', ...options });
+
+/**
+ * Resume an answer that is in progress or already finished
+ *
+ * Replay the stored answer, then tail the turn when it runs in this process.
+ *
+ * This is what a reload mid-answer calls, and the reason the reply survives it:
+ * the text is read from the turn's interaction and the status from the turn row,
+ * so a resume on another worker degrades to a replay instead of a blank stream
+ * (FR-016).
+ */
+export const resumeAskChatTurn = <ThrowOnError extends boolean = false>(options: Options<ResumeAskChatTurnData, ThrowOnError, ResumeAskChatTurnResponse>): Promise<ServerSentEventsResult<ResumeAskChatTurnResponses>> => (options.client ?? client).sse.get<ResumeAskChatTurnResponses, ResumeAskChatTurnErrors, ThrowOnError>({ url: '/ask/chat/turns/{turn_id}/stream', ...options });
 
 /**
  * List documents
