@@ -95,7 +95,8 @@ sqlite3 /data/product/product.db \
 | Partial text still on screen | yes | NOT RUN |
 | Sources panel still shows the passages it had retrieved | yes | NOT RUN |
 | Badge | **Stopped, partial answer**, or **Stopped before answering** if no word arrived — never **Partly grounded** | NOT RUN |
-| Badge appears without a reload | yes — the cancelled stream closes its text group and sends the verdict | NOT RUN |
+| Badge appears without a reload | yes — the cancelled stream closes its text group and sends the verdict, and the badge reads the Stop immediately rather than waiting for the store | NOT RUN |
+| The same badge after a reload | unchanged, and present even when the turn stopped before its first word (no verdict stored) | NOT RUN |
 | `first_token_ms` on the row | not NULL when any text arrived | NOT RUN |
 | Any traceback in `docker compose logs backend-api` | none — a cancel is a normal end | NOT RUN |
 
@@ -232,10 +233,23 @@ Set the window to about 630px wide (or 200% zoom on a 1260px window) with a thre
 | Scrolling the conversation | the composer stays reachable at the bottom | NOT RUN |
 | Panel header | `N passages` is not clipped | NOT RUN |
 
+Then the smallest case, which a first pass at this missed: **250% zoom on a 1280×800 window** — about 512×320 CSS
+pixels. This is where the chat column collapsed to roughly 48 px and the composer's hint drew over the sources heading.
+
+| Observation | Expected | Result |
+| :--- | :--- | :--- |
+| The chat column | keeps a usable height — the conversation and the composer both legible, not collapsed | NOT RUN |
+| The footer hint and the Regenerate link | not overlapping each other or the **Sources** heading | NOT RUN |
+| Scrolling | the **page** scrolls, so the sources are reachable below the chat rather than squeezing it | NOT RUN |
+| A horizontal scrollbar anywhere | none | NOT RUN |
+| Inside the sources panel | only its passage list scrolls; the **Sources** heading stays visible | NOT RUN |
+
 Then widen to a normal desktop width:
 
 | Observation | Expected | Result |
 | :--- | :--- | :--- |
+| The layout | side by side, not stacked | NOT RUN |
+| The page | does **not** scroll; the columns fill the viewport | NOT RUN |
 | A horizontal scrollbar in the sources panel | none | NOT RUN |
 | Each card's score (`0.xxx`) | fully visible at the trailing edge | NOT RUN |
 | A long filename | ellipsised, with the full name in its `title` | NOT RUN |

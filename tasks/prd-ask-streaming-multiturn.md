@@ -791,6 +791,14 @@ answering** when none did, never "Partly grounded". The cancelled stream also cl
 its text group and sends the grounding and turn frames, so the badge appears without
 a reload.
 
+Two timing details were wrong the first time and are part of the rule. The badge
+reads the member's **Stop the moment they press it**, because cancel is a request:
+the re-read that follows the closed stream can land while the server still calls the
+turn `running`, and the badge then fell back to the grounding verdict and read
+"Grounded" until a reload. And the badge is **drawn from the stored status** even
+when the turn has no verdict at all — a turn stopped before its first word has none,
+and requiring one left the header blank after a reload.
+
 **Reasoning is per step, not per turn.** The first version of this decision set one
 level for the whole turn and shipped `off`. Live, with thinking off, 4 of 7 turns
 made **no** `search_documents` call at all and answered "I do not have enough
@@ -2042,6 +2050,9 @@ in `tasks/stories-ask-chat/` were corrected in the same pass.
 | 43 | A cited answer was graded `declined` when the phrase list matched anywhere in it | `grounding_for(answer, cited=True)` returns `grounded`, and `_grounding` passes `cited` from `valid_citations` | D-12, FR-009 |
 | 44 | A turn whose final step wrote no text stored a refusal that was never streamed | The substituted sentence is streamed as its own step as well as stored | D-12, FR-002 |
 | 45 | The policy opened by describing the assistant and its tool | It opens with "search before you write", names the only three no-search cases, and states the search cap from the setting | D-12 |
+| 46 | Right after Stop the badge still read "Grounded" until a reload | The member's Stop is recorded when they press it, and the badge reads that before the store settles the row | D-10, FR-014 |
+| 47 | After a reload, a turn stopped before its first word had no badge at all | The badge is drawn from the stored status even when the turn has no verdict | D-10, FR-014 |
+| 48 | At ~512×320 the chat column shrank to ~48 px and the composer hint drew over the sources heading | The chat column keeps a minimum height and the page scrolls instead of squeezing; the stacked panel is capped, so only its list scrolls | FR-030 |
 
 ## Handoff
 

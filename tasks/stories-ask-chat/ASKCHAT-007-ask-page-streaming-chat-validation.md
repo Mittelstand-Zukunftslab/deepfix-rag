@@ -99,3 +99,19 @@ controls, or a row's title.
 
 Two, both visible in an ordinary visit: the panel covered the composer at a narrow
 width, and a reload mid-answer showed a badge for an answer that was not on screen.
+
+## Post-implementation validation, fourth pass (2026-11-16)
+
+- Validated: after a browser recheck of the deployed page at 250% zoom
+- Verdict: **Pass with actions, all applied**
+
+| # | Was | Now | Why |
+| :--- | :--- | :--- | :--- |
+| 1 | AC 7d said the badge describes the newest turn, without saying when it updates | AC 7d requires it to read the member's Stop as soon as it is pressed, before the store settles the row | Cancel is a request, so the re-read after the closed stream can land while the server still says `running`; the badge then fell back to the verdict and read "Grounded" until a reload |
+| 2 | AC 7d assumed a verdict to draw from | AC 7d requires the badge to be drawn from the stored status even when the turn has none | A turn stopped before its first word stores no verdict, so requiring one left the header blank after a reload |
+| 3 | AC 7c covered 630px but not a short viewport | AC 7c adds 250% zoom on a 1280×800 window (~512×320) | The chat column collapsed to ~48 px and the composer hint drew over the sources heading. A width-only check never saw it |
+
+### Blockers
+
+Two, both visible in the recheck: a badge that contradicted the member's own action,
+and a layout that stacked correctly but left no chat.
