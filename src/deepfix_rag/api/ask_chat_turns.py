@@ -30,12 +30,20 @@ from deepfix_rag.api import chat_stream
 
 @dataclass
 class LiveAskTurn:
-    """One running turn's subscribers."""
+    """One running turn: its subscribers, the task producing it, and its frames."""
 
     turn_id: str
     thread_id: str
     subscribers: list[asyncio.Queue[str | None]] = field(default_factory=list)
     closed: bool = False
+    # The task running the model call. It is owned by the process rather than by
+    # the request that started it, so a reload does not end the answer (FR-016).
+    task: asyncio.Task[None] | None = None
+    # Every frame published so far, in order. A resume replays this instead of
+    # the stored text, so a late subscriber sees the whole answer exactly once:
+    # replaying the store and then tailing would either lose the deltas published
+    # between the two, or send the ones already in the store a second time.
+    frames: list[str] = field(default_factory=list)
 
 
 class AskTurnRegistry:
@@ -52,21 +60,33 @@ class AskTurnRegistry:
             self._turns[turn_id] = live
         return live
 
-    def subscribe(self, turn_id: str) -> asyncio.Queue[str | None] | None:
-        """A queue fed every part from now on, or ``None`` when the turn is not live here."""
+    def get(self, turn_id: str) -> LiveAskTurn | None:
+        """The live record for a turn, or ``None`` when it is not running here."""
+        with self._lock:
+            return self._turns.get(turn_id)
+
+    def subscribe(self, turn_id: str) -> tuple[list[str], asyncio.Queue[str | None]] | None:
+        """The frames so far and a queue for the rest, or ``None`` when not live here.
+
+        Taking the backlog and the queue under the same lock is what makes a
+        resume gapless: a frame is either already in the replay or it is coming
+        through the queue, never neither and never both.
+        """
         with self._lock:
             live = self._turns.get(turn_id)
             if live is None or live.closed:
                 return None
             queue: asyncio.Queue[str | None] = asyncio.Queue()
             live.subscribers.append(queue)
-            return queue
+            return list(live.frames), queue
 
     def publish(self, turn_id: str, frame: str) -> None:
-        """Send one frame to every subscriber of a running turn."""
+        """Send one frame to every subscriber of a running turn, and keep it."""
         with self._lock:
             live = self._turns.get(turn_id)
             subscribers = list(live.subscribers) if live is not None else []
+            if live is not None and not live.closed:
+                live.frames.append(frame)
         for queue in subscribers:
             queue.put_nowait(frame)
 
@@ -122,18 +142,21 @@ async def resume_frames(
     a partial answer twice (FR-016). ``displayed_floor`` is the deployment's
     configured relevance floor, reported on the grounding part so a resumed answer
     carries the same number a live one did rather than a placeholder.
+
+    While the turn runs in this process, its frames are replayed from the live
+    record and then followed to the end. That is what makes a reload mid-answer
+    show the rest of it: the turn never stopped, so the reader picks up the
+    stream it left, and the stored text is not used — replaying both would show
+    the opening of the answer twice.
     """
     turn_id = turn.turn_id
     text_id = f"{turn_id}-text"
-    yield chat_stream.sse(chat_stream.start_part(turn_id))
-    yield chat_stream.sse(chat_stream.step_start_part())
-    yield chat_stream.sse(chat_stream.text_start(text_id))
-    stored = stored_answer(db_path, turn)
-    if stored:
-        yield chat_stream.sse(chat_stream.text_delta(text_id, stored))
-    queue = registry.subscribe(turn_id)
-    if queue is not None:
+    subscribed = registry.subscribe(turn_id)
+    if subscribed is not None:
+        published, queue = subscribed
         try:
+            for frame in published:
+                yield frame
             while True:
                 frame = await queue.get()
                 if frame is None:
@@ -141,6 +164,14 @@ async def resume_frames(
                 yield frame
         finally:
             registry.unsubscribe(turn_id, queue)
+        # The live record carried the terminal frames, so the replay is complete.
+        return
+    yield chat_stream.sse(chat_stream.start_part(turn_id))
+    yield chat_stream.sse(chat_stream.step_start_part())
+    yield chat_stream.sse(chat_stream.text_start(text_id))
+    stored = stored_answer(db_path, turn)
+    if stored:
+        yield chat_stream.sse(chat_stream.text_delta(text_id, stored))
     # Re-read: a turn that was live has just settled, and the row is the truth.
     settled = ask_chat.get_turn(db_path, turn_id, turn.owner_id)
     yield chat_stream.sse(chat_stream.text_end(text_id))

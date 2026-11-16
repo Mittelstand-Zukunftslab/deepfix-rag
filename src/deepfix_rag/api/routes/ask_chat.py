@@ -20,7 +20,7 @@ member who tidies their history does not delete the optimizer's evidence.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -364,10 +364,19 @@ async def ask_chat_completion(
             user_email=user.email,
         )
     ask_chat.link_interaction(settings.product_db_path, turn.turn_id, user.id, interaction_id)
-    registry.open(turn.turn_id, thread.thread_id)
-    return StreamingResponse(
-        _relay(
-            request,
+    live = registry.open(turn.turn_id, thread.thread_id)
+    # The turn runs in a task the process owns, not in this request. Starlette
+    # closes the relay generator when the socket closes — a reload, a navigation —
+    # and that close used to cancel the model call itself, so the member came back
+    # to a question with no answer. The task outlives the request, keeps storing
+    # its text, and a resume subscribes to the same queue (FR-016).
+    subscription = registry.subscribe(turn.turn_id)
+    if subscription is None:  # pragma: no cover - just opened, so it is live
+        raise HTTPException(status_code=SERVICE_UNAVAILABLE, detail=ask_chat_turn.ALREADY_RUNNING)
+    _, queue = subscription
+    live.task = asyncio.create_task(
+        _produce(
+            request.app.state,
             settings=settings,
             user=user,
             thread=thread,
@@ -375,8 +384,10 @@ async def ask_chat_completion(
             question=question,
             history=history,
             interaction_id=interaction_id,
-            question_text=question,
-        ),
+        )
+    )
+    return StreamingResponse(
+        _relay(request.app.state, turn_id=turn.turn_id, queue=queue),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -388,7 +399,37 @@ async def ask_chat_completion(
 
 
 async def _relay(
-    request: Request,
+    app_state: object,
+    *,
+    turn_id: str,
+    queue: asyncio.Queue[str | None],
+) -> AsyncIterator[str]:
+    """Forward a turn the process owns, and stop forwarding when the reader goes.
+
+    The model call runs in a task of its own (``_produce``), so a reload — which
+    closes this generator — costs the member the rest of the stream they were
+    reading and nothing else: the turn keeps running, keeps storing its text, and
+    a subscribe on the resume route picks up where it was (FR-016). Before this,
+    the relay drove the model itself and Starlette's close cancelled it, so a
+    reload stored an empty answer and the member came back to a question with no
+    reply.
+    """
+    registry = registry_for(app_state)
+    try:
+        while True:
+            frame = await queue.get()
+            if frame is None:
+                break
+            yield frame
+    finally:
+        # Leaving without cancelling the task is the whole point: Stop is an
+        # explicit request (``POST /ask/chat/turns/{id}/cancel``), not a closed
+        # socket, because the two are indistinguishable here.
+        registry.unsubscribe(turn_id, queue)
+
+
+async def _produce(
+    app_state: object,
     *,
     settings: Settings,
     user: User,
@@ -397,36 +438,44 @@ async def _relay(
     question: str,
     history: list[ask_chat.Turn],
     interaction_id: str,
-    question_text: str,
-) -> AsyncIterator[str]:
-    """One trace per turn, kept open while the turn runs, then settled.
+) -> None:
+    """Run one turn to its terminal frame, publishing every part to the registry.
 
-    The trace is the context and the relay is the body, so each tool call is a
-    child span of the turn rather than a trace of its own (FR-020). A tracing
-    failure is logged inside `turn_trace` and never reaches the member.
+    This is the request-independent half of a turn: it owns the trace, the model
+    loop, the stored text, and the settle. It is started with ``asyncio.create_task``
+    and lives until the turn ends, whatever happens to the HTTP request that asked
+    for it.
     """
+    registry = registry_for(app_state)
     with turn_trace(
         interaction_id,
         {"question": question, "thread_id": thread.thread_id, "turn_id": turn.turn_id},
         {"thread_id": thread.thread_id, "turn_id": turn.turn_id},
     ) as trace:
-        async for frame in _relay_body(
-            request,
-            settings=settings,
-            user=user,
-            thread=thread,
-            turn=turn,
-            question=question,
-            history=history,
-            interaction_id=interaction_id,
-            question_text=question_text,
-            trace=trace,
-        ):
-            yield frame
+        try:
+            await _run_turn(
+                app_state,
+                settings=settings,
+                user=user,
+                thread=thread,
+                turn=turn,
+                question=question,
+                history=history,
+                interaction_id=interaction_id,
+                trace=trace,
+                publish=lambda frame: registry.publish(turn.turn_id, frame),
+            )
+        finally:
+            # The live window closes after the terminal frames have been published,
+            # so a subscriber already attached reads them in order and a resume that
+            # arrives mid-turn tails to the end rather than being cut short (FR-016).
+            # Closing here, not in the turn body, is what wakes those subscribers
+            # when the task is cancelled.
+            registry.close(turn.turn_id)
 
 
-async def _relay_body(
-    request: Request,
+async def _run_turn(
+    app_state: object,
     *,
     settings: Settings,
     user: User,
@@ -435,15 +484,20 @@ async def _relay_body(
     question: str,
     history: list[ask_chat.Turn],
     interaction_id: str,
-    question_text: str,
     trace: TurnTrace,
-) -> AsyncIterator[str]:
-    """Forward the turn's parts, then settle its row on every exit path.
+    publish: Callable[[str], None],
+) -> None:
+    """Run the turn, publishing its parts and settling its row on every exit path.
 
     The answer text is written on every delta, so a resume replays exactly what
     the browser had read and a cancelled turn keeps its words (D-4). The terminal
     ``data-deepfix-turn`` is emitted after the row is settled, so a resume and the
     browser agree about the status.
+
+    Parts are published rather than yielded, and the terminal frames are published
+    from the ``finally``. A cancelled task must still tell its subscribers the turn
+    is over: a generator that raises at a ``yield`` cannot emit the closing frames,
+    which left a resume waiting forever for a turn that had already stopped.
     """
     turn_id = turn.turn_id
     outcome: ask_chat_turn.TurnOutcome | None = None
@@ -492,14 +546,13 @@ async def _relay_body(
         live_grounding[0] = ask_chat_turn.partial_grounding(calls, history, "".join(seen_text))
         live_query[0] = ask_chat_turn.last_query(calls)
 
-    yield chat_stream.sse(chat_stream.start_part(turn_id))
+    publish(chat_stream.sse(chat_stream.start_part(turn_id)))
     try:
         async for produced in ask_chat_turn.run_turn(
-            coordinator=request.app.state.index,
+            coordinator=app_state.index,
             settings=settings,
             history=history,
             question=question,
-            is_disconnected=request.is_disconnected,
             on_tool_call=store_hits,
         ):
             if isinstance(produced, ask_chat_turn.TurnOutcome):
@@ -509,12 +562,11 @@ async def _relay_body(
                 seen_text.append(str(produced.get("delta") or ""))
                 # Written per delta, so a resume and a cancel both see what was read.
                 update_answer(settings.product_db_path, interaction_id, "".join(seen_text))
-            yield chat_stream.sse(produced)
+            publish(chat_stream.sse(produced))
         status = "completed"
-    except (GeneratorExit, asyncio.CancelledError):
-        # The browser went away. Starlette closes this generator, which unwinds
-        # here; the row is settled below in `finally` and no frame is written,
-        # because nothing is listening. This is the Stop path, not an error.
+    except asyncio.CancelledError:
+        # Stop cancelled this task, or the loop is shutting down. The row is
+        # settled below and the partial text stays readable (D-4, FR-014).
         status = "cancelled"
         failure = ask_chat_turn.CANCELLED
         raise
@@ -523,17 +575,20 @@ async def _relay_body(
         failure = ask_chat_turn.CANCELLED if "browser" in str(exc) else ask_chat_turn.TOO_LONG
     except ask_chat_turn.TurnFailed as exc:
         failure = str(exc)
-        yield chat_stream.sse(chat_stream.error_part(failure))
+        publish(chat_stream.sse(chat_stream.error_part(failure)))
     except ask_chat.IndexNotReadyError as exc:
         failure = str(exc)
-        yield chat_stream.sse(chat_stream.error_part(failure))
+        publish(chat_stream.sse(chat_stream.error_part(failure)))
     except Exception:
         LOGGER.exception("ask chat turn %s failed", turn_id)
         failure = ask_chat_turn.UPSTREAM_FAILED
-        yield chat_stream.sse(chat_stream.error_part(failure))
+        publish(chat_stream.sse(chat_stream.error_part(failure)))
     finally:
-        # One owner for the terminal state, on every path including a disconnect:
-        # nothing may leave the row `running` (FR-017, NFR-1).
+        # One owner for the terminal state, on every path including a cancel:
+        # nothing may leave the row `running` (FR-017, NFR-1). The terminal frames
+        # are published here rather than after the loop because a cancelled task
+        # never reaches code past the `await` it was cancelled at, and a subscriber
+        # waiting for the turn to end must still be told it ended.
         stored = _settle(
             settings,
             user=user,
@@ -549,30 +604,48 @@ async def _relay_body(
             live_grounding=live_grounding[0],
             live_query=live_query[0],
         )
-        registry_for(request.app.state).close(turn_id)
+        _publish_terminal(publish, turn_id, status, outcome, stored)
+
+
+def _publish_terminal(
+    publish: Callable[[str], None],
+    turn_id: str,
+    status: str,
+    outcome: ask_chat_turn.TurnOutcome | None,
+    stored: ask_chat.Turn,
+) -> None:
+    """Send the frames that end a turn.
+
+    ``stored`` is the settled row, so the verdict these frames carry is the one
+    that was written rather than the one the loop was about to write.
+    """
     grounding = stored.grounding or Grounding.NO_RELEVANT_SOURCES.value
     citations = [
         {"marker": c.marker, "rank": c.rank, "doc_id": c.doc_id} for c in stored.citations
     ]
     if outcome is not None:
-        yield chat_stream.sse(
-            chat_stream.grounding_part(
-                grounding,
-                citations,
-                max_score=outcome.max_score,
-                cutoff=outcome.cutoff,
+        publish(
+            chat_stream.sse(
+                chat_stream.grounding_part(
+                    grounding,
+                    citations,
+                    max_score=outcome.max_score,
+                    cutoff=outcome.cutoff,
+                )
             )
         )
-    yield chat_stream.sse(
-        chat_stream.turn_part(
-            turn_id,
-            status,
-            grounding=grounding if outcome is not None else None,
-            citations=citations,
+    publish(
+        chat_stream.sse(
+            chat_stream.turn_part(
+                turn_id,
+                status,
+                grounding=grounding if outcome is not None else None,
+                citations=citations,
+            )
         )
     )
-    yield chat_stream.sse(chat_stream.finish_part("stop" if status == "completed" else "error"))
-    yield chat_stream.DONE_FRAME
+    publish(chat_stream.sse(chat_stream.finish_part("stop" if status == "completed" else "error")))
+    publish(chat_stream.DONE_FRAME)
 
 
 def _settle(
@@ -709,6 +782,42 @@ def _regenerate_target(history: list[ask_chat.Turn], regenerate: bool) -> str | 
     if not answered:
         raise HTTPException(status_code=BAD_REQUEST, detail=NOTHING_TO_REGENERATE_MESSAGE)
     return answered[-1].turn_id
+
+
+@router.post(
+    "/ask/chat/turns/{turn_id}/cancel",
+    operation_id="cancel_ask_chat_turn",
+    status_code=204,
+    responses={
+        204: {"description": "The turn was stopped, or had already ended."},
+        **error_responses(UNAUTHORIZED, NOT_FOUND),
+    },
+    summary="Stop a turn that is still being written",
+)
+def cancel_ask_chat_turn(turn_id: str, request: Request) -> Response:
+    """Stop the model call for one of the caller's turns.
+
+    Stop used to be a closed socket, which is indistinguishable from a reload —
+    and a reload must *not* stop the answer, or the member loses the reply they
+    were reading (FR-016). So stopping is an explicit request, and this is it:
+    the running task is cancelled, which unwinds the relay, settles the row
+    ``cancelled`` with the text read so far, and keeps the passages it found
+    (FR-014, D-4).
+
+    A turn that is not running here answers 204: it may have finished already,
+    or it may be running in another worker, and neither is the caller's mistake.
+    Another member's id is 404, never 403.
+    """
+    user = current_user(request)
+    settings = get_settings(request)
+    try:
+        ask_chat.get_turn(settings.product_db_path, turn_id, user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=NOT_FOUND, detail=NO_TURN_MESSAGE) from exc
+    live = registry_for(request.app.state).get(turn_id)
+    if live is not None and live.task is not None and not live.task.done():
+        live.task.cancel()
+    return Response(status_code=204)
 
 
 @router.get(

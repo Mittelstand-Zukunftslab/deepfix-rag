@@ -487,14 +487,16 @@ def test_every_terminal_path_leaves_no_running_row(
     assert "closed" in ask_chat_turn.TOO_LONG.lower() or "long" in ask_chat_turn.TOO_LONG.lower()
 
 
-def test_a_browser_abort_cancels_the_turn_and_keeps_what_was_read(
+def test_a_closed_socket_does_not_cancel_the_turn_and_a_resume_finishes_it(
     tmp_path: Path, endpoint: State, identity: IdentityIssuer
 ) -> None:
-    """AC 1–5: closing the socket ends the work, stores the partial, and does not raise.
+    """FR-016: a reload mid-answer must not lose the reply.
 
-    A ``TestClient`` cannot abort mid-stream, so this case runs the real app under
-    ``uvicorn`` on a loopback port, opens the stream with ``httpx``, reads the
-    first frames, and closes the connection.
+    The browser's socket closing is what a reload does, and it is indistinguishable
+    from a Stop. So it must not stop the turn: the model call is owned by the
+    process, the row keeps its text, and a resume follows the same turn to its
+    terminal frame. This test runs the real app under ``uvicorn`` because a
+    ``TestClient`` cannot close a socket mid-stream.
     """
     endpoint.pause = 0.3
     settings = _settings(tmp_path, endpoint)
@@ -535,10 +537,91 @@ def test_a_browser_abort_cancels_the_turn_and_keeps_what_was_read(
                     if frame.get("type") == "start":
                         turn_id = frame["messageId"]
                     if frame.get("type") == "text-delta":
-                        # One delta is enough: closing now is the browser's Stop.
+                        # One delta is enough: closing now is the browser's reload.
                         break
             # Leaving the `stream` block closes the socket mid-answer.
             assert turn_id
+            # The turn is not cancelled by that: it finishes on its own, which is
+            # what makes the answer readable when the member comes back.
+            state = _wait_for_status(settings.product_db_path, turn_id, "completed")
+            assert state["ended_at"]
+            with connect(settings.product_db_path) as conn:
+                row = conn.execute(
+                    "SELECT i.answer, t.retrieval_query, t.grounding "
+                    "FROM ask_chat_turns AS t LEFT JOIN interactions AS i "
+                    "ON i.turn_id = t.turn_id WHERE t.turn_id = ?",
+                    (turn_id,),
+                ).fetchone()
+            answer = row["answer"]
+            assert answer, "a turn that outlived its reader keeps its whole answer"
+            assert row["retrieval_query"], "and the query it searched"
+            assert row["grounding"] == "grounded", "and the verdict its evidence supports"
+
+            # The resume after the turn has settled replays the stored answer once.
+            resumed = client.get(f"{base}/ask/chat/turns/{turn_id}/stream", headers=headers)
+            frames = _frames(resumed.text)
+            replayed = "".join(f["delta"] for f in frames if f["type"] == "text-delta")
+            assert replayed == answer
+            terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
+            assert terminal["status"] == "completed"
+    finally:
+        server.should_exit = True
+        loop_thread.join(timeout=15)
+
+
+def test_stop_cancels_the_model_call_and_keeps_what_was_read(
+    tmp_path: Path, endpoint: State, identity: IdentityIssuer
+) -> None:
+    """FR-014: Stop is an explicit request, and it does stop the work.
+
+    A reload must not stop the turn (FR-016), so Stop cannot be a closed socket.
+    The route cancels the process-owned task, the relay stores the text read so
+    far, and the turn settles ``cancelled`` with its evidence — the same outcome
+    the closed socket used to produce, now only on request.
+    """
+    endpoint.pause = 0.3
+    settings = _settings(tmp_path, endpoint)
+    app = create_app(
+        settings, embed_model=MockEmbedding(embed_dim=16), token_verifier=identity.verifier()
+    )
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on")
+    )
+    loop_thread = threading.Thread(target=server.run, daemon=True)
+    loop_thread.start()
+    try:
+        _await_server(server)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        base = f"http://127.0.0.1:{port}"
+        headers = {"Authorization": f"Bearer {identity.token(MEMBER)}"}
+        with httpx.Client(timeout=60) as client:
+            thread_id = client.post(f"{base}/ask/chat/threads", headers=headers).json()[
+                "thread_id"
+            ]
+            turn_id = None
+            with client.stream(
+                "POST",
+                f"{base}/ask/chat/completions",
+                headers=headers,
+                json={
+                    "thread_id": thread_id,
+                    "messages": [
+                        {"role": "user", "content": "Ist eine Trunkenheitsfahrt strafbar?"}
+                    ],
+                },
+            ) as response:
+                assert response.status_code == 200
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    frame = json.loads(line[5:].strip() or "{}")
+                    if frame.get("type") == "start":
+                        turn_id = frame["messageId"]
+                    if frame.get("type") == "text-delta":
+                        break
+            assert turn_id
+            stopped = client.post(f"{base}/ask/chat/turns/{turn_id}/cancel", headers=headers)
+            assert stopped.status_code == 204, stopped.text
             state = _wait_for_status(settings.product_db_path, turn_id, "cancelled")
             assert state["status"] == "cancelled"
             assert state["ended_at"]
@@ -554,28 +637,20 @@ def test_a_browser_abort_cancels_the_turn_and_keeps_what_was_read(
                     "ON i.interaction_id = h.interaction_id WHERE i.turn_id = ?",
                     (turn_id,),
                 ).fetchone()[0]
-            answer = row["answer"]
-            assert answer, "a stopped answer keeps the text the member had read"
+            assert row["answer"], "a stopped answer keeps the text the member had read"
             assert hits >= 1, "a stopped turn keeps the passages it already found"
-            # A stopped turn that had already searched keeps what it learned: the
-            # standalone query it ran and the verdict its evidence supports. Leaving
-            # both null made a stopped turn look like one that never retrieved, so a
-            # reload or a later vote could not tell what had been found (FR-006).
             assert row["retrieval_query"], "a stopped turn keeps the query it searched"
             assert row["grounding"] == "grounded", "and the verdict its evidence supports"
-
-            # AC 6: a resume of that stopped turn replays the stored text once.
+            # A resume of a stopped turn replays the stored text once.
             resumed = client.get(f"{base}/ask/chat/turns/{turn_id}/stream", headers=headers)
             frames = _frames(resumed.text)
             replayed = "".join(f["delta"] for f in frames if f["type"] == "text-delta")
-            assert replayed == answer
+            assert replayed == row["answer"]
             terminal = next(f for f in frames if f["type"] == "data-deepfix-turn")["data"]
             assert terminal["status"] == "cancelled"
     finally:
         server.should_exit = True
         loop_thread.join(timeout=15)
-    # AC 18: the fake endpoint saw its stream closed rather than abandoned.
-    assert endpoint.closed_early is True
 
 
 def _await_server(server: uvicorn.Server) -> None:

@@ -300,7 +300,6 @@ async def run_turn(
     settings: Settings,
     history: Sequence[ask_chat.Turn],
     question: str,
-    is_disconnected: Any = None,
     on_tool_call: Callable[[list["ToolCall"]], None] | None = None,
 ) -> AsyncIterator[Any]:
     """Run one turn, yielding stream parts and finally a ``TurnOutcome``.
@@ -309,10 +308,11 @@ async def run_turn(
     outcome, and settles the status. This function produces the reply only, so
     "what was said" and "what was recorded" each have one owner.
 
-    ``is_disconnected`` is an awaitable the route supplies, so a closed browser
-    ends the model stream instead of leaving the request to run to ``max_tokens``.
     ``on_tool_call`` is called after each completed search, so the caller can store
     the hits before the answer exists and a cancelled turn keeps its evidence.
+    The turn is not tied to the request that asked for it: Stop cancels the task
+    that drives this generator, and a closed socket does not (FR-014, FR-016), so
+    no disconnect check appears here.
     """
     model = model_name(settings)
     messages = upstream_messages(
@@ -329,8 +329,6 @@ async def run_turn(
 
     while True:
         _check_deadline(deadline)
-        if is_disconnected is not None and await is_disconnected():
-            raise TurnCancelled("browser closed")
 
         # `auto` on every step. Forcing the tool is what a reasoning provider
         # refused (D-4a), and the system prompt is the steer instead: it tells the
@@ -361,8 +359,6 @@ async def run_turn(
                 at_limit=at_limit,
             ):
                 _check_deadline(deadline)
-                if is_disconnected is not None and await is_disconnected():
-                    raise TurnCancelled("browser closed")
                 delta = _first_delta(chunk)
                 content = delta.get("content")
                 if isinstance(content, str) and content:
