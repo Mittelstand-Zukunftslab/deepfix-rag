@@ -50,7 +50,7 @@ A 104-second recording of the live admin experience: Ask, Optimization, History,
 | 01:19.0 | Hermes summarizes runs; any action it proposes waits for your Confirm |
 | 01:35.5 | Back on the Optimization page |
 
-The recording runs against the stack with PR #23 merged, so the Ask segment shows the streaming, multi-turn chat described below. [`docs/admin-mode.md`](docs/admin-mode.md) is the written guide to the same features, with stills taken from this recording.
+The recording was made from a stack running the Ask chat from PR #23, so that segment shows the streaming, multi-turn chat described below. [`docs/admin-mode.md`](docs/admin-mode.md) is the written guide to the same features, with stills taken from this recording.
 
 ---
 
