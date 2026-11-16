@@ -18,6 +18,8 @@ Operator-facing documents. Product planning lives in `tasks/`; the front door is
 | [`media/deepfix-admin-tour-preview.gif`](media/deepfix-admin-tour-preview.gif) | 1.9 MB animated preview for the README, sampled at 2 fps. |
 | `media/admin-tour-*.png` | Stills at full resolution, with the caption bar, used by `admin-mode.md`. |
 
+The recording was made against a stack with a signed-in test account, so the account email in the header and the sidebar, and the email column in the History table, are blurred in the MP4, in the GIF, and in every still. The burned-in captions are untouched.
+
 The stills were cut from the captioned recording at the cue boundaries, so each one shows the caption for the segment it illustrates.
 
 ## Elsewhere

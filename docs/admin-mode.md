@@ -4,11 +4,13 @@ DeepFix has two kinds of account. A **member** uploads documents, searches them,
 
 This guide walks through those pages in the order the [Admin mode tour](media/deepfix-admin-tour.mp4) shows them. The stills below are frames from that recording, so what you see here is what the running stack looks like. Captions are burned into the video; the same cues are in [`media/deepfix-admin-tour.srt`](media/deepfix-admin-tour.srt).
 
-| | |
+| Asset | Where |
 | :--- | :--- |
 | Recording | [`media/deepfix-admin-tour.mp4`](media/deepfix-admin-tour.mp4) — 104 s, 1440×900, no audio |
 | Captions | [`media/deepfix-admin-tour.srt`](media/deepfix-admin-tour.srt) |
 | Preview | [`media/deepfix-admin-tour-preview.gif`](media/deepfix-admin-tour-preview.gif) |
+
+The account email that the recording shows in the header, in the sidebar, and in the History table belongs to a test account, so it is blurred in the video, in the GIF, and in every still here.
 
 ## What admin means
 
@@ -33,7 +35,7 @@ Ask is not admin-only, but it is where the corpus earns its keep, so the tour st
 
 Passages below `rerank.min_relevance_score` (default `0.3`) never reach the model or the panel, which is why a question the corpus cannot answer comes back as *Not found in the documents* instead of a confident guess. **Regenerate** asks again from the same question.
 
-> Ask chat streaming, multi-turn threads, Stop, and the full badge set arrive with [PR #23 (`feat/ask-chat-streaming`)](https://github.com/Mittelstand-Zukunftslab/deepfix-rag/pull/23). On `feat/hermes-optimizer` today, Ask answers one question at a time and returns the finished reply. The recording was made with PR #23 merged.
+> Ask chat streaming, multi-turn threads, Stop, and the full badge set arrive with [PR #23 (`feat/ask-chat-streaming`)](https://github.com/Mittelstand-Zukunftslab/deepfix-rag/pull/23). On `feat/hermes-optimizer` today, Ask answers one question at a time and returns the finished reply. The recording was made from a stack running the Ask chat from that branch.
 
 ## 2. Optimization — 00:31 to 00:41
 
@@ -91,7 +93,7 @@ Nothing has started. The card is a proposal, and the footer says so: *"Hermes ca
 
 The safety model, in one place:
 
-| | |
+| Question | Answer |
 | :--- | :--- |
 | Who can reach it | Admins only, in the UI and again in the API (403 for members). |
 | What Hermes can do | Read the schedule, champion, runs, and step logs; answer; propose up to two action cards per reply — start a run, or cancel the running one. |
