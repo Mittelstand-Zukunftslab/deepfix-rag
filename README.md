@@ -18,7 +18,7 @@ Developed by **Mittelstand Zukunftslab & AI Service Center (AISC) — HPI**.
 
 | | |
 | :--- | :--- |
-| **Search** | Dense, BM25, or hybrid retrieval over a shared corpus, with reranking and a relevance floor. |
+| **Search** | Dense, BM25, or hybrid retrieval over a shared corpus, with optional reranking and a relevance floor once reranking is on. |
 | **Ask** | A chat over the same corpus. Answers cite the passages they came from, each passage stays votable, and a grounding badge says whether the answer is backed by the corpus. [Streaming, multi-turn Ask chat is coming with PR #23](https://github.com/Mittelstand-Zukunftslab/deepfix-rag/pull/23). |
 | **Library** | Upload text, Markdown, and PDF files (20 MB each) into the shared workspace corpus. |
 | **History** | Every search and question from the team, with the answer returned, the passages shown, and the votes given. Filterable by person, type, and feedback. |
