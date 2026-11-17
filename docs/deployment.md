@@ -12,7 +12,7 @@ The VPS has **7.6 GB of RAM**. The Compose memory caps add up to more than that 
 | `mlflow` | 2 GB | One worker, SQLite backend store. |
 | `rustfs` | 1 GB | Object store. |
 | `diagnostic-agent` | 1 GB | Optional; idle unless `run-diagnostic` is used. |
-| `memgraph`, `falkordb` | 1 GB each | Optional; only for manual graph retrieval. |
+| `memgraph`, `falkordb` | 1 GB each | Optional. `falkordb` is required only if a promoted champion uses `graph_hybrid`; `memgraph` only for the manual `graph` backend. |
 | `backend-api`, `web` | none | Small and steady. |
 
 Do not raise `hermes`'s limits to make a round faster or a chat turn survive. If memory is tight, lower the chat's appetite first (`ADMIN_CHAT_MAX_CONCURRENT_TURNS`, then `ADMIN_CHAT_TURN_TIMEOUT_SECONDS` and `ADMIN_CHAT_MAX_PROMPT_CHARS`), and remember that only one optimization run exists at a time.
@@ -91,6 +91,6 @@ Three keys are required for the stack to boot at all: `API_SERVER_KEY` and `HERM
 - The API's public host is only needed if a browser or an external tool must reach it directly. The web app proxies `/api/*` itself, so the common deployment can leave `DEEPFIX_API_HOST` at its fail-closed default and the `deepfix-api` routers simply match nothing.
 - RustFS has no domain. The console stays off.
 
-Two ports still publish, and both are optional debug surfaces rather than part of the request path: `diagnostic-agent` on `8844`, so `deepfix run-diagnostic` can be pointed at it from outside the network, and `memgraph` / `falkordb` on `7687` and `6379` from `compose.graphdb.yml`. Remove the mapping where nothing outside the host uses it; the Compose-network address (`http://diagnostic-agent:8844`, the default `DEEPFIX_SERVER_URL`) keeps working.
+Two ports still publish, and both are optional debug surfaces rather than part of the request path: `diagnostic-agent` on `8844`, so `deepfix run-diagnostic` can be pointed at it from outside the network, and `memgraph` / `falkordb` on `7687` and `6379` from `compose.graphdb.yml` (needed only when a champion uses `graph_hybrid` or a manual run uses `graph`). Remove the mapping where nothing outside the host uses it; the Compose-network address (`http://diagnostic-agent:8844`, the default `DEEPFIX_SERVER_URL`) keeps working.
 
 Never put a real hostname, IP address, or credential in a document in this repository.

@@ -15,6 +15,7 @@ retrieval:
   backend: graph
   vector_store: lancedb
   graph_store: falkordb
+  graph_extraction_schema: bundestag
   lancedb_table_name: documents
   lancedb_index_dir: s3://deepfix-index/dev
   top_k: 10

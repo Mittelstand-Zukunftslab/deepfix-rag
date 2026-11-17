@@ -62,7 +62,7 @@ If the compare JSON has `effective_backend` `dense` while `configured_backend` i
 
 ## Valid values
 
-`retrieval.backend`: `bm25`, `dense`, `hybrid`, `graph`, `mixed`. This skill compares the first three. `graph` and `mixed` are rejected by the API and are not available in a round.
+`retrieval.backend`: `bm25`, `dense`, `hybrid`, `graph`, `mixed`, `graph_hybrid`. This skill compares the first three. `graph` and `mixed` are rejected by the API and are not available in a round. `graph_hybrid` is promotable but needs a FalkorDB host, which the Hermes sandbox does not have, so it is not a round action either.
 
 `retrieval.language` (default `german`) picks the Snowball stemmer on the BM25 side of `bm25` and `hybrid`. It does not touch `dense`. Valid values are the PyStemmer algorithms: `arabic`, `armenian`, `basque`, `catalan`, `danish`, `dutch`, `english`, `finnish`, `french`, `german`, `greek`, `hindi`, `hungarian`, `indonesian`, `irish`, `italian`, `lithuanian`, `nepali`, `norwegian`, `porter`, `portuguese`, `romanian`, `russian`, `serbian`, `spanish`, `swedish`, `tamil`, `turkish`, `yiddish`. Any other value fails when the config is validated.
 

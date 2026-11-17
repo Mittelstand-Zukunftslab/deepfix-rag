@@ -85,7 +85,7 @@ Only `web` is reachable from a browser. It signs the user in with Better Auth, t
 | `mlflow` | Experiment tracking and the trace sink for `eval` and for the Hermes agent. It has no authentication of its own, so a Traefik router with a basic-auth middleware is the only way in. | none |
 | `rustfs` | S3-compatible object store: the index cache and the per-run bundles under `optimization/runs/<run_id>/`. | none |
 | `diagnostic-agent` | Optional DeepFix analysis server (`deepfix-server`), used only by `deepfix run-diagnostic`. | 8844 |
-| `memgraph`, `falkordb` | Optional graph stores for the manual `graph` backend, from `compose.graphdb.yml`. The promotion gate rejects `graph` and `mixed`. | 7687, 6379 |
+| `memgraph`, `falkordb` | Optional graph stores, from `compose.graphdb.yml`. `falkordb` is required by the promotable `graph_hybrid` backend and by the manual `graph` one; the promotion gate still rejects `graph` and `mixed`. | 7687, 6379 |
 
 `docker-compose.yml` includes `compose.hermes.yml`, which defines `hermes`, and `compose.graphdb.yml`, which defines the two graph stores. Drop the graph include where graph retrieval is not used.
 
@@ -355,7 +355,7 @@ chunking:
 embedding:
   batch_size: 32            # the model id is EMBEDDING_MODEL, not a config key
 retrieval:
-  backend: hybrid           # hybrid | dense | bm25 | graph | mixed
+  backend: hybrid           # hybrid | dense | bm25 | graph | mixed | graph_hybrid
   top_k: 10                 # 1 to 100
   fusion_mode: reciprocal_rerank  # reciprocal_rerank | relative_score | dist_based_score | simple
   dense_weight: 0.5         # read only by relative_score and dist_based_score
@@ -373,7 +373,7 @@ eval:
   cutoff_k: 5               # nDCG@k, R@k, P@k, independent of retrieval.top_k
 ```
 
-Index-time keys force a rebuild when they change: `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, `retrieval.bit_width`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, `EMBEDDING_MODEL`, and the corpus hash. `deepfix schema --json` prints the live list. `configs/README.md` describes every shipped file.
+Index-time keys force a rebuild when they change: `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, `retrieval.bit_width`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, `retrieval.graph_num_workers`, `retrieval.graph_build_document_limit`, `retrieval.graph_dedup_similarity`, `retrieval.graph_dedup_name_ratio`, `retrieval.graph_dedup_max_edit_distance`, `EMBEDDING_MODEL`, and the corpus hash. `deepfix schema --json` prints the live list. `configs/README.md` describes every shipped file.
 
 ### Environment variables
 
@@ -455,7 +455,7 @@ Names and purpose only. `example.env` carries the template values and one commen
 | `DEEPFIX_SERVER_URL`, `DEEPFIX_API_KEY` | Analysis server address and the key `deepfix-sdk` sends. |
 | `DEEPFIX_LLM_API_KEY`, `DEEPFIX_LLM_BASE_URL`, `DEEPFIX_LLM_MODEL_NAME`, `DEEPFIX_LLM_TEMPERATURE`, `DEEPFIX_LLM_MAX_TOKENS`, `DEEPFIX_LLM_CACHE`, `DEEPFIX_LLM_TRACK_USAGE`, `LITELLM_DROP_PARAMS`, `DEEPFIX_SEARCH_PROVIDER`, `NUM_REASONING_CHAINS`, `DEEPFIX_SERVER_DATABASE_URL`, `MLFLOW_EXP_NAME` | The analysis server's own model, search, and storage settings. It does not import this package, so these do not configure the API or the optimizer. |
 | `MEMGRAPH_URL`, `MEMGRAPH_USERNAME`, `MEMGRAPH_PASSWORD` | Memgraph connection for `retrieval.backend=graph`. |
-| `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_USERNAME`, `FALKORDB_PASSWORD`, `FALKORDB_DATABASE` | FalkorDB connection for the same backend. |
+| `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_USERNAME`, `FALKORDB_PASSWORD`, `FALKORDB_DATABASE` | FalkorDB connection for `retrieval.graph_store: falkordb`, which `graph_hybrid` requires. |
 
 `web/.env.example` covers local development of the web app alone: `VITE_API_BASE_URL`, `API_INTERNAL_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `AUTH_DATABASE_PATH`, `ALLOWED_EMAIL_DOMAINS`.
 
@@ -504,6 +504,18 @@ sequenceDiagram
 **The sandbox.** `docker/hermes/Dockerfile` pins `nousresearch/hermes-agent` by digest, adds a Python 3.12 venv for `deepfix`, the twelve skills read-only, and two plugins: `hermes-otel` for traces and `deepfix-run-tag` for the `deepfix.run_id` attribute. The optimization profile's toolsets are `terminal`, `file`, and `skills`; `agent.max_turns` is 40.
 
 **The secret scrub.** `optimization._secrets` / `_redact` removes every configured secret from step lines, heartbeats, terminal output, and stored reasons, and the same key list — extended with the chat key — is used by the run-tag plugin and the CLI shim. It is the only thing between a leaked value and the step log; never remove a name from it.
+
+---
+
+## Graph retrieval
+
+`retrieval.backend: graph_hybrid` answers from a typed property graph *and* the dense index. It is the one graph path the promotion gate accepts; `graph` and `mixed` stay manual.
+
+- **Ontology.** `retrieval.graph_extraction_schema: bundestag` selects a closed Bundestag DIP vocabulary: `PERSON`, `FRAKTION`, `MINISTERIUM`, `AUSSCHUSS`, `DRUCKSACHE`, `PLENARPROTOKOLL`, `VORGANG`, `GESETZ`, `THEMA`, joined by `MEMBER_OF`, `SUBMITTED_BY`, `ANSWERED_BY`, `ASSIGNED_TO`, `PART_OF`, `AMENDS`, `REFERS_TO`, `SPOKE_IN`, `ABOUT`. Each relation is allowed only between specific type pairs (23 of them, listed in `BUNDESTAG_TRIPLES`), and extraction runs in strict mode, so a triplet outside that set is dropped. `entity_relationship` is the fallback for user-uploaded documents, and an unknown or `default` name resolves to it.
+- **Build.** `configs/graph_hybrid_falkordb.yml` builds it: `graph_build_document_limit: 500` extracts from the first 500 documents so a first build is reviewable, `graph_num_workers` sets extraction parallelism, and the build writes both the graph and a LanceDB chunk index over the same chunks.
+- **Deduplication.** FalkorDB has no APOC, so duplicates are merged in Python: two entities of one label merge only when their name embeddings reach `graph_dedup_similarity` **and** their names are close (`graph_dedup_name_ratio` containment or `graph_dedup_max_edit_distance`). Names whose numeric tokens differ never merge, so `BT-Drucksache 20/123` and `20/124` stay apart. Every merge is one JSON line in `<index_dir>/graph_merges.jsonl`, and `graph_merges` in the `deepfix index --json` payload counts them.
+- **Retrieval.** The question's entities are detected with `LLM_MODEL` (one completion, at most `graph_query_entity_limit`), each one's neighbourhood is retrieved `graph_traversal_hops` deep, the source chunks are merged with dense retrieval by `dense_weight` and `graph_weight`, and the existing reranker orders the result. Passages stay chunks with a `doc_id`, so Ask's citations, votes, and grounding are unchanged.
+- **Host.** A `graph_hybrid` champion needs `falkordb` running (`docker compose -f compose.graphdb.yml up -d falkordb`). It stays out of the default deployment, and an unreachable store fails the build or the query rather than silently returning dense-only results.
 
 ---
 
@@ -584,7 +596,7 @@ The routers are declared here, not in Dokploy, so a redeploy cannot drop the mid
 
 Rollback is local and leaves data alone: add a loopback-only `ports:` entry for a session, set `RUSTFS_CONSOLE_ENABLE=true`, or move the router's host. Nothing here deletes the `mlflow_artifacts` or `rustfs_data` volume, changes a bucket policy, or rotates a key.
 
-`memgraph` and `falkordb` are outside this lockdown: `compose.graphdb.yml` publishes `7687` and `6379`, they are optional, and the promotion gate rejects the `graph` and `mixed` backends a round would need them for.
+`memgraph` and `falkordb` are outside this lockdown: `compose.graphdb.yml` publishes `7687` and `6379` and they are optional. The gate accepts `graph_hybrid`, so a promoted graph champion needs `falkordb` running; it still rejects `graph` and `mixed`.
 
 ---
 

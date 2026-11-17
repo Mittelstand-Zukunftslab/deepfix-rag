@@ -1,0 +1,84 @@
+version: "1.0"
+
+# The promotable graph configuration: a typed Bundestag DIP ontology on
+# FalkorDB, entity-anchored graph retrieval merged with dense retrieval, and
+# rerank on. Needs a FalkorDB host (`docker compose -f compose.graphdb.yml up -d
+# falkordb`); the backend fails rather than silently returning dense-only
+# results when the store is unreachable.
+#
+# The first build extracts from 500 documents so it is cheap enough to review:
+# `graph_merges` in the `--json` payload counts the entity merges and
+# `<index_dir>/graph_merges.jsonl` lists them, which is where a false positive
+# shows up. Raise `graph_build_document_limit` once the ontology looks right.
+
+chunking:
+  strategy: recursive
+  size: 1024
+  overlap: 64
+  semantic_buffer_size: 1
+  semantic_breakpoint_percentile: 95
+  hierarchical_chunk_sizes: null
+
+embedding:
+  batch_size: 32
+
+retrieval:
+  backend: graph_hybrid
+  vector_store: lancedb
+  graph_store: falkordb
+  graph_extraction_schema: bundestag
+  graph_build_document_limit: 500
+  graph_num_workers: 4
+  graph_max_paths_per_chunk: 5
+  graph_traversal_hops: 2
+  graph_query_entity_limit: 5
+  graph_dedup_similarity: 0.9
+  graph_dedup_name_ratio: 0.9
+  graph_dedup_max_edit_distance: 2
+  lancedb_table_name: documents
+  lancedb_index_dir: indexes/graph_hybrid
+  top_k: 10
+  fusion_mode: reciprocal_rerank
+  query_expansion_num: 1
+  query_gen_prompt: |
+    You are a helpful assistant that generates multiple search queries based on a single input query. Generate {num_queries} search queries, one on each line, related to the following input query:
+    Query: {query}
+    Queries:
+  dense_weight: 0.5
+  graph_weight: 0.5
+  bit_width: 4
+  language: german
+  load_if_exists: true
+
+rerank:
+  enabled: true
+  top_n: 5
+  min_relevance_score: 0.3
+
+generation:
+  temperature: 0.0
+  max_tokens: 4096
+  system_prompt: null
+  response_synthesizer: simple_summarize
+
+data:
+  path_or_repo: HF:wirthual/dip-bundestag
+  split: train
+  limit: null
+  source_type: huggingface
+
+eval:
+  retrieval_metrics:
+    - ndcg
+    - recall
+  generation_metrics:
+    - faithfulness
+    - context_precision
+    - context_recall
+    - answer_relevancy
+    - contextual_relevancy
+  threshold: 0.7
+  concurrency: 5
+  cutoff_k: 5
+
+retrieval_only: false

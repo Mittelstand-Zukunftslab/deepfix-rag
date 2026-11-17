@@ -358,7 +358,12 @@ class GraphSearchSpace(ChunkingSearchSpace):
         description="Chunking strategies eligible for graph HPO; hierarchical is excluded.",
     )
     extraction_schemas: list[str] = Field(
-        default_factory=lambda: ["default", "entity_relationship", "domain_legal"]
+        default_factory=lambda: [
+            "default",
+            "entity_relationship",
+            "domain_legal",
+            "bundestag",
+        ]
     )
     max_paths_per_chunk_min: int = Field(default=1, ge=1, le=10)
     max_paths_per_chunk_max: int = Field(default=10, ge=1, le=10)

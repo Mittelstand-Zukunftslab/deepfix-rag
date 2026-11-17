@@ -18,7 +18,7 @@ cli_actions:
   - "deepfix eval --config <run_dir>/candidate.yaml --index-dir <run_dir>/idx-graph --compare configs/champion.yaml --dataset <dataset_path> --retrieval-only --limit 30 --json"
 ---
 
-BENCHMARK / MANUAL USE ONLY, NEVER IN API-DRIVEN RUNS: graph and mixed backends are rejected by the promotion gate and need graph hosts the agent does not have. The loop's routing table does not route here.
+BENCHMARK / MANUAL USE ONLY, NEVER IN API-DRIVEN RUNS: the `graph` and `mixed` backends this skill names are rejected by the promotion gate and need graph hosts the agent does not have. (`graph_hybrid` is promotable, but it is not a round action either.) The loop's routing table does not route here.
 
 For a developer on a benchmark: `<dataset_path>` is the benchmark QA dataset (for example `HF:isaacus/legal-rag-bench`) and `<run_dir>` is any scratch directory for the candidate and index. Follow `optimization-loop` for the shape of the gate and the exit codes. Graph extraction runs at index time and calls an LLM, so it needs a reachable graph database and an LLM key; do not use it inside a 40-turn round.
 
@@ -56,7 +56,7 @@ For long statutes, a second index-time hypothesis is hierarchical chunking. `chu
 
 `retrieval.graph_store`: `memgraph` or `falkordb`. `none` does not store a graph.
 
-`retrieval.graph_extraction_schema`: `domain_legal` or `entity_relationship`. Any other string, including `default`, stores no allowed entity or relation list.
+`retrieval.graph_extraction_schema`: `domain_legal` or `entity_relationship`. Either is closed: strict mode drops a relation the schema does not allow between that pair of types. Any other string, including `default`, resolves to `entity_relationship`.
 
 `retrieval.graph_max_paths_per_chunk`: 1–10 (default 5). Index-time.
 
@@ -64,7 +64,7 @@ For long statutes, a second index-time hypothesis is hierarchical chunking. `chu
 
 ## Index-time vs query-time
 
-`retrieval.backend=graph`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, and `chunking.*` are index-time. `retrieval.graph_traversal_hops` is query-time and capped at 3.
+`retrieval.backend=graph`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, `retrieval.graph_num_workers`, `retrieval.graph_build_document_limit`, the three `retrieval.graph_dedup_*` keys, and `chunking.*` are index-time. `retrieval.graph_traversal_hops` is query-time and capped at 3.
 
 ## Validated findings
 

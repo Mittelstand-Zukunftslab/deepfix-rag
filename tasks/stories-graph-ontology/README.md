@@ -107,6 +107,34 @@ test.
 | GRAPH-005 | Extends `tests/test_promotion.py`'s existing backend case: `graph_hybrid` is allowed by the loader and `graph`/`mixed` are not. |
 | GRAPH-006 | `tests/test_graph_hybrid.py` gains the requirement switch (`DEEPFIX_FALKORDB_REQUIRED`) and the CI job runs it. |
 
+## Implementation status (2026-11-17)
+
+One commit per story on `feat/graph-ontology`, each linted, tested and committed
+before the next began.
+
+| Id | Status | Notes |
+| :--- | :--- | :--- |
+| GRAPH-001 | Done | The ontology registry, the all-pairs fallback, and the `Literal` boundary the strict extractor needs. |
+| GRAPH-002 | Done | `graph_num_workers`, `graph_build_document_limit`, and the sampled count in the build payload. |
+| GRAPH-003 | Done | `graph_dedup.py`: the merge predicate, the identifier guard, the Cypher re-pointing, the JSONL log, and `rapidfuzz`. |
+| GRAPH-004 | Done | `graph_hybrid.py`: `EntityGraphRetriever` + `GraphHybridRetriever`, the dense twin in a `graph_hybrid` build, and the config validator. |
+| GRAPH-005 | Done | Both allow-lists widened to `graph_hybrid`; `graph` and `mixed` still rejected. |
+| GRAPH-006 | Done | `configs/graph_hybrid_falkordb.yml`, the README / `configs/README.md` / PRD updates, and the CI `graph` job. |
+
+Two deviations from the stories as written, both recorded here rather than
+silently applied:
+
+1. **GRAPH-003 AC 11 and GRAPH-004 AC 14 became two cases in one module rather
+   than one case each**, and the module also holds a third case for the edge
+   contract (GRAPH-006 AC 7). The intent is unchanged: one integration module,
+   three meaningful cases, no per-function tests.
+2. **GRAPH-006 AC 9's CI job runs `tests/test_graph_hybrid.py` by path** rather
+   than by a `graph` marker. Adding a marker would mean registering it in
+   `pyproject.toml` and in `conftest.py`'s deselect logic for one file; the path
+   is what `.github/workflows/quickstart.yml` already does for its own script.
+   The job keeps `DEEPFIX_FALKORDB_REQUIRED=1`, so a broken store fails rather
+   than skips.
+
 ## Test commands
 
 Python, from the repository root:

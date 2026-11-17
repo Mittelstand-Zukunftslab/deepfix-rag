@@ -17,7 +17,7 @@ cli_actions:
   - "deepfix mutate-config --base configs/champion.yaml --output <run_dir>/candidate.yaml --set retrieval.backend=mixed --set retrieval.graph_store=memgraph --set retrieval.graph_weight=0.3 --set retrieval.dense_weight=0.5 --set retrieval.bm25_weight=0.2 --json"
 ---
 
-BENCHMARK / MANUAL USE ONLY, NEVER IN API-DRIVEN RUNS: graph and mixed backends are rejected by the promotion gate and need graph hosts the agent does not have. The loop's routing table does not route here.
+BENCHMARK / MANUAL USE ONLY, NEVER IN API-DRIVEN RUNS: the `graph` and `mixed` backends this skill names are rejected by the promotion gate and need graph hosts the agent does not have. (`graph_hybrid` is promotable, but it is not a round action either.) The loop's routing table does not route here.
 
 For a developer on a benchmark: `<dataset_path>` is the benchmark QA dataset and `<run_dir>` is any scratch directory for the candidate and index. Follow `optimization-loop` for the shape of the gate and the exit codes. `deepfix hpo --paradigm graph` is a separate long run and is not part of this skill.
 

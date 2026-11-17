@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev, feature/ui, feat/hermes-optimizer]
+    # `feat/*` graph work is verified the same way as the other feature
+    # branches: this repository opens no PR for it, so a push is the only trigger.
+    branches: [main, dev, feature/ui, feat/hermes-optimizer, feat/graph-ontology]
   pull_request:
 
 jobs:
@@ -30,6 +32,37 @@ jobs:
       # The adopter path: `uv tool install` from this checkout, then both
       # entry points. Marked integration, so the marker filter above skips it.
       - run: uv run pytest tests/test_skills.py -k tool_install -v
+
+  graph:
+    # `graph_hybrid` needs a real FalkorDB: the parts it covers are the ones a
+    # stub cannot tell the truth about — whether strict extraction drops a pair
+    # the ontology forbids, whether a merge re-points the edges a traversal
+    # walks, and whether the retriever returns citable chunks instead of
+    # triplet text. The service is the tag `compose.graphdb.yml` pins, so CI and
+    # the Compose host run the same build. No model key is involved: the module
+    # uses a stub LLM and a MockEmbedding.
+    runs-on: ubuntu-latest
+    services:
+      falkordb:
+        image: falkordb/falkordb:v4.20.3-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      FALKORDB_HOST: localhost
+      FALKORDB_PORT: "6379"
+      DEEPFIX_FALKORDB_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen --link-mode=copy
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run pytest tests/test_graph_hybrid.py -v
 
   web:
     runs-on: ubuntu-latest

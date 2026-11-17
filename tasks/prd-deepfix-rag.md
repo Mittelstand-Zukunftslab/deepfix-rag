@@ -7,11 +7,14 @@
 > - **The optimization agent is Hermes**, not OpenHands. `OPTIMIZATION_AGENT`
 >   accepts `hermes` only; see `tasks/prd-hermes-optimizer.md` and
 >   `tasks/prd-hermes-hpo-rounds.md`.
-> - **Graph RAG is optional and off the promoted path.** `retrieval.backend` still
->   supports `graph` and `mixed` with Memgraph or FalkorDB
->   (`compose.graphdb.yml`), but the promotion gate rejects both backends, and no
->   API-driven round may use them. The `pageindex` / vectorless paradigm was
->   never built.
+> - **Graph RAG is one promotable backend and two manual ones.**
+>   `retrieval.backend: graph_hybrid` — a typed Bundestag ontology on FalkorDB,
+>   entity-anchored graph retrieval merged with dense retrieval — is judged by the
+>   promotion gate like any other candidate. Plain `graph` and `mixed`, with
+>   Memgraph or FalkorDB, stay manual: the gate rejects them, and no API-driven
+>   round may use them. FalkorDB remains optional (`compose.graphdb.yml`) and off
+>   the default deployment. See `tasks/prd-graph-ontology.md`. The `pageindex` /
+>   vectorless paradigm was never built.
 >
 > For current behaviour read `README.md`.
 
@@ -135,11 +138,12 @@ deepfix-rag index --dataset <path|name> --paradigm <dense|hybrid|vectorless|grap
 - **Characteristics:** Leverages document layout structure, table of contents trees, section outlines, and semantic heading hierarchies.
 - **Target Workload:** Highly structured enterprise manuals, legislative bodies of work, and long-form documents where spatial-structural location dictates relevancy.
 
-### 4.4 Graph RAG (`MemgraphPropertyGraphStore` via LlamaIndex)
-- **Graph Engine:** Memgraph (high-performance in-memory C++ graph database supporting openCypher, deployed via Docker container `memgraph/memgraph-mage` on `bolt://localhost:7687`).
-- **LlamaIndex Integration:** Orchestrated natively via LlamaIndex's `PropertyGraphIndex` backed by `MemgraphPropertyGraphStore` (`llama-index-graph-stores-memgraph`), bringing Graph RAG under the exact same first-class retrieval abstractions as the other three paradigms.
-- **Extraction Mechanism:** Pluggable LlamaIndex schema extractors (`SchemaLLMPathExtractor`, `SimpleLLMPathExtractor`) using `Qwen 3.8 27B` to extract structured entities, relations, and passage node properties during indexing.
-- **Retrieval & Querying:** Combines graph path traversals (1–3 hops), vector context retrieval over entity nodes, and openCypher queries with tunable fusion weights.
+### 4.4 Graph RAG (`PropertyGraphIndex` via LlamaIndex)
+- **Graph Engines:** Memgraph (`memgraph/memgraph-mage`, `bolt://localhost:7687`) and FalkorDB (`falkordb/falkordb`, `redis://localhost:6379`), both optional, from `compose.graphdb.yml`. `graph_hybrid` requires FalkorDB.
+- **LlamaIndex Integration:** Orchestrated natively via LlamaIndex's `PropertyGraphIndex`, bringing Graph RAG under the exact same first-class retrieval abstractions as the other paradigms.
+- **Extraction Mechanism:** `SchemaLLMPathExtractor` in strict mode against a closed ontology selected by `retrieval.graph_extraction_schema`: `bundestag` (nine DIP entity types, nine relations, 23 allowed type pairs) for the Bundestag corpus, and `entity_relationship` as the fallback for user-uploaded documents. Extraction uses `LLM_MODEL` with configurable parallel workers and an optional document sample.
+- **Entity Deduplication:** A post-extraction step, in Python because FalkorDB has no APOC: same-label entities merge only when their name embeddings are close *and* their names are close, identifiers never merge, and every merge is logged to `graph_merges.jsonl`.
+- **Retrieval & Querying:** `graph` combines graph path traversals (1–3 hops), vector context retrieval over entity nodes, and openCypher queries with tunable fusion weights, and is manual. `graph_hybrid` detects the entities a question names, retrieves each one's neighbourhood, merges those source chunks with dense retrieval by `dense_weight` / `graph_weight`, and reranks. It is the promotable graph backend, and its results stay citable chunks.
 - **Target Workload:** Multi-hop reasoning, thematic aggregation, and questions requiring comprehensive relationship traversal across legislative corpora, case law cross-references, and grounding evidence sets.
 
 ---
@@ -557,7 +561,7 @@ The 9-week project execution timeline follows a strict two-week sprint cadence g
 - [ ] **Pair B:** Implement v1 of closed-loop autonomous optimization loop using `deepfix-rag` CLI.
 - [x] **Pair B:** Implement `mutate-config`, `diff-config`, and `eval` subcommands with eval noise safeguard (Δ ≥ +2.5%). *(CLI subcommands implemented; auto-revert logic pending closed loop)*
 - [ ] **Pair B:** Configure MLflow auto-tracing for all Hermes tool-calling runs.
-- [ ] **Pair A:** Implement Vectorless (`pageindex`) and Graph RAG (`MemgraphPropertyGraphStore` via LlamaIndex `PropertyGraphIndex`) pipeline paradigms. *(Graph RAG partially in pipeline; Vectorless pending)*
+- [ ] **Pair A:** Implement Vectorless (`pageindex`) and Graph RAG (`PropertyGraphIndex`) pipeline paradigms. *(Graph RAG shipped as the manual `graph` and the promotable `graph_hybrid` backends with the `bundestag` ontology, `tasks/prd-graph-ontology.md`; Vectorless pending)*
 - [ ] **Pair A:** Define hyperparameter search spaces across all 4 paradigms. *(Dense & Hybrid defined; Graph & Vectorless pending)*
 - [x] **Advisory:** Mario Tormo Romero provides German Bundestag expert baseline scores and evaluation alignment.
 
