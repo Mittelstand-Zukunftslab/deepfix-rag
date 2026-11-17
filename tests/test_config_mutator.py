@@ -134,3 +134,62 @@ def test_graph_extraction_schemas_in_schema_module():
     assert len(GRAPH_EXTRACTION_SCHEMAS["entity_relationship"].relations) > 0
     assert len(GRAPH_EXTRACTION_SCHEMAS["domain_legal"].entities) > 0
     assert len(GRAPH_EXTRACTION_SCHEMAS["domain_legal"].relations) > 0
+
+
+def test_bundestag_schema_is_the_closed_dip_ontology():
+    """The Bundestag entry declares the DIP vocabulary and only the allowed type pairs."""
+    from deepfix_rag.config.schema import BUNDESTAG_TRIPLES, GRAPH_EXTRACTION_SCHEMAS
+
+    assert set(GRAPH_EXTRACTION_SCHEMAS) == {
+        "entity_relationship",
+        "domain_legal",
+        "bundestag",
+    }
+    bundestag = GRAPH_EXTRACTION_SCHEMAS["bundestag"]
+    assert set(bundestag.entities) == {
+        "PERSON",
+        "FRAKTION",
+        "MINISTERIUM",
+        "AUSSCHUSS",
+        "DRUCKSACHE",
+        "PLENARPROTOKOLL",
+        "VORGANG",
+        "GESETZ",
+        "THEMA",
+    }
+    assert set(bundestag.relations) == {
+        "MEMBER_OF",
+        "SUBMITTED_BY",
+        "ANSWERED_BY",
+        "ASSIGNED_TO",
+        "PART_OF",
+        "AMENDS",
+        "REFERS_TO",
+        "SPOKE_IN",
+        "ABOUT",
+    }
+    # The pair list is closed: 23 triples, no duplicates, and every part declared.
+    assert len(bundestag.validation_triples) == 23
+    assert len(set(bundestag.validation_triples)) == 23
+    assert set(bundestag.validation_triples) == set(BUNDESTAG_TRIPLES)
+    for subject, relation, obj in bundestag.validation_triples:
+        assert subject in bundestag.entities
+        assert obj in bundestag.entities
+        assert relation in bundestag.relations
+    # A pair the corpus cannot mean is absent, which is what strict mode enforces.
+    assert ("AUSSCHUSS", "SUBMITTED_BY", "THEMA") not in set(bundestag.validation_triples)
+
+
+def test_the_fallback_schemas_close_their_own_vocabulary():
+    """Strict mode must not start rejecting pairs the generic schemas already allowed."""
+    from deepfix_rag.config.schema import GRAPH_EXTRACTION_SCHEMAS
+
+    for name in ("entity_relationship", "domain_legal"):
+        schema = GRAPH_EXTRACTION_SCHEMAS[name]
+        expected = {
+            (subject, relation, obj)
+            for relation in schema.relations
+            for subject in schema.entities
+            for obj in schema.entities
+        }
+        assert set(schema.validation_triples) == expected

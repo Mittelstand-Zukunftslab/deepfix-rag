@@ -228,10 +228,92 @@ class GraphExtractionSchema(StrictModel):
         default_factory=list,
         description="Allowed relation/predicate types to extract between entities.",
     )
+    validation_triples: list[tuple[str, str, str]] = Field(
+        default_factory=list,
+        description=(
+            "Allowed (subject type, relation, object type) triples, enforced by "
+            "SchemaLLMPathExtractor in strict mode. An empty list means no pair restriction."
+        ),
+    )
 
+    @model_validator(mode="after")
+    def validate_triples_name_declared_types(self) -> "GraphExtractionSchema":
+        """Every allowed triple must name a declared entity type and relation."""
+        entities = set(self.entities)
+        relations = set(self.relations)
+        for subject, relation, obj in self.validation_triples:
+            for name, allowed, kind in (
+                (subject, entities, "entity type"),
+                (relation, relations, "relation"),
+                (obj, entities, "entity type"),
+            ):
+                if name not in allowed:
+                    raise ValueError(
+                        f"The allowed triple ({subject}, {relation}, {obj}) names the "
+                        f"{kind} '{name}', which this schema does not declare."
+                    )
+        return self
+
+
+def _all_pairs(entities: list[str], relations: list[str]) -> list[tuple[str, str, str]]:
+    """Every (type, relation, type) triple over a schema's own vocabulary.
+
+    Used for the schemas that have no per-pair knowledge: strict mode then prunes
+    only values outside the vocabulary, exactly as it did before the pair list
+    existed, so a corpus these schemas already served keeps building.
+    """
+    return [
+        (subject, relation, obj)
+        for relation in relations
+        for subject in entities
+        for obj in entities
+    ]
+
+
+def _closed_schema(
+    entities: list[str],
+    relations: list[str],
+    triples: list[tuple[str, str, str]] | None = None,
+) -> GraphExtractionSchema:
+    """Build a schema, deriving an all-pairs allow-list when none is given."""
+    return GraphExtractionSchema(
+        entities=entities,
+        relations=relations,
+        validation_triples=_all_pairs(entities, relations) if triples is None else triples,
+    )
+
+
+# The Bundestag DIP ontology. Each relation joins a specific pair of types, and
+# the list below is the complete set: extraction in strict mode drops anything
+# else, which is what keeps a committee from being "SUBMITTED_BY" a policy topic.
+BUNDESTAG_TRIPLES: list[tuple[str, str, str]] = [
+    ("PERSON", "MEMBER_OF", "FRAKTION"),
+    ("PERSON", "MEMBER_OF", "AUSSCHUSS"),
+    ("DRUCKSACHE", "SUBMITTED_BY", "FRAKTION"),
+    ("DRUCKSACHE", "SUBMITTED_BY", "MINISTERIUM"),
+    ("DRUCKSACHE", "SUBMITTED_BY", "PERSON"),
+    ("DRUCKSACHE", "ANSWERED_BY", "MINISTERIUM"),
+    ("VORGANG", "ASSIGNED_TO", "AUSSCHUSS"),
+    ("DRUCKSACHE", "PART_OF", "VORGANG"),
+    ("DRUCKSACHE", "AMENDS", "GESETZ"),
+    ("GESETZ", "AMENDS", "GESETZ"),
+    ("DRUCKSACHE", "REFERS_TO", "DRUCKSACHE"),
+    ("DRUCKSACHE", "REFERS_TO", "GESETZ"),
+    ("DRUCKSACHE", "REFERS_TO", "PLENARPROTOKOLL"),
+    ("DRUCKSACHE", "REFERS_TO", "VORGANG"),
+    ("GESETZ", "REFERS_TO", "GESETZ"),
+    ("PLENARPROTOKOLL", "REFERS_TO", "DRUCKSACHE"),
+    ("VORGANG", "REFERS_TO", "DRUCKSACHE"),
+    ("VORGANG", "REFERS_TO", "GESETZ"),
+    ("PERSON", "SPOKE_IN", "PLENARPROTOKOLL"),
+    ("DRUCKSACHE", "ABOUT", "THEMA"),
+    ("GESETZ", "ABOUT", "THEMA"),
+    ("PLENARPROTOKOLL", "ABOUT", "THEMA"),
+    ("VORGANG", "ABOUT", "THEMA"),
+]
 
 GRAPH_EXTRACTION_SCHEMAS: dict[str, GraphExtractionSchema] = {
-    "entity_relationship": GraphExtractionSchema(
+    "entity_relationship": _closed_schema(
         entities=["PERSON", "ORGANIZATION", "LOCATION", "CONCEPT", "EVENT"],
         relations=[
             "RELATED_TO",
@@ -241,7 +323,7 @@ GRAPH_EXTRACTION_SCHEMAS: dict[str, GraphExtractionSchema] = {
             "OCCURRED_IN",
         ],
     ),
-    "domain_legal": GraphExtractionSchema(
+    "domain_legal": _closed_schema(
         entities=[
             "STATUTE",
             "LAW",
@@ -261,7 +343,48 @@ GRAPH_EXTRACTION_SCHEMAS: dict[str, GraphExtractionSchema] = {
             "APPLIES_TO",
         ],
     ),
+    "bundestag": _closed_schema(
+        entities=[
+            "PERSON",
+            "FRAKTION",
+            "MINISTERIUM",
+            "AUSSCHUSS",
+            "DRUCKSACHE",
+            "PLENARPROTOKOLL",
+            "VORGANG",
+            "GESETZ",
+            "THEMA",
+        ],
+        relations=[
+            "MEMBER_OF",
+            "SUBMITTED_BY",
+            "ANSWERED_BY",
+            "ASSIGNED_TO",
+            "PART_OF",
+            "AMENDS",
+            "REFERS_TO",
+            "SPOKE_IN",
+            "ABOUT",
+        ],
+        triples=BUNDESTAG_TRIPLES,
+    ),
 }
+
+# The schema an unknown or unset `retrieval.graph_extraction_schema` resolves to.
+DEFAULT_GRAPH_EXTRACTION_SCHEMA = "entity_relationship"
+
+
+def resolve_graph_extraction_schema(name: str | None) -> GraphExtractionSchema:
+    """Return the named schema, falling back to the generic one.
+
+    `default` is the documented "pick something reasonable" value that shipped
+    configs already carry, so it resolves like an unknown name rather than
+    failing validation.
+    """
+    key = str(name or "").strip().lower()
+    return GRAPH_EXTRACTION_SCHEMAS.get(
+        key, GRAPH_EXTRACTION_SCHEMAS[DEFAULT_GRAPH_EXTRACTION_SCHEMA]
+    )
 
 
 class RetrievalConfig(StrictModel):
@@ -333,7 +456,10 @@ class RetrievalConfig(StrictModel):
     )
     graph_extraction_schema: str = Field(
         default="default",
-        description="Extraction schema type for property graph RAG.",
+        description=(
+            "Extraction schema for property graph RAG: bundestag, entity_relationship, "
+            "domain_legal. `default` and an unknown name fall back to entity_relationship."
+        ),
     )
     graph_max_paths_per_chunk: int = Field(
         default=5,

@@ -2,7 +2,7 @@ import asyncio
 import concurrent.futures
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Literal
 
 import lancedb
 from llama_index.core import (
@@ -59,13 +59,14 @@ import Stemmer
 from turbovec.llama_index import TurboQuantVectorStore
 
 from deepfix_rag.config.schema import (
-    GRAPH_EXTRACTION_SCHEMAS,
     ChunkingStrategy,
+    GraphExtractionSchema,
     GraphStoreType,
     RAGConfig,
     ResponseSynthesizerType,
     RetrievalBackend,
     VectorStoreType,
+    resolve_graph_extraction_schema,
 )
 from deepfix_rag.config.settings import LOGGER, ModelNotConfigured, require_model, settings
 from deepfix_rag.data import DataLoader, build_node_parser
@@ -132,6 +133,17 @@ class IndexBuildMetadata(BaseModel):
     paradigm: str = Field(..., description="Retrieval backend used for the build.")
     embedding_model: str = Field(..., description="Embedding model identifier.")
     reranker_model: str = Field(..., description="Configured re-ranker model identifier.")
+
+
+def _literal_of(values: list[str]) -> Any:
+    """A `Literal` over a schema's vocabulary.
+
+    `SchemaLLMPathExtractor` in strict mode requires the type and relation fields to
+    be `Literal`s: that is how it makes the model emit a declared name and how it
+    validates the reply. Declaring them this way keeps the schema a list in the
+    config layer while the extractor gets the closed type it expects.
+    """
+    return Literal[tuple(values)]
 
 
 class _QueryExpansionUnavailableLLM(LLM):
@@ -439,6 +451,26 @@ class RAGWorkflow(Workflow):
             embed_model = self._get_embed_model()
         return build_node_parser(self.config.chunking, embed_model=embed_model)
 
+    def _graph_extractor(self) -> SchemaLLMPathExtractor:
+        """Build the strict, schema-guided extractor the graph backends extract with.
+
+        Strict mode with the schema's pair allow-list is the whole point: a
+        relation the ontology does not allow between those two types is dropped
+        instead of written to the graph.
+        """
+        schema: GraphExtractionSchema = resolve_graph_extraction_schema(
+            self.config.retrieval.graph_extraction_schema
+        )
+        return SchemaLLMPathExtractor(
+            llm=self._get_llm(),
+            possible_entities=_literal_of(schema.entities),
+            possible_relations=_literal_of(schema.relations),
+            kg_validation_schema=list(schema.validation_triples) or None,
+            strict=True,
+            max_triplets_per_chunk=self.config.retrieval.graph_max_paths_per_chunk,
+            num_workers=self.config.retrieval.graph_num_workers,
+        )
+
     def _build_index(self, documents: list[Document], storage_context=None, **kwargs) -> BaseIndex:
         uses_graph = (
             self.config.retrieval.graph_store != GraphStoreType.NONE
@@ -468,21 +500,11 @@ class RAGWorkflow(Workflow):
         transformations = [self._get_node_parser()]
 
         if uses_graph:
-            schema_key = str(self.config.retrieval.graph_extraction_schema).lower().strip()
-            schema_info = GRAPH_EXTRACTION_SCHEMAS.get(schema_key)
-            extractor_kwargs: dict[str, Any] = {
-                "llm": self._get_llm(),
-                "max_triplets_per_chunk": self.config.retrieval.graph_max_paths_per_chunk,
-            }
-            if schema_info:
-                extractor_kwargs["possible_entities"] = schema_info.entities
-                extractor_kwargs["possible_relations"] = schema_info.relations
-
             index = PropertyGraphIndex.from_documents(
                 documents,
                 storage_context=storage_context,
                 embed_model=self._get_embed_model(),
-                kg_extractors=[SchemaLLMPathExtractor(**extractor_kwargs)],
+                kg_extractors=[self._graph_extractor()],
                 transformations=transformations,
                 show_progress=True,
             )
