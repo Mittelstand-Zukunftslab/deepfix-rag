@@ -144,11 +144,13 @@ Prerequisites for either path:
 - **Node 22.20+** only if you want `npx` to install the skills.
 - A JDK is optional: `pyterrier`'s `pt.Evaluate` path, which DeepFix uses, runs without a JVM.
 
+<!-- quickstart:clone -->
 ```bash
 git clone https://github.com/Mittelstand-Zukunftslab/deepfix-rag.git
 cd deepfix-rag
 cp example.env .env
 ```
+<!-- /quickstart:clone -->
 
 ### The four keys to set before the first start
 
@@ -163,6 +165,7 @@ Three of these block Compose outright: it interpolates every service, so a missi
 
 Fill them in place:
 
+<!-- quickstart:keys -->
 ```bash
 sed -i.bak \
   -e "s|^API_SERVER_KEY=.*|API_SERVER_KEY=$(openssl rand -hex 32)|" \
@@ -171,6 +174,7 @@ sed -i.bak \
   -e "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$(openssl rand -base64 32)|" \
   .env && rm .env.bak
 ```
+<!-- /quickstart:keys -->
 
 To get real answers rather than configuration errors, also set the model keys you have: `LLM_API_KEY` and `EMBEDDING_API_KEY` (OpenRouter by default, per `LLM_BASE_URL` and `EMBEDDING_BASE_URL`), and `OPENROUTER_API_KEY` for reranking and the sandbox. `example.env` carries the model ids. Model ids are deployment configuration: an empty one fails at the point of use and names the variable. `MLFLOW_BASIC_AUTH_USERS` is only needed by the MLflow router, and empty fails closed.
 
@@ -178,8 +182,10 @@ To get real answers rather than configuration errors, also set the model keys yo
 
 The Compose file publishes no host port for `web`, `backend-api`, `mlflow`, or `rustfs`: in a deployment, Traefik routes to them. Locally, two things are needed — the external network the `mlflow` router joins, and a loopback-only port so a browser can reach the app:
 
+<!-- quickstart:network-and-ports -->
 ```bash
-docker network create dokploy-network   # once, on any host that is not Dokploy
+# `dokploy-network` is external, so it has to exist first. Re-running is safe.
+docker network inspect dokploy-network >/dev/null 2>&1 || docker network create dokploy-network
 
 cat > docker-compose.local.yml <<'YAML'
 services:
@@ -190,11 +196,17 @@ services:
   mlflow:
     ports: ["127.0.0.1:5000:5000"]
 YAML
-
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 ```
+<!-- /quickstart:network-and-ports -->
 
-Keep that file out of git; loopback-only, never a bare `8080:8080`. Then:
+Keep that file out of git; loopback-only, never a bare `8080:8080`. Then start the five core services — `rustfs`, `mlflow`, `backend-api`, `hermes`, and `web` — and not the optional graph stores:
+
+<!-- quickstart:up -->
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build \
+  rustfs mlflow backend-api hermes web
+```
+<!-- /quickstart:up -->
 
 | What | Where | Notes |
 | :--- | :--- | :--- |
@@ -221,12 +233,7 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml down
 # add -v to delete the volumes too: auth users, product.db, the index, MLflow runs
 ```
 
-Plain `docker compose up -d` also starts the optional `diagnostic-agent` (publishing `8844`) and the `memgraph` / `falkordb` graph stores (`7687`, `6379`), which pull several GB and collide with anything already on those ports. Name the five core services instead when you do not need them:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build \
-  rustfs mlflow backend-api hermes web
-```
+Plain `docker compose up -d` also starts the optional `diagnostic-agent` (publishing `8844`) and the `memgraph` / `falkordb` graph stores (`7687`, `6379`), which pull several GB and collide with anything already on those ports. That is why the command above names the five core services instead.
 
 Index builds and search stay inside the `api_data` workspace volume. RustFS holds optimization run bundles and serves an `S3_URI` index when one is copied from `s3://`, so a local index and search do not need a bucket or any object-store setup.
 
@@ -624,7 +631,7 @@ bun run typecheck && bun run lint && bun run test
 
 `web/openapi.json` and `web/src/client/` are generated from the API schema. Never edit them; run `bun run generate:api` after changing a route or a Pydantic model, because CI regenerates both and fails if they differ.
 
-CI (`.github/workflows/ci.yml`) runs three jobs: `api` (Ruff on the API package plus the `api` marker), `cli` (Ruff everywhere, `unit` and `cli`, and the `uv tool install` adopter check), and `web` (schema regeneration, typecheck, lint, test).
+CI (`.github/workflows/ci.yml`) runs three jobs: `api` (Ruff on the API package plus the `api` marker), `cli` (Ruff everywhere, `unit` and `cli`, and the `uv tool install` adopter check), and `web` (schema regeneration, typecheck, lint, test). A fourth workflow, `.github/workflows/quickstart.yml`, runs this page's own Quick start commands against a clean runner whenever the README, the Compose files, the Dockerfiles, `example.env`, the web app, or the API changes, so the block above cannot rot unnoticed.
 
 ---
 

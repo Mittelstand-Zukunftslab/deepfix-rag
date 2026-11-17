@@ -1,0 +1,91 @@
+name: Quick start
+
+# Runs the README's Path A quick start the way a newcomer would, so the
+# documented commands cannot silently go stale. The commands are not restated
+# here: `scripts/quickstart_smoke.py` lifts them out of README.md's
+# `<!-- quickstart:NAME -->` fences and executes them verbatim. Editing the
+# README therefore changes what this job runs, and removing a marker fails it.
+#
+# No live model keys are involved. The stack boots with the model ids from
+# `example.env` and empty LLM, embedding, and rerank keys, which is the
+# documented placeholder behaviour: every container starts and answers, and
+# only a search or ask that calls a model fails. The assertions stop at that
+# reachable surface, so this job never calls OpenRouter or Cohere.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - README.md
+      - docs/**
+      - example.env
+      - docker-compose*.yml
+      - compose.*.yml
+      - "**/Dockerfile"
+      - docker/**
+      - web/**
+      - src/deepfix_rag/api/**
+      - src/deepfix_rag/config/**
+      - src/deepfix_rag/documents.py
+      - scripts/quickstart_smoke.py
+      - .github/workflows/quickstart.yml
+  pull_request:
+    paths:
+      - README.md
+      - docs/**
+      - example.env
+      - docker-compose*.yml
+      - compose.*.yml
+      - "**/Dockerfile"
+      - docker/**
+      - web/**
+      - src/deepfix_rag/api/**
+      - src/deepfix_rag/config/**
+      - src/deepfix_rag/documents.py
+      - scripts/quickstart_smoke.py
+      - .github/workflows/quickstart.yml
+  # Lets any branch be checked on demand, before it is merged.
+  workflow_dispatch:
+
+concurrency:
+  # A superseded run of the same ref has nothing left to say: the newer commit
+  # runs the same documented commands.
+  group: quickstart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quickstart:
+    name: README Path A on Compose
+    runs-on: ubuntu-latest
+    # The three images total about 26 GB on disk and the build peaks near
+    # 41 GB, so a cold build is the slow part. Waiting for the stack to settle
+    # is bounded separately inside the script.
+    timeout-minutes: 75
+    steps:
+      # Full history, because the README's first block is a real `git clone` and
+      # the script serves it from this checkout: a shallow one cannot be pushed.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The three images total about 26 GB on disk and the build peaks near
+      # 41 GB. The runner starts with roughly 89 GB free, but the preinstalled
+      # toolchains are dead weight here, so drop them first. Nothing in this
+      # step changes the documented commands; a newcomer's own machine needs no
+      # equivalent.
+      - name: Make room for the Compose build
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
+      - name: Show the Docker and Compose versions a newcomer would have
+        run: docker version && docker compose version
+
+      # The README's own blocks do the rest: the four key values from
+      # `openssl rand`, the `dokploy-network` the `mlflow` router joins, the
+      # loopback override file, and the five-service `up -d --build`. The
+      # script then waits for health, asserts the pages answer, and always ends
+      # with `docker compose down -v`, dumping `ps` and each service's logs if
+      # anything failed.
+      - name: Run the README quick start
+        run: python3 scripts/quickstart_smoke.py --work-dir "$RUNNER_TEMP/quickstart"

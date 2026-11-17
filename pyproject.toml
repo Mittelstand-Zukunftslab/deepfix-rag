@@ -79,6 +79,7 @@ include = [
     "src/**/*.py",
     "tests/**/*.py",
     "scripts/register_prompt.py",
+    "scripts/quickstart_smoke.py",
     "docker/hermes/sandbox_boot.py",
     "docker/hermes/bin/deepfix",
     "docker/hermes/deepfix_run_tag/__init__.py",
