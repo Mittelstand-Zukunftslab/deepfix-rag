@@ -423,30 +423,41 @@ class RAGWorkflow(Workflow):
         """Check if an index already exists for the configured storage backend."""
         try:
             if self.config.retrieval.graph_store != GraphStoreType.NONE:
+                if self.config.retrieval.backend == RetrievalBackend.GRAPH_HYBRID:
+                    # A graph_hybrid build writes the dense half into LanceDB as well
+                    # as the graph, so its chunks answer both questions: may this be
+                    # loaded without rebuilding, and does it hold anything.
+                    return self._lancedb_table_has_rows()
                 return False
             if self.config.retrieval.vector_store == VectorStoreType.LANCEDB:
-                uri = self.config.retrieval.lancedb_index_dir
-                if not str(uri).startswith("s3://") and not Path(uri).exists():
-                    return False
-                vector_store = self._get_vector_store()
-                conn = getattr(vector_store, "_connection", None)
-                if conn is not None:
-                    table_name = getattr(vector_store, "_table_name", None)
-                    if table_name is None:
-                        return False
-                    tables_res = (
-                        conn.list_tables() if hasattr(conn, "list_tables") else conn.table_names()
-                    )
-                    tables = getattr(tables_res, "tables", tables_res)
-                    tables = list(tables) if not isinstance(tables, list) else tables
-                    if table_name in tables:
-                        tbl = conn.open_table(table_name)
-                        count = tbl.count_rows() if hasattr(tbl, "count_rows") else len(tbl)
-                        return count > 0
+                return self._lancedb_table_has_rows()
             return False
         except Exception as e:
             LOGGER.debug(f"Index existence check failed: {e}")
             return False
+
+    def _lancedb_table_has_rows(self) -> bool:
+        """True when the configured LanceDB table exists and holds at least one row."""
+        if self.config.retrieval.vector_store != VectorStoreType.LANCEDB:
+            return False
+        uri = self.config.retrieval.lancedb_index_dir
+        if not str(uri).startswith("s3://") and not Path(uri).exists():
+            return False
+        vector_store = self._get_vector_store()
+        conn = getattr(vector_store, "_connection", None)
+        if conn is None:
+            return False
+        table_name = getattr(vector_store, "_table_name", None)
+        if table_name is None:
+            return False
+        tables_res = conn.list_tables() if hasattr(conn, "list_tables") else conn.table_names()
+        tables = getattr(tables_res, "tables", tables_res)
+        tables = list(tables) if not isinstance(tables, list) else tables
+        if table_name not in tables:
+            return False
+        tbl = conn.open_table(table_name)
+        count = tbl.count_rows() if hasattr(tbl, "count_rows") else len(tbl)
+        return count > 0
 
     def _load_existing_index(self) -> BaseIndex:
         """Load an existing index from the storage backend."""
@@ -461,6 +472,12 @@ class RAGWorkflow(Workflow):
                 property_graph_store=graph_store,
                 embed_model=self._get_embed_model(),
                 llm=self._get_llm(),
+                # graph_hybrid needs the dense half it built; plain graph does not.
+                vector_store=(
+                    self._get_vector_store()
+                    if self.config.retrieval.backend == RetrievalBackend.GRAPH_HYBRID
+                    else None
+                ),
             )
         else:
             vector_store = self._get_vector_store()

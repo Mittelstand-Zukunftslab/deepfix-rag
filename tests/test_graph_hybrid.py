@@ -25,6 +25,7 @@ import pytest
 from deepfix_rag.config.schema import RAGConfig
 from deepfix_rag.config.settings import settings
 from deepfix_rag.pipeline import RAGWorkflow
+from deepfix_rag.service import QueryService
 
 pytestmark = [pytest.mark.integration]
 
@@ -354,6 +355,19 @@ def test_graph_hybrid_extracts_dedupes_and_returns_citable_chunks(
     keys = [(passage.doc_id, passage.text) for passage in passages]
     assert len(keys) == len(set(keys))
     assert llm.entity_calls >= 1
+
+    # A champion in this state is what Ask serves: QueryService must load it
+    # without rebuilding, and answer from both halves.
+    service = QueryService(
+        config,
+        config.retrieval.lancedb_index_dir,
+        embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+        llm=_StubKnowledgeLLM(triplets=_triplets(), entity_names=["Alice Berger"]),
+    )
+    assert service.index_load_count == 1
+    assert service.chunk_count() > 0
+    served = asyncio.run(service.retrieve("Was hat Alice Berger eingebracht?"))
+    assert served and all(passage.doc_id.startswith("doc_graph_") for passage in served)
     falkordb_store.structured_query("MATCH (n) DETACH DELETE n")
 
 
