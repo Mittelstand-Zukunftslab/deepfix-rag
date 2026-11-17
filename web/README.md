@@ -22,12 +22,15 @@ use. Roles are `member` (every registration) and `admin`.
   event stream.
 - Documents are shared by the whole team; searches and chats are private to the user who ran them.
 
-Create the first admin (or promote an existing account) from `web/`. The password is read from
-stdin:
+Create the first admin from `web/`. The password is read from stdin:
 
 ```sh
 bun run auth:create-admin --email admin@example.com
 ```
+
+That command writes the database `bun run dev` reads (`~/.deepfix/web/auth.db` by default). It does
+**not** reach the `web_auth` volume the Compose stack uses, so on the Compose path promote an
+existing account instead; see "Path A" in `../README.md`.
 
 ## Development
 
@@ -36,7 +39,7 @@ bun run auth:create-admin --email admin@example.com
 uv run --env-file .env uvicorn deepfix_rag.api.app:app --reload
 
 # 2. Web app (from web/)
-cp .env.example .env.local   # set BETTER_AUTH_SECRET
+cp .env.example .env.local   # set BETTER_AUTH_SECRET, the same value as in ../.env
 bun install
 bun run dev        # http://localhost:8080
 ```
@@ -46,8 +49,10 @@ bun run dev        # http://localhost:8080
 From the repository root, set `BETTER_AUTH_SECRET` in `.env` (see `../example.env`), then:
 
 ```sh
-docker compose up --build web
+docker compose up -d --build web
 ```
+
+Compose interpolates every service, so `API_SERVER_KEY`, `HERMES_S3_ACCESS_KEY_ID`, and `HERMES_S3_SECRET_ACCESS_KEY` must be set too, even when only `web` is named. See "The four keys to set before the first start" in `../README.md`.
 
 The `web` and `backend-api` services publish no host port: in a deployment, Traefik proxies to them on `8080` and `8000`. To reach them from this machine, either publish a loopback-only port for the duration of the check (`ports: ["127.0.0.1:8080:8080"]` on the service you need, never a bare `8080:8080`) or run the API and the app directly, as in Development above. Do not commit a published port; see "Published ports" in `../README.md`.
 

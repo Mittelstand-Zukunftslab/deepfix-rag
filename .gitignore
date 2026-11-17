@@ -213,3 +213,6 @@ knowledge/
 
 # Scratch LanceDB indexes built by ad-hoc scripts under tests/
 tests/.idx_tmp/
+
+# Local Compose override with loopback-only ports (see "Quick start" in README.md)
+docker-compose.local.yml

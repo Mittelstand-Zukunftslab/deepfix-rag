@@ -134,35 +134,147 @@ Each row is read from the environment and reaches its own endpoint, so the endpo
 
 ## Quick start
 
-### Local development
+Two paths. **Path A** runs the product stack in Docker and needs nothing but Docker. **Path B** runs the API and the web app from source, for working on the code. Both start from a fresh clone of `main`.
 
-Prerequisites: **Python 3.12**, **Bun** for the web app, and **Node 22.20+** only if you want `npx` to install the skills. A JDK is optional: `pyterrier`'s `pt.Evaluate` path, which DeepFix uses, runs without a JVM.
+Prerequisites for either path:
+
+- Docker Engine with Compose v2 (`docker compose version`).
+- `git`.
+- For Path B: **Python 3.12**, [uv](https://docs.astral.sh/uv/), and **Bun**.
+- **Node 22.20+** only if you want `npx` to install the skills.
+- A JDK is optional: `pyterrier`'s `pt.Evaluate` path, which DeepFix uses, runs without a JVM.
 
 ```bash
 git clone https://github.com/Mittelstand-Zukunftslab/deepfix-rag.git
 cd deepfix-rag
-cp example.env .env          # then fill in the keys you have
+cp example.env .env
+```
+
+### The four keys to set before the first start
+
+Three of these block Compose outright: it interpolates every service, so a missing value fails even when you start only `web`. The fourth, `BETTER_AUTH_SECRET`, lets the stack start but makes every sign-in fail. `example.env` ships all four empty.
+
+| Key | Why it must be set | Generate |
+| :--- | :--- | :--- |
+| `API_SERVER_KEY` | Bearer between the API and Hermes. At least 16 characters; placeholders are rejected. | `openssl rand -hex 32` |
+| `HERMES_S3_ACCESS_KEY_ID` | The `hermes-optimizer` key. The sandbox refuses a root key or a placeholder. | any non-placeholder value locally |
+| `HERMES_S3_SECRET_ACCESS_KEY` | Matching secret for the above. | any non-placeholder value locally |
+| `BETTER_AUTH_SECRET` | Better Auth signing secret. Empty makes every `/api/auth/*` call answer 500. Set it once and keep it: changing it invalidates existing sessions. | `openssl rand -base64 32` |
+
+Fill them in place:
+
+```bash
+sed -i.bak \
+  -e "s|^API_SERVER_KEY=.*|API_SERVER_KEY=$(openssl rand -hex 32)|" \
+  -e "s|^HERMES_S3_ACCESS_KEY_ID=.*|HERMES_S3_ACCESS_KEY_ID=local-dev-hermes-key|" \
+  -e "s|^HERMES_S3_SECRET_ACCESS_KEY=.*|HERMES_S3_SECRET_ACCESS_KEY=local-dev-hermes-secret|" \
+  -e "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$(openssl rand -base64 32)|" \
+  .env && rm .env.bak
+```
+
+To get real answers rather than configuration errors, also set the model keys you have: `LLM_API_KEY` and `EMBEDDING_API_KEY` (OpenRouter by default, per `LLM_BASE_URL` and `EMBEDDING_BASE_URL`), and `OPENROUTER_API_KEY` for reranking and the sandbox. `example.env` carries the model ids. Model ids are deployment configuration: an empty one fails at the point of use and names the variable. `MLFLOW_BASIC_AUTH_USERS` is only needed by the MLflow router, and empty fails closed.
+
+### Path A: the full stack in Compose
+
+The Compose file publishes no host port for `web`, `backend-api`, `mlflow`, or `rustfs`: in a deployment, Traefik routes to them. Locally, two things are needed — the external network the `mlflow` router joins, and a loopback-only port so a browser can reach the app:
+
+```bash
+docker network create dokploy-network   # once, on any host that is not Dokploy
+
+cat > docker-compose.local.yml <<'YAML'
+services:
+  web:
+    ports: ["127.0.0.1:8080:8080"]
+  backend-api:
+    ports: ["127.0.0.1:8000:8000"]
+  mlflow:
+    ports: ["127.0.0.1:5000:5000"]
+YAML
+
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+```
+
+Keep that file out of git; loopback-only, never a bare `8080:8080`. Then:
+
+| What | Where | Notes |
+| :--- | :--- | :--- |
+| Web app | <http://localhost:8080> | Sign in at `/sign-in`, register at `/register`. The admin section is `/admin`. |
+| API | <http://localhost:8000/health>, docs at `/docs` | The browser normally reaches it through the web app's `/api/*` proxy. |
+| MLflow | <http://localhost:5000> | UI and tracking API. No basic auth locally unless you set a router host. |
+| Hermes | none | Internal on `8642`. Check it with `docker compose exec backend-api curl -s http://hermes:8642/health`. |
+
+The first admin is created from an account, because registration only ever creates `member` and the Compose stack keeps its users in the `web_auth` volume rather than in `~/.deepfix`:
+
+```bash
+# 1. Register any account at http://localhost:8080/register, then promote it:
+EMAIL=you@example.com
+docker compose -f docker-compose.yml -f docker-compose.local.yml exec -w /app/.output/server web \
+  node -e "const D=require('better-sqlite3');const db=new D('/data/auth.db');const r=db.prepare('update user set role=? where email=?').run('admin',process.argv[1]);console.log(r.changes?'promoted':'no such user')" "$EMAIL"
+```
+
+Sign out and back in after promoting, so the browser holds a token that says `admin`. Then leave `BETTER_AUTH_SECRET` alone: changing it while accounts exist breaks token minting for those sessions. (`web/scripts/create-admin.ts` writes the dev-server database `~/.deepfix/web/auth.db`; it does not reach the Compose volume.)
+
+Stop it, keeping your data and index:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml down
+# add -v to delete the volumes too: auth users, product.db, the index, MLflow runs
+```
+
+Plain `docker compose up -d` also starts the optional `diagnostic-agent` (publishing `8844`) and the `memgraph` / `falkordb` graph stores (`7687`, `6379`), which pull several GB and collide with anything already on those ports. Name the five core services instead when you do not need them:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build \
+  rustfs mlflow backend-api hermes web
+```
+
+Index builds and search stay inside the `api_data` workspace volume. RustFS holds optimization run bundles and serves an `S3_URI` index when one is copied from `s3://`, so a local index and search do not need a bucket or any object-store setup.
+
+### Path B: the dev servers
+
+Run the API and the web app from source. The Compose stack cannot do this for you locally, because it publishes no host ports.
+
+```bash
 uv sync                      # creates .venv from uv.lock
 source .venv/bin/activate
+
+uv run --env-file .env uvicorn deepfix_rag.api.app:app --reload --port 8000
 ```
 
-Run the API and the web app directly, which is what the Compose stack cannot do for you locally: it publishes no host ports.
+The API needs no other setup: `GET /health` answers, and its first start seeds `configs/champion.yaml` and an empty product database under `~/.deepfix/`.
+
+In a second shell:
 
 ```bash
-uv run uvicorn deepfix_rag.api.app:app --reload --port 8000   # FastAPI
-cd web && bun install && bun run dev                          # http://localhost:8080
+cd web
+cp .env.example .env.local               # then set BETTER_AUTH_SECRET, same value as in .env
+bun install
+bun run dev                              # http://localhost:8080
 ```
 
-The web dev server serves the app on `http://localhost:8080`; `web/.env.example` points `VITE_API_BASE_URL` and `API_INTERNAL_URL` at the API on 8000. `WEB_ORIGIN` must equal `BETTER_AUTH_URL` — it is the identity token's issuer and audience — and the API fetches the signing keys from `WEB_ORIGIN/api/auth/jwks`.
+`WEB_ORIGIN` in `.env` must equal `BETTER_AUTH_URL` in `web/.env.local` — it is the identity token's issuer and audience — and the API fetches the signing keys from `WEB_ORIGIN/api/auth/jwks`. `web/.env.example` already points `API_INTERNAL_URL` at the API on port 8000.
 
-The full stack in Compose has no published host port either, because every public route is a Traefik router (see [Published ports](#published-ports)). A machine running the stack outside Dokploy needs the external network that the `mlflow` router joins:
+The first admin here is one command, because `bun run dev` reads the same SQLite file the script writes. The password is read from stdin:
 
 ```bash
-docker network create dokploy-network   # once
-docker compose up -d
+cd web && bun run auth:create-admin --email admin@example.com
 ```
 
-To reach a Compose service from a laptop for a session, publish a loopback-only port for that service (`ports: ["127.0.0.1:8080:8080"]`), never a bare `8080:8080`, and do not commit it.
+### Troubleshooting
+
+| Symptom | Cause and fix |
+| :--- | :--- |
+| `network dokploy-network declared as external, but could not be found` | Run `docker network create dokploy-network` once. |
+| `required variable API_SERVER_KEY is missing a value` (or `HERMES_S3_*`) | Compose interpolates every service, even one you are not starting. Set the [four keys](#the-four-keys-to-set-before-the-first-start). |
+| Web app loads but every sign-in answers 500 `Sign-in is unavailable.` | `BETTER_AUTH_SECRET` is empty. Set it and `docker compose up -d web` again, or restart `bun run dev`. |
+| MLflow answers 403 `Invalid Host header - possible DNS rebinding attack detected` | MLflow 3.x matches `Host` exactly, and `127.0.0.1:5000` plus `localhost:5000` are already in `MLFLOW_SERVER_ALLOWED_HOSTS`. If you mapped a different port, add that `host:port` to the list in `.env` and recreate `mlflow`. |
+| MLflow login rejects every password (only when MLflow is reached through Traefik) | The bcrypt hash was not `$`-doubled. Generate with `htpasswd -nbB admin 'pass' \| sed -e 's/\$/\$\$/g'` and paste the output as-is. Compose re-interpolates it, so a single-`$` hash is corrupted. |
+| Admin pages still refuse the account you just promoted | The browser holds a session issued before the promotion. Sign out at `/sign-in` and back in. |
+| Sign-in works, then every `/api/*` call answers 502 `The API is unavailable.` | `BETTER_AUTH_SECRET` was changed while accounts already existed; existing sessions can no longer mint an identity token, and Better Auth answers 500 on `/api/auth/token`. Keep the secret stable, or reset the auth volume with `docker compose … down -v` and register again. |
+| Index rebuild fails with `Missing credentials … OPENAI_API_KEY` or `Invalid API key: this is not an OpenRouter API key` | `EMBEDDING_API_KEY` is empty or is not a key for `EMBEDDING_BASE_URL`. Set it, and `LLM_API_KEY` for search answers, then rebuild the index. |
+| `deepfix eval` fails with `error_type: stale_index` and `Could not resolve host: rustfs` | A host-run CLI cannot resolve Compose names. Pass a real `--index-dir`, or run the command inside the stack. |
+| Traefik hosts are `*.invalid` | Intentional fail-closed default: `DEEPFIX_WEB_HOST`, `DEEPFIX_API_HOST`, and `MLFLOW_PUBLIC_HOST` are unset. Set them only for a real deployment; locally use the port override above. |
+| Port `8844`, `7687`, or `6379` already in use | The optional `diagnostic-agent` or graph stores are already running elsewhere. Start the five core services by name. |
 
 ### Install the CLI and the skills
 
