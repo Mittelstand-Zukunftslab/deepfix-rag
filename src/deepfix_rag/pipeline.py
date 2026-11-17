@@ -22,6 +22,7 @@ from llama_index.core.indices.property_graph import (
     SchemaLLMPathExtractor,
     VectorContextRetriever,
 )
+from llama_index.core.ingestion.pipeline import run_transformations
 from llama_index.core.llms.llm import LLM
 from llama_index.core.node_parser import NodeParser, get_leaf_nodes
 from llama_index.core.response_synthesizers import (
@@ -71,6 +72,7 @@ from deepfix_rag.config.schema import (
 from deepfix_rag.config.settings import LOGGER, ModelNotConfigured, require_model, settings
 from deepfix_rag.data import DataLoader, build_node_parser
 from deepfix_rag.graph_dedup import MERGE_LOG_NAME, deduplicate_property_graph
+from deepfix_rag.graph_hybrid import build_graph_hybrid_retriever
 from deepfix_rag.index_manifest import write_index_manifest
 from deepfix_rag.llm import litellm_additional_kwargs, resolve_litellm_model
 from deepfix_rag.query_expansion import CachingExpansionLLM, ExpansionCache
@@ -288,6 +290,18 @@ class RAGWorkflow(Workflow):
         self.configured_backend = backend.value if hasattr(backend, "value") else str(backend)
         self.effective_backend = self.configured_backend
 
+    def _backend_uses_graph(self) -> bool:
+        """True when this config builds and reads a property graph."""
+        return (
+            self.config.retrieval.graph_store != GraphStoreType.NONE
+            or self.config.retrieval.backend
+            in (
+                RetrievalBackend.GRAPH,
+                RetrievalBackend.MIXED,
+                RetrievalBackend.GRAPH_HYBRID,
+            )
+        )
+
     def _get_embed_model(self) -> BaseEmbedding:
         if self.embed_model is not None:
             return self.embed_model
@@ -436,10 +450,7 @@ class RAGWorkflow(Workflow):
 
     def _load_existing_index(self) -> BaseIndex:
         """Load an existing index from the storage backend."""
-        if (
-            self.config.retrieval.graph_store != GraphStoreType.NONE
-            or self.config.retrieval.backend in (RetrievalBackend.GRAPH, RetrievalBackend.MIXED)
-        ):
+        if self._backend_uses_graph():
             storage_context = self._get_storage_context()
             graph_store = getattr(
                 storage_context,
@@ -498,11 +509,53 @@ class RAGWorkflow(Workflow):
         )
         return documents[:limit]
 
-    def _build_index(self, documents: list[Document], storage_context=None, **kwargs) -> BaseIndex:
-        uses_graph = (
-            self.config.retrieval.graph_store != GraphStoreType.NONE
-            or self.config.retrieval.backend in (RetrievalBackend.GRAPH, RetrievalBackend.MIXED)
+    def _graph_nodes(
+        self, documents: list[Document], transformations: list[Any]
+    ) -> list[BaseNode]:
+        """Chunk the sampled documents once, so the graph and the dense index agree.
+
+        PropertyGraphIndex would chunk them itself, but a `graph_hybrid` build also
+        writes the chunks to LanceDB. Handing the same node objects to both is what
+        makes a chunk id in the graph the same chunk id the dense retriever returns,
+        which is what the merge deduplicates on.
+        """
+        return run_transformations(documents, transformations, show_progress=True)
+
+    def _extract_property_graph(
+        self, nodes: list[BaseNode], storage_context: StorageContext
+    ) -> PropertyGraphIndex:
+        """Build the property graph from already-chunked nodes with the strict extractor."""
+        nodes = list(nodes)
+        return PropertyGraphIndex(
+            nodes=nodes,
+            storage_context=storage_context,
+            embed_model=self._get_embed_model(),
+            kg_extractors=[self._graph_extractor()],
+            transformations=[],
+            show_progress=True,
         )
+
+    def _write_chunk_vector_store(
+        self, nodes: list[BaseNode], storage_context: StorageContext
+    ) -> None:
+        """Write the same chunks to LanceDB, which is the dense half of `graph_hybrid`."""
+        vector_store = storage_context.vector_store
+        table_name = getattr(vector_store, "_table_name", None)
+        connection = getattr(vector_store, "_connection", None)
+        if table_name and connection is not None:
+            tables = connection.list_tables()
+            existing = getattr(tables, "tables", tables)
+            if table_name in list(existing):
+                connection.drop_table(table_name)
+        VectorStoreIndex(
+            nodes,
+            storage_context=storage_context,
+            embed_model=self._get_embed_model(),
+        )
+        LOGGER.info("Wrote %d chunks to the dense index for graph_hybrid.", len(nodes))
+
+    def _build_index(self, documents: list[Document], storage_context=None, **kwargs) -> BaseIndex:
+        uses_graph = self._backend_uses_graph()
         if self.config.chunking.strategy == ChunkingStrategy.HIERARCHICAL and uses_graph:
             raise ValueError(
                 "Hierarchical chunking is not supported with graph or mixed retrieval backends."
@@ -528,14 +581,8 @@ class RAGWorkflow(Workflow):
 
         if uses_graph:
             sampled = self._graph_document_sample(documents)
-            index = PropertyGraphIndex.from_documents(
-                sampled,
-                storage_context=storage_context,
-                embed_model=self._get_embed_model(),
-                kg_extractors=[self._graph_extractor()],
-                transformations=transformations,
-                show_progress=True,
-            )
+            nodes = self._graph_nodes(sampled, transformations)
+            index = self._extract_property_graph(nodes, storage_context)
             self.last_graph_document_count = len(sampled)
             merged = deduplicate_property_graph(
                 graph_store=index.property_graph_store,
@@ -547,6 +594,8 @@ class RAGWorkflow(Workflow):
             )
             self.last_graph_merge_count = merged
             LOGGER.info("Merged %d duplicate graph entities.", merged)
+            if self.config.retrieval.backend == RetrievalBackend.GRAPH_HYBRID:
+                self._write_chunk_vector_store(nodes, storage_context)
         else:
             index = VectorStoreIndex.from_documents(
                 documents,
@@ -619,6 +668,43 @@ class RAGWorkflow(Workflow):
             bm25.bm25.k1 = self.config.retrieval.bm25_k1
             bm25.bm25.b = self.config.retrieval.bm25_b
         return bm25
+
+    def _graph_store_for(self, index: BaseIndex) -> PropertyGraphStore:
+        """The property graph store behind this index, or a fresh one from the config."""
+        if isinstance(index, PropertyGraphIndex):
+            return getattr(
+                index,
+                "property_graph_store",
+                getattr(index, "_property_graph_store", None),
+            )
+        graph_store = self._get_graph_store()
+        if graph_store is None:
+            raise ValueError(
+                "A property graph store is required for this retrieval backend, "
+                f"but retrieval.graph_store is {self.config.retrieval.graph_store.value}."
+            )
+        return graph_store
+
+    def _get_graph_hybrid_retriever(self, index: BaseIndex, top_k: int) -> BaseRetriever:
+        """Entity-anchored graph retrieval merged with dense retrieval.
+
+        Two sides, not three: BM25 is what `hybrid` adds, and mixing it in here
+        would need a third weight for a comparison nobody has measured. The dense
+        side is the same retriever `hybrid` builds, so a `graph_hybrid` candidate
+        differs from a `hybrid` champion in exactly one thing.
+        """
+        return build_graph_hybrid_retriever(
+            graph_store=self._graph_store_for(index),
+            dense_retriever=self._get_dense_retriever(index, top_k),
+            llm=self._get_llm(),
+            embed_model=self._get_embed_model(),
+            vector_store=getattr(index, "vector_store", None),
+            similarity_top_k=top_k,
+            path_depth=self.config.retrieval.graph_traversal_hops,
+            entity_limit=self.config.retrieval.graph_query_entity_limit,
+            dense_weight=self.config.retrieval.dense_weight,
+            graph_weight=self.config.retrieval.graph_weight,
+        )
 
     def _get_graph_retriever(self, index: BaseIndex, top_k: int) -> BaseRetriever:
         """Construct a PropertyGraph retriever with VectorContextRetriever and LLMSynonymRetriever traversal."""
@@ -698,6 +784,9 @@ class RAGWorkflow(Workflow):
 
         elif backend == RetrievalBackend.GRAPH:
             retriever = self._get_graph_retriever(index, top_k)
+
+        elif backend == RetrievalBackend.GRAPH_HYBRID:
+            retriever = self._get_graph_hybrid_retriever(index, top_k)
 
         elif backend == RetrievalBackend.HYBRID:
             dense_retriever = self._get_dense_retriever(index, top_k)

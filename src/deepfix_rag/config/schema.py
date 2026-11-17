@@ -28,6 +28,7 @@ class RetrievalBackend(StrEnum):
     HYBRID = "hybrid"
     GRAPH = "graph"
     MIXED = "mixed"
+    GRAPH_HYBRID = "graph_hybrid"
 
 
 class GenerationMetricType(StrEnum):
@@ -392,7 +393,10 @@ class RetrievalConfig(StrictModel):
 
     backend: RetrievalBackend = Field(
         default=RetrievalBackend.HYBRID,
-        description="Retrieval backend (dense, hybrid, graph, vectorless).",
+        description=(
+            "Retrieval backend (dense, bm25, hybrid, graph, mixed, graph_hybrid). "
+            "graph_hybrid merges entity-anchored graph retrieval with dense retrieval."
+        ),
     )
     vector_store: VectorStoreType = Field(
         default=VectorStoreType.LANCEDB, description="Vector store type."
@@ -508,6 +512,12 @@ class RetrievalConfig(StrictModel):
         le=10,
         description="Maximum Levenshtein distance of two entity names to merge them.",
     )
+    graph_query_entity_limit: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Most entities detected in one question by the graph_hybrid retriever.",
+    )
     bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")
     language: RetrievalLanguage = Field(
         default=RetrievalLanguage.GERMAN,
@@ -594,6 +604,19 @@ class RAGConfig(StrictModel):
     eval: EvalConfig = Field(default_factory=EvalConfig)
 
     retrieval_only: bool = Field(default=False, description="Whether retrieval only is active.")
+
+    @model_validator(mode="after")
+    def validate_graph_backend_store(self) -> "RAGConfig":
+        """A graph-backed backend needs a graph store; fail here, not at query time."""
+        if self.retrieval.backend == RetrievalBackend.GRAPH_HYBRID and (
+            self.retrieval.graph_store == GraphStoreType.NONE
+        ):
+            raise ValueError(
+                "retrieval.backend 'graph_hybrid' needs a graph store: set "
+                "retrieval.graph_store to falkordb (or memgraph), because the backend "
+                "reads entities from that graph."
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_rerank_window(self) -> "RAGConfig":

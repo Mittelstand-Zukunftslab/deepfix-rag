@@ -659,6 +659,8 @@ class EvaluationRunner:
         expansion_backend = self.config.retrieval.backend in (
             RetrievalBackend.HYBRID,
             RetrievalBackend.MIXED,
+            # Entity detection in graph_hybrid is one completion per question.
+            RetrievalBackend.GRAPH_HYBRID,
         )
         if not expansion_backend or self.config.retrieval.query_expansion_num <= 1:
             return
