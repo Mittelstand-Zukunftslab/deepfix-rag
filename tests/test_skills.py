@@ -301,6 +301,8 @@ def test_index_time_keys_are_listed_in_every_pathology_skill() -> None:
         "graph_store",
         "graph_extraction_schema",
         "graph_max_paths_per_chunk",
+        "graph_num_workers",
+        "graph_build_document_limit",
     }
 
 

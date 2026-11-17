@@ -473,6 +473,21 @@ class RetrievalConfig(StrictModel):
         le=3,
         description="Number of knowledge graph traversal hops.",
     )
+    graph_num_workers: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="Parallel extraction workers for a property graph build.",
+    )
+    graph_build_document_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Extract from at most this many documents, so a first graph build is cheap "
+            "enough to review. null extracts every loaded document. Independent of "
+            "data.limit, which limits the corpus the index is built from."
+        ),
+    )
     bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")
     language: RetrievalLanguage = Field(
         default=RetrievalLanguage.GERMAN,

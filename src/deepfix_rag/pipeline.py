@@ -133,6 +133,13 @@ class IndexBuildMetadata(BaseModel):
     paradigm: str = Field(..., description="Retrieval backend used for the build.")
     embedding_model: str = Field(..., description="Embedding model identifier.")
     reranker_model: str = Field(..., description="Configured re-ranker model identifier.")
+    graph_document_count: int | None = Field(
+        default=None,
+        description="Documents a graph build extracted from, after the configured sample.",
+    )
+    graph_build_document_limit: int | None = Field(
+        default=None, description="Configured document sample for a graph build, if any."
+    )
 
 
 def _literal_of(values: list[str]) -> Any:
@@ -270,6 +277,8 @@ class RAGWorkflow(Workflow):
         # sides, so a paraphrase is paid for once. None keeps this workflow's own.
         self.expansion_cache = expansion_cache or ExpansionCache()
         self.last_build_metadata: IndexBuildMetadata | None = None
+        # What a graph build actually did, for the CLI payload.
+        self.last_graph_document_count: int | None = None
         backend = self.config.retrieval.backend
         self.configured_backend = backend.value if hasattr(backend, "value") else str(backend)
         self.effective_backend = self.configured_backend
@@ -471,6 +480,19 @@ class RAGWorkflow(Workflow):
             num_workers=self.config.retrieval.graph_num_workers,
         )
 
+    def _graph_document_sample(self, documents: list[Document]) -> list[Document]:
+        """The documents a graph build extracts from, honouring the configured sample."""
+        limit = self.config.retrieval.graph_build_document_limit
+        if limit is None or limit >= len(documents):
+            return documents
+        LOGGER.info(
+            "Graph build extracts from the first %d of %d documents "
+            "(retrieval.graph_build_document_limit).",
+            limit,
+            len(documents),
+        )
+        return documents[:limit]
+
     def _build_index(self, documents: list[Document], storage_context=None, **kwargs) -> BaseIndex:
         uses_graph = (
             self.config.retrieval.graph_store != GraphStoreType.NONE
@@ -500,14 +522,16 @@ class RAGWorkflow(Workflow):
         transformations = [self._get_node_parser()]
 
         if uses_graph:
+            sampled = self._graph_document_sample(documents)
             index = PropertyGraphIndex.from_documents(
-                documents,
+                sampled,
                 storage_context=storage_context,
                 embed_model=self._get_embed_model(),
                 kg_extractors=[self._graph_extractor()],
                 transformations=transformations,
                 show_progress=True,
             )
+            self.last_graph_document_count = len(sampled)
         else:
             index = VectorStoreIndex.from_documents(
                 documents,
@@ -797,6 +821,12 @@ class RAGWorkflow(Workflow):
             paradigm=paradigm,
             embedding_model=settings.EMBEDDING_MODEL,
             reranker_model=settings.COHERE_MODEL,
+            graph_document_count=self.last_graph_document_count,
+            graph_build_document_limit=(
+                None
+                if self.last_graph_document_count is None
+                else self.config.retrieval.graph_build_document_limit
+            ),
         )
         self.last_build_metadata = metadata
         return metadata
@@ -818,6 +848,9 @@ class RAGWorkflow(Workflow):
                 document_count = len(documents)
                 # PropertyGraph extraction and some LLM clients call asyncio.run()
                 index = await asyncio.to_thread(self._build_index, documents)
+                if self.last_graph_document_count is not None:
+                    # A sampled graph build reports what it actually extracted from.
+                    document_count = self.last_graph_document_count
             self._index = index
             self._record_build_metadata(
                 document_count=document_count,

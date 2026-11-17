@@ -55,6 +55,8 @@ def index_time_signature(config: RAGConfig) -> dict[str, object]:
         "graph_store": config.retrieval.graph_store.value,
         "graph_extraction_schema": config.retrieval.graph_extraction_schema,
         "graph_max_paths_per_chunk": config.retrieval.graph_max_paths_per_chunk,
+        "graph_num_workers": config.retrieval.graph_num_workers,
+        "graph_build_document_limit": config.retrieval.graph_build_document_limit,
     }
 
 
@@ -76,6 +78,8 @@ def index_time_key_names() -> list[str]:
         "retrieval.graph_store",
         "retrieval.graph_extraction_schema",
         "retrieval.graph_max_paths_per_chunk",
+        "retrieval.graph_num_workers",
+        "retrieval.graph_build_document_limit",
     ]
 
 

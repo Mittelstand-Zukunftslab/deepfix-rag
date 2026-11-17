@@ -50,7 +50,7 @@ There is no `rerank.threshold` key; a `--set` of that name exits 1 with `error_t
 
 ## Index-time vs query-time
 
-`rerank.enabled`, `rerank.top_n`, and `retrieval.top_k` are query-time. When rerank is on, `rerank.top_n` must be <= `retrieval.top_k` and `eval.cutoff_k` must be <= `rerank.top_n`. The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, and `retrieval.graph_max_paths_per_chunk`. This skill changes none of them, so the candidate reuses the champion's index and the API does not rebuild one.
+`rerank.enabled`, `rerank.top_n`, and `retrieval.top_k` are query-time. When rerank is on, `rerank.top_n` must be <= `retrieval.top_k` and `eval.cutoff_k` must be <= `rerank.top_n`. The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, `retrieval.graph_num_workers`, and `retrieval.graph_build_document_limit`. This skill changes none of them, so the candidate reuses the champion's index and the API does not rebuild one.
 
 ## Validated findings
 

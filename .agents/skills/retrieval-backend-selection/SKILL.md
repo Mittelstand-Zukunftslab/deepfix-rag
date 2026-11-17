@@ -68,7 +68,7 @@ If the compare JSON has `effective_backend` `dense` while `configured_backend` i
 
 ## Index-time vs query-time
 
-The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, and `retrieval.graph_max_paths_per_chunk`. The API builds its own index for a changed backend, so measure that hypothesis on `<run_dir>/idx`. `retrieval.language` is query-time: the stemmer is applied when the BM25 retriever is built, so a language candidate reuses the champion's index.
+The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, `retrieval.graph_num_workers`, and `retrieval.graph_build_document_limit`. The API builds its own index for a changed backend, so measure that hypothesis on `<run_dir>/idx`. `retrieval.language` is query-time: the stemmer is applied when the BM25 retriever is built, so a language candidate reuses the champion's index.
 
 ## Validated findings
 
