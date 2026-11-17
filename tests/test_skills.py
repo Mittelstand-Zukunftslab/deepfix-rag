@@ -303,6 +303,9 @@ def test_index_time_keys_are_listed_in_every_pathology_skill() -> None:
         "graph_max_paths_per_chunk",
         "graph_num_workers",
         "graph_build_document_limit",
+        "graph_dedup_similarity",
+        "graph_dedup_name_ratio",
+        "graph_dedup_max_edit_distance",
     }
 
 

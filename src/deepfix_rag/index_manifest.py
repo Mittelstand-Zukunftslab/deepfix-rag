@@ -57,6 +57,9 @@ def index_time_signature(config: RAGConfig) -> dict[str, object]:
         "graph_max_paths_per_chunk": config.retrieval.graph_max_paths_per_chunk,
         "graph_num_workers": config.retrieval.graph_num_workers,
         "graph_build_document_limit": config.retrieval.graph_build_document_limit,
+        "graph_dedup_similarity": config.retrieval.graph_dedup_similarity,
+        "graph_dedup_name_ratio": config.retrieval.graph_dedup_name_ratio,
+        "graph_dedup_max_edit_distance": config.retrieval.graph_dedup_max_edit_distance,
     }
 
 
@@ -80,6 +83,9 @@ def index_time_key_names() -> list[str]:
         "retrieval.graph_max_paths_per_chunk",
         "retrieval.graph_num_workers",
         "retrieval.graph_build_document_limit",
+        "retrieval.graph_dedup_similarity",
+        "retrieval.graph_dedup_name_ratio",
+        "retrieval.graph_dedup_max_edit_distance",
     ]
 
 

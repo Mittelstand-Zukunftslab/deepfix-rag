@@ -76,7 +76,7 @@ deepfix hpo --config <hpo_yaml> --paradigm hybrid --dataset <dataset_path> --ret
 
 ## Index-time vs query-time
 
-`fusion_mode`, the fusion weights, `bm25_k1`, `bm25_b` and `language` are query-time. The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, `retrieval.graph_num_workers`, and `retrieval.graph_build_document_limit`. This skill changes none of them, so keep them equal to the champion and the candidate reuses its index.
+`fusion_mode`, the fusion weights, `bm25_k1`, `bm25_b` and `language` are query-time. The index-time keys (`indexing.index_time_signature`) are `chunking.*` (`strategy`, `size`, `overlap`, `semantic_buffer_size`, `semantic_breakpoint_percentile`, `hierarchical_chunk_sizes`), `retrieval.backend`, `retrieval.vector_store` and `retrieval.bit_width`. Also index-time: `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, `retrieval.graph_num_workers`, `retrieval.graph_build_document_limit`, `retrieval.graph_dedup_similarity`, `retrieval.graph_dedup_name_ratio`, and `retrieval.graph_dedup_max_edit_distance`. This skill changes none of them, so keep them equal to the champion and the candidate reuses its index.
 
 ## Validated findings
 

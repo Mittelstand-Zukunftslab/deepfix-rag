@@ -70,6 +70,7 @@ from deepfix_rag.config.schema import (
 )
 from deepfix_rag.config.settings import LOGGER, ModelNotConfigured, require_model, settings
 from deepfix_rag.data import DataLoader, build_node_parser
+from deepfix_rag.graph_dedup import MERGE_LOG_NAME, deduplicate_property_graph
 from deepfix_rag.index_manifest import write_index_manifest
 from deepfix_rag.llm import litellm_additional_kwargs, resolve_litellm_model
 from deepfix_rag.query_expansion import CachingExpansionLLM, ExpansionCache
@@ -136,6 +137,9 @@ class IndexBuildMetadata(BaseModel):
     graph_document_count: int | None = Field(
         default=None,
         description="Documents a graph build extracted from, after the configured sample.",
+    )
+    graph_merges: int | None = Field(
+        default=None, description="Duplicate entities a graph build merged away."
     )
     graph_build_document_limit: int | None = Field(
         default=None, description="Configured document sample for a graph build, if any."
@@ -277,8 +281,9 @@ class RAGWorkflow(Workflow):
         # sides, so a paraphrase is paid for once. None keeps this workflow's own.
         self.expansion_cache = expansion_cache or ExpansionCache()
         self.last_build_metadata: IndexBuildMetadata | None = None
-        # What a graph build actually did, for the CLI payload.
+        # What a graph build actually did, for the CLI payload and the dedup log.
         self.last_graph_document_count: int | None = None
+        self.last_graph_merge_count: int = 0
         backend = self.config.retrieval.backend
         self.configured_backend = backend.value if hasattr(backend, "value") else str(backend)
         self.effective_backend = self.configured_backend
@@ -532,6 +537,16 @@ class RAGWorkflow(Workflow):
                 show_progress=True,
             )
             self.last_graph_document_count = len(sampled)
+            merged = deduplicate_property_graph(
+                graph_store=index.property_graph_store,
+                embed_model=self._get_embed_model(),
+                log_path=Path(self.config.retrieval.lancedb_index_dir) / MERGE_LOG_NAME,
+                similarity_threshold=self.config.retrieval.graph_dedup_similarity,
+                ratio_threshold=self.config.retrieval.graph_dedup_name_ratio,
+                max_edit_distance=self.config.retrieval.graph_dedup_max_edit_distance,
+            )
+            self.last_graph_merge_count = merged
+            LOGGER.info("Merged %d duplicate graph entities.", merged)
         else:
             index = VectorStoreIndex.from_documents(
                 documents,
@@ -822,6 +837,9 @@ class RAGWorkflow(Workflow):
             embedding_model=settings.EMBEDDING_MODEL,
             reranker_model=settings.COHERE_MODEL,
             graph_document_count=self.last_graph_document_count,
+            graph_merges=(
+                None if self.last_graph_document_count is None else self.last_graph_merge_count
+            ),
             graph_build_document_limit=(
                 None
                 if self.last_graph_document_count is None

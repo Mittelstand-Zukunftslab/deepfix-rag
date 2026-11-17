@@ -95,7 +95,7 @@ Read `delta.recall` and `delta.ndcg` together. Expansion that lifts recall and d
 
 ## Index-time vs query-time
 
-Expansion is query-time. The index-time keys (`indexing.index_time_signature`) are `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, `retrieval.bit_width`, `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, `retrieval.graph_num_workers`, and `retrieval.graph_build_document_limit`. This skill changes none of them, so the candidate reuses the champion's index and both evals read `<run_dir>/idx-cache`.
+Expansion is query-time. The index-time keys (`indexing.index_time_signature`) are `chunking.*`, `retrieval.backend`, `retrieval.vector_store`, `retrieval.bit_width`, `EMBEDDING_MODEL`, `corpus_sha256`, `retrieval.graph_store`, `retrieval.graph_extraction_schema`, `retrieval.graph_max_paths_per_chunk`, `retrieval.graph_num_workers`, `retrieval.graph_build_document_limit`, `retrieval.graph_dedup_similarity`, `retrieval.graph_dedup_name_ratio`, and `retrieval.graph_dedup_max_edit_distance`. This skill changes none of them, so the candidate reuses the champion's index and both evals read `<run_dir>/idx-cache`.
 
 ## Pitfalls
 

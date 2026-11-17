@@ -488,6 +488,26 @@ class RetrievalConfig(StrictModel):
             "data.limit, which limits the corpus the index is built from."
         ),
     )
+    graph_dedup_similarity: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Minimum cosine similarity of two entity-name embeddings to merge them.",
+    )
+    graph_dedup_name_ratio: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum rapidfuzz partial ratio of two contained entity names to merge them."
+        ),
+    )
+    graph_dedup_max_edit_distance: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        description="Maximum Levenshtein distance of two entity names to merge them.",
+    )
     bit_width: int = Field(default=4, ge=2, le=4, description="Bit width for quantization.")
     language: RetrievalLanguage = Field(
         default=RetrievalLanguage.GERMAN,
