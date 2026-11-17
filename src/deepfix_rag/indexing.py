@@ -35,8 +35,15 @@ from deepfix_rag.pipeline import RAGWorkflow
 from deepfix_rag.service import QueryService
 from deepfix_rag.storage import connect
 
+# Must match `promotion._ALLOWED_BACKENDS`: a gate that accepts a backend the
+# workspace cannot build leaves the serving index broken after a promotion.
 _ALLOWED_BACKENDS = frozenset(
-    {RetrievalBackend.DENSE, RetrievalBackend.HYBRID, RetrievalBackend.BM25}
+    {
+        RetrievalBackend.DENSE,
+        RetrievalBackend.HYBRID,
+        RetrievalBackend.BM25,
+        RetrievalBackend.GRAPH_HYBRID,
+    }
 )
 _MANIFEST = "deepfix-build.json"
 _STATUS = "status.json"
@@ -50,10 +57,13 @@ class RebuildInProgress(Exception):
 
 
 class UnsupportedIndexBackend(Exception):
-    """Workspace builds accept dense, hybrid, and bm25 only."""
+    """Workspace builds accept dense, hybrid, bm25, and graph_hybrid."""
 
     def __init__(self) -> None:
-        super().__init__("Workspace indexing supports dense, hybrid, and bm25 retrieval only.")
+        super().__init__(
+            "Workspace indexing supports dense, hybrid, and bm25 retrieval, plus "
+            "graph_hybrid when a graph store is configured."
+        )
 
 
 class IndexEmpty(Exception):

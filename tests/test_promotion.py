@@ -61,6 +61,17 @@ def test_invalid_backend_is_rejected_without_replacing_the_champion(
     assert champion.read_text(encoding="utf-8") == before
 
 
+def test_graph_hybrid_is_allowed_and_graph_and_mixed_are_not() -> None:
+    """Widening the gate for graph_hybrid must not admit graph or mixed."""
+    from deepfix_rag.indexing import _ALLOWED_BACKENDS as _WORKSPACE_BACKENDS
+    from deepfix_rag.promotion import _ALLOWED_BACKENDS
+
+    assert _ALLOWED_BACKENDS == _WORKSPACE_BACKENDS
+    assert RetrievalBackend.GRAPH_HYBRID in _ALLOWED_BACKENDS
+    assert RetrievalBackend.GRAPH not in _ALLOWED_BACKENDS
+    assert RetrievalBackend.MIXED not in _ALLOWED_BACKENDS
+
+
 def test_query_time_tie_is_rejected_and_index_time_gain_is_promoted(
     tmp_path: Path,
     default_config_path: Path,
@@ -427,3 +438,32 @@ def _assert_holdout_unwritten(tmp_path: Path, workspace: Path, holdout_query: st
     mlflow_db = tmp_path / "mlflow.db"
     if mlflow_db.is_file():
         assert holdout_query not in mlflow_db.read_text(encoding="utf-8", errors="ignore")
+
+
+def test_load_candidate_accepts_graph_hybrid_and_rejects_mixed(
+    tmp_path: Path,
+    default_config_path: Path,
+) -> None:
+    """The loader, which is what `apply_candidate` calls, judges the three backends."""
+    from deepfix_rag.promotion import _BACKEND, _load_candidate
+
+    workspace, _db_path, _coordinator = _ready(tmp_path, default_config_path, embed=False)
+    champion = workspace / "configs" / "champion.yaml"
+    base = RAGConfig.from_yaml(champion)
+
+    def _write(backend: str) -> Path:
+        retrieval = base.retrieval.model_copy(
+            update={"backend": backend, "graph_store": "falkordb"}
+        )
+        path = workspace / "runs" / f"candidate-{backend}.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            base.model_copy(update={"retrieval": retrieval}).to_yaml(), encoding="utf-8"
+        )
+        return path
+
+    loaded = _load_candidate(workspace, str(_write("graph_hybrid")), ())
+    assert isinstance(loaded, RAGConfig)
+    assert loaded.retrieval.backend == RetrievalBackend.GRAPH_HYBRID
+    assert _load_candidate(workspace, str(_write("mixed")), ()) == _BACKEND
+    assert _load_candidate(workspace, str(_write("graph")), ()) == _BACKEND

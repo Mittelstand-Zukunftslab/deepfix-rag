@@ -31,8 +31,16 @@ from deepfix_rag.indexing import (
 )
 from deepfix_rag.query_expansion import ExpansionCache
 
+# `graph_hybrid` is judged like any other candidate; plain `graph` and `mixed`
+# stay out, so the graph store remains optional for a deployment that promotes
+# nothing graph-backed.
 _ALLOWED_BACKENDS = frozenset(
-    {RetrievalBackend.DENSE, RetrievalBackend.HYBRID, RetrievalBackend.BM25}
+    {
+        RetrievalBackend.DENSE,
+        RetrievalBackend.HYBRID,
+        RetrievalBackend.BM25,
+        RetrievalBackend.GRAPH_HYBRID,
+    }
 )
 _HIGHER_IS_BETTER = frozenset(
     {
