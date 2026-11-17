@@ -1,6 +1,6 @@
 # DeepFix
 
-DeepFix answers questions over a company's own documents — and keeps getting better at finding them. It is a RAG system for German SMEs built on [LlamaIndex](https://www.llamaindex.ai/) with a [LanceDB](https://lancedb.com/) vector store on [RustFS](https://rustfs.com/), wrapped in a product people can sign in to, plus an optimizer that tunes retrieval on their own feedback.
+DeepFix answers questions over a company's own documents and keeps getting better at finding them. It is a RAG system for German SMEs built on [LlamaIndex](https://www.llamaindex.ai/) with a [LanceDB](https://lancedb.com/) vector store on [RustFS](https://rustfs.com/), wrapped in a product people can sign in to, plus an optimizer that tunes retrieval on their own feedback.
 
 [![DeepFix admin mode tour: Ask, Optimization, History and the Hermes chat](docs/media/deepfix-admin-tour-preview.gif)](docs/media/deepfix-admin-tour.mp4)
 
@@ -14,7 +14,7 @@ The pipeline is deterministic: chunking, dense/BM25/hybrid retrieval, optional r
 
 The optimizer is **Hermes**: one sandboxed agent run per round, inside a 40-turn budget, testing one hypothesis. Hermes proposes; `backend-api` scores holdout and decides.
 
-Developed by **Mittelstand Zukunftslab & AI Service Center (AISC) — HPI**.
+Developed by **Mittelstand Zukunftslab & AI Service Center (AISC) HPI**.
 
 ---
 
