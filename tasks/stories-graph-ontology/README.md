@@ -36,8 +36,9 @@ GRAPH-003: dedupe entities after extraction and log every merge
 | 4 | GRAPH-004 | The `graph_hybrid` backend: entity retrieval merged with dense | GRAPH-002 |
 | 5 | GRAPH-005 | Let the gate and the workspace build accept `graph_hybrid` | GRAPH-004 |
 | 6 | GRAPH-006 | The shipped graph config, docs, and the FalkorDB CI job | GRAPH-003, GRAPH-004, GRAPH-005 |
+| 7 | GRAPH-007 | Serve a `graph_hybrid` champion without rebuilding it (added during implementation; see the deviations) | GRAPH-004, GRAPH-005 |
 
-Six stories, one dependency chain, no cycle. GRAPH-003 and GRAPH-004 both build
+Seven stories, one dependency chain, no cycle. GRAPH-003 and GRAPH-004 both build
 on GRAPH-002 and are independent of each other; GRAPH-006 is last because it
 ships the config that turns all of it on and the CI job that keeps it working.
 
@@ -120,6 +121,7 @@ before the next began.
 | GRAPH-004 | Done | `graph_hybrid.py`: `EntityGraphRetriever` + `GraphHybridRetriever`, the dense twin in a `graph_hybrid` build, and the config validator. |
 | GRAPH-005 | Done | Both allow-lists widened to `graph_hybrid`; `graph` and `mixed` still rejected. |
 | GRAPH-006 | Done | `configs/graph_hybrid_falkordb.yml`, the README / `configs/README.md` / PRD updates, and the CI `graph` job. |
+| GRAPH-007 | Done | Serving: `_index_exists` and `_load_existing_index` assumed a graph config never has a loadable index. Found while proving a promoted champion answers through `QueryService`; see the deviation below. |
 
 Two deviations from the stories as written, both recorded here rather than
 silently applied:
@@ -128,7 +130,17 @@ silently applied:
    than one case each**, and the module also holds a third case for the edge
    contract (GRAPH-006 AC 7). The intent is unchanged: one integration module,
    three meaningful cases, no per-function tests.
-2. **GRAPH-006 AC 9's CI job runs `tests/test_graph_hybrid.py` by path** rather
+2. **A seventh story was added: GRAPH-007, serving a graph_hybrid champion.**
+   GRAPH-004 and GRAPH-005 made the backend build and pass the gate, but nothing
+   checked that `QueryService` could open the result. It could not:
+   `RAGWorkflow._index_exists` returned `False` whenever a graph store was
+   configured, so a promoted champion rebuilt on every load, and
+   `_load_existing_index` built the graph index without the vector store, so the
+   dense half of the backend had nothing to read and `chunk_count()` raised. The
+   fix is two small changes plus an assertion in the existing integration case.
+   It is a story rather than a silent addition because it is a distinct outcome —
+   "a graph_hybrid champion serves" — with its own failure mode.
+3. **GRAPH-006 AC 9's CI job runs `tests/test_graph_hybrid.py` by path** rather
    than by a `graph` marker. Adding a marker would mean registering it in
    `pyproject.toml` and in `conftest.py`'s deselect logic for one file; the path
    is what `.github/workflows/quickstart.yml` already does for its own script.
