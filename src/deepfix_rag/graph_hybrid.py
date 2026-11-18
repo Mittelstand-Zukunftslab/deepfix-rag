@@ -27,12 +27,13 @@ from llama_index.core.indices.property_graph.sub_retrievers.vector import (
     VectorContextRetriever,
 )
 from llama_index.core.llms.llm import LLM
+from llama_index.core.prompts import PromptTemplate
 from llama_index.core.schema import BaseNode, NodeWithScore, QueryBundle
 from llama_index.core.vector_stores.types import BasePydanticVectorStore
 
 from deepfix_rag.config.settings import LOGGER
 
-ENTITY_PROMPT = (
+ENTITY_PROMPT = PromptTemplate(
     "Extract the named entities from the following question. Include people, "
     "parliamentary groups, ministries, committees, printed papers such as "
     "'BT-Drucksache 20/123', laws, legislative procedures, and policy topics. "
@@ -205,14 +206,19 @@ class GraphHybridRetriever(BaseRetriever):
 
 
 def _normalised(nodes: Sequence[NodeWithScore]) -> list[float]:
-    """Min-max scale one side's scores into `[0, 1]`."""
-    scores = [float(node.score or 0.0) for node in nodes]
-    if not scores:
+    """Rank-scale one side's scores into `[0, 1]`, best first.
+
+    Not min-max on the raw score, because the two sides are not on one scale and
+    one of them can be degenerate. A LanceDB cosine index on this embedding model
+    reports distances in the hundreds, and the store converts those with
+    ``exp(-distance)``, which underflows to exactly ``0.0`` — so every dense hit
+    scores zero and a min-max of that list divides by zero. Rank is the part of
+    both sides that always means something: a retriever's order.
+    """
+    if not nodes:
         return []
-    low, high = min(scores), max(scores)
-    if high == low:
-        return [1.0 if high > 0 else 0.0 for _ in scores]
-    return [(score - low) / (high - low) for score in scores]
+    total = len(nodes)
+    return [(total - position) / total for position in range(total)]
 
 
 def merge_results(

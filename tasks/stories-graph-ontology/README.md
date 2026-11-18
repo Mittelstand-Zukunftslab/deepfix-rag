@@ -37,8 +37,9 @@ GRAPH-003: dedupe entities after extraction and log every merge
 | 5 | GRAPH-005 | Let the gate and the workspace build accept `graph_hybrid` | GRAPH-004 |
 | 6 | GRAPH-006 | The shipped graph config, docs, and the FalkorDB CI job | GRAPH-003, GRAPH-004, GRAPH-005 |
 | 7 | GRAPH-007 | Serve a `graph_hybrid` champion without rebuilding it (added during implementation; see the deviations) | GRAPH-004, GRAPH-005 |
+| 8 | GRAPH-008 | Fix the two defects the first real run exposed (rank fusion, prompt template) | GRAPH-004 |
 
-Seven stories, one dependency chain, no cycle. GRAPH-003 and GRAPH-004 both build
+Eight stories, one dependency chain, no cycle. GRAPH-003 and GRAPH-004 both build
 on GRAPH-002 and are independent of each other; GRAPH-006 is last because it
 ships the config that turns all of it on and the CI job that keeps it working.
 
@@ -122,6 +123,7 @@ before the next began.
 | GRAPH-005 | Done | Both allow-lists widened to `graph_hybrid`; `graph` and `mixed` still rejected. |
 | GRAPH-006 | Done | `configs/graph_hybrid_falkordb.yml`, the README / `configs/README.md` / PRD updates, and the CI `graph` job. |
 | GRAPH-007 | Done | Serving: `_index_exists` and `_load_existing_index` assumed a graph config never has a loadable index. Found while proving a promoted champion answers through `QueryService`; see the deviation below. |
+| GRAPH-008 | Done | The first real run (real FalkorDB, real endpoints) exposed two defects a stubbed test could not: the dense side scored `0.0` everywhere so score fusion dropped it, and entity detection passed a bare string to `structured_predict` so no entity was ever found. Fusion is now by rank and the prompt is a `PromptTemplate`. |
 
 Two deviations from the stories as written, both recorded here rather than
 silently applied:
@@ -140,7 +142,13 @@ silently applied:
    fix is two small changes plus an assertion in the existing integration case.
    It is a story rather than a silent addition because it is a distinct outcome —
    "a graph_hybrid champion serves" — with its own failure mode.
-3. **GRAPH-006 AC 9's CI job runs `tests/test_graph_hybrid.py` by path** rather
+3. **An eighth story was added: GRAPH-008, the two defects the first real run
+   found.** A stubbed LLM returns whatever the stub says, so it could not show
+   that `structured_predict` rejects a string prompt; and a `MockEmbedding` makes
+   every vector identical, so it could not show that LanceDB's `exp(-distance)`
+   underflows to `0.0` on a real long-context embedding model. Both are recorded
+   as R-6 and R-7 in the PRD and both carry a regression test.
+4. **GRAPH-006 AC 9's CI job runs `tests/test_graph_hybrid.py` by path** rather
    than by a `graph` marker. Adding a marker would mean registering it in
    `pyproject.toml` and in `conftest.py`'s deselect logic for one file; the path
    is what `.github/workflows/quickstart.yml` already does for its own script.

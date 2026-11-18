@@ -309,6 +309,8 @@ The pairs, and why each exists:
 | R-3 A promoted `graph_hybrid` champion breaks on a deployment without FalkorDB. | Serving errors after a promotion. | FR-019 makes the workspace build accept the backend so the failure is a build error with a message, not a query-time surprise; FR-020 documents the host requirement; the default deployment is unchanged. |
 | R-4 The graph cannot be updated incrementally, so a document added in the workspace needs a full graph rebuild. | Slow first build after an upload. | Out of scope by design (§4), stated here and in the PRD's scope so nobody discovers it in production. |
 | R-5 Entity detection adds a completion per question on every retrieval, including retrieval-only evals. | Eval cost and latency. | One completion per question (NFR-002), a bounded entity list (`graph_query_entity_limit`), and the existing expansion cache pattern is not needed because there is exactly one call. |
+| R-6 A LanceDB cosine index on a long-context embedding model reports L2 distances in the hundreds, and the store converts them with `exp(-distance)`, which underflows to exactly `0.0`. | Every dense hit scores zero, so a score-fusion merge silently drops the dense half and `graph_hybrid` becomes graph-only — including in `rerank`, if the dense side were the only source. | `graph_hybrid` fuses by **rank**, not by raw score: a retriever's order is meaningful on both sides and cannot underflow. `tests/test_graph_hybrid.py` pins the all-zeros case. Measured 2026-11-17: distances 196–310 on `perplexity/pplx-embed-v1-4b`, every score `0.0` on both `hybrid` and `graph_hybrid`. |
+| R-7 Entity detection passes its prompt to `structured_predict`, which accepts only a `PromptTemplate`; a plain string raises inside LlamaIndex instrumentation before the model is called. | The retriever swallows the error and falls back to the raw question, so the graph half quietly stops being entity-anchored and a mock-based test never notices. | The prompt is a `PromptTemplate`, and a test asserts one completion is made and its names are returned. Measured 2026-11-17 on the real endpoint. |
 | R-6 FalkorDB's vector index is label-scoped and dimension-bound; a mixed embedding dimension disables it. | Silent full scans, slow queries. | The existing store code warns on a dimension change; one embedding model per deployment is already the rule (NFR-001). |
 
 ## 11. Traceability
@@ -386,13 +388,101 @@ answered before the draft; they are decisions, not open questions.
 
 ## 14. Open questions
 
-None blocking. Two operational questions are recorded for the implementation
-notes:
+None blocking. The two operational questions below were answered by the first
+real run on 2026-11-17 (see §15); what remains is the full-budget evaluation.
 
-1. **How many chunks does a 500-document build actually produce, and therefore
-   how long does it take?** Owner: the first real build. The PRD's estimate
-   (700–900 chunks at 1024 tokens) is arithmetic on the corpus, not a
-   measurement.
-2. **Does the extraction prompt need per-type hints (e.g. "a Drucksache is named
-   `BT-Drucksache <Wahlperiode>/<Nummer>`")?** Owner: the reviewer of the first
-   build. A prompt change is a schema-entry change, not a new config key.
+1. ~~**How many chunks does a 500-document build actually produce, and therefore
+   how long does it take?**~~ **Answered.** 16,349 chunks for 500 DIP documents
+   at `size: 1024`. Real extraction measured 1.8 s/chunk at
+   `graph_num_workers: 16`, so a full build is about 8 hours and about $4.90 of
+   completion tokens; the PRD's 700–900 estimate was wrong by a factor of ~20
+   because DIP documents are long (median 8.8k characters, largest 1.06M).
+2. ~~**Does the extraction prompt need per-type hints?**~~ **Partly answered.**
+   On a 6-document, 35-chunk real build all 62 extracted relations were inside
+   the allow-list, so strict mode holds without hints. Whether recall improves
+   with hints is still unmeasured; it needs a scored comparison, not a review.
+
+## 15. The first real run (2026-11-17)
+
+A measurement, recorded because the PRD's estimates were arithmetic. Everything
+here ran against a real `falkordb/falkordb:v4.20.3-alpine` container and the live
+`LLM_MODEL` / `EMBEDDING_MODEL` / `COHERE_MODEL` endpoints through OpenRouter. No
+mock, no stub, no embedded substitute.
+
+### What was built and measured
+
+| Corpus | Documents | Chunks | Extraction | Entities | Relations | Merges | Cost |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| DIP, 6 smallest QA documents | 6 | 35 | 210 s (`graph_num_workers: 16`) | 91 | 62 | 0 | ~$0.05 |
+| DIP, 500-document sample | 500 | 16,349 | not finished | — | — | — | ~$5.6 spent before it was stopped at the key's cap |
+
+Every one of the 62 relations in the 6-document graph matched a triple in
+`BUNDESTAG_TRIPLES`: `ABOUT` 44, `REFERS_TO` 8, `MEMBER_OF` 3, `ANSWERED_BY` 3,
+`SUBMITTED_BY` 3, `PART_OF` 1. Strict mode held on real output. The entity mix was
+`THEMA` 42, `VORGANG` 28, `DRUCKSACHE` 9, `PERSON` 4, `GESETZ` 4, `FRAKTION` 3,
+`MINISTERIUM` 1, which is the shape the corpus predicts.
+
+No merge was logged on that corpus: its entities are distinct enough that no pair
+met both signals. Merging is proven instead by the 3-entity case in
+`tests/test_graph_hybrid.py`, which is the right place for it — a synthetic pair
+with a known answer.
+
+### Retrieval, measured
+
+`graph_hybrid` on the 6-document index returns citable chunks (35 with
+`doc_id` metadata, no `subject -> relation -> object` text), entity detection
+returns the entity the question names (`['Asylanträge']`,
+`['Bundesregierung', 'Asylanträgen']`), and both halves contribute to the merge.
+That last measurement is what exposed R-6 and R-7 above: before them the dense
+side scored `0.0` everywhere and detection returned `[]`, and neither was visible
+to a stubbed test.
+
+### The evaluation that did not finish
+
+The intent was champion vs `graph_hybrid` on one corpus and one QA set. The
+corpus was 500 documents and the QA set 500 questions, but the QA rows reference
+only 25 documents, none of them inside the first-500 slice, so the sample was
+rebuilt to contain those 25 plus 475 others. That made the intended comparison
+affordable in time only at about 8 hours of extraction and 16,349 extraction
+calls.
+
+It was not affordable in credit. The key has a hard **$30.00** total limit with
+no reset (`limit_source: openrouter_key_limit`, `resets_at: null`) and $29.27 was
+already spent when this run began. A 500-question, two-config evaluation with
+reranking prices at about $10.75: ~$4.90 extraction, ~$1.02 embeddings for both
+indices, $2.00 rerank (0.002/search-unit), ~$0.82 generation and ~$2.00 judge.
+The build was stopped part-way and the `graph_hybrid` retrieval eval was stopped
+15 questions in, and OpenRouter then refused every call with HTTP 402/403.
+
+What survives is one real, complete, comparable number:
+
+| Side | Corpus | Questions | nDCG@5 | Recall@5 | Errors |
+| :--- | :--- | ---: | ---: | ---: | ---: |
+| `configs/champion.yaml` (`hybrid`, `top_k` 50, rerank 0.3) | 6 DIP docs (35 chunks) | 38 | **0.9577** | **1.0000** | 0 |
+
+`graph_hybrid` has no comparable row: its eval was cut off before writing a
+payload. Reporting a partial average as its score would have been a fabricated
+number, so there is none.
+
+### To finish it
+
+The remaining work is a funded key and one command pair; nothing in the code is
+blocked. With a key that has at least $12 of headroom:
+
+```bash
+deepfix index --config configs/graph_hybrid_falkordb.yml \
+  --dataset <500-doc corpus containing the QA docs> --index-dir indexes/bt-graph --json
+deepfix index --config configs/champion.yaml --dataset <same corpus> \
+  --index-dir indexes/bt-champion --json
+deepfix eval --config configs/champion.yaml --compare configs/graph_hybrid_falkordb.yml \
+  --dataset <same QA file> --index-dir indexes/bt-champion \
+  --baseline-index-dir indexes/bt-graph --json
+deepfix gate --compare <that payload> --primary ndcg --json
+```
+
+`configs/graph_hybrid_falkordb.yml` currently sets
+`graph_build_document_limit: 500`, which truncates to the *first* 500 documents.
+If the QA set is drawn from elsewhere in the corpus, either build from a
+materialised corpus file that contains those documents (as this run did) or raise
+the limit; truncating to the first N silently scores questions the index cannot
+answer.

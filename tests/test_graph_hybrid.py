@@ -382,3 +382,82 @@ def test_graph_hybrid_config_requires_a_graph_store(default_config_path: Path) -
                 "retrieval": {**config.retrieval.model_dump(), "backend": "graph_hybrid"},
             }
         )
+
+
+def test_entity_detection_uses_the_prompt_template(
+    falkordb_store: FalkorDBPropertyGraphStore,
+) -> None:
+    """A completion for entity detection must run; a bare string prompt raises.
+
+    This is the failure a mock hid: `structured_predict` only accepts a
+    `PromptTemplate`, and passing the prompt as a plain string raises inside
+    LlamaIndex's instrumentation before the model is called. The retriever catches
+    that and falls back to the raw question, so the only visible symptom is that
+    no entity is ever detected and the graph half stops being entity-anchored.
+    """
+    from llama_index.core.llms import CompletionResponse, CustomLLM, LLMMetadata
+    from pydantic import BaseModel
+
+    from deepfix_rag.graph_hybrid import EntityGraphRetriever
+
+    class CountingLLM(CustomLLM):
+        calls: int = 0
+
+        @property
+        def metadata(self) -> LLMMetadata:
+            return LLMMetadata(model_name="counting", is_chat_model=True)
+
+        def complete(self, prompt: str, formatted: bool = False, **kwargs: Any):
+            return CompletionResponse(text="")
+
+        def stream_complete(self, prompt: str, formatted: bool = False, **kwargs: Any):
+            yield CompletionResponse(text="")
+
+        def structured_predict(self, output_cls: type[BaseModel], prompt: Any, **kwargs: Any):
+            self.calls += 1
+            return output_cls.model_validate({"names": ["Alice Berger"]})
+
+    llm = CountingLLM()
+    retriever = EntityGraphRetriever(
+        graph_store=falkordb_store,
+        include_text=False,
+        llm=llm,
+        embed_model=MockEmbedding(embed_dim=EMBED_DIM),
+        similarity_top_k=3,
+        path_depth=1,
+        entity_limit=5,
+    )
+    assert retriever.detect_entities("Was hat Alice Berger eingebracht?") == ["Alice Berger"]
+    assert llm.calls == 1
+
+
+def test_merge_uses_rank_because_a_side_can_score_all_zeros() -> None:
+    """A side whose scores underflow to 0.0 still contributes at its rank.
+
+    LanceDB reports L2 distances in the hundreds for this embedding model and the
+    store converts them with `exp(-distance)`, which is exactly 0.0. Min-max
+    scaling of that list divides by zero and silently drops the dense half; rank
+    keeps both sides meaningful.
+    """
+    from llama_index.core.schema import NodeWithScore, TextNode
+
+    from deepfix_rag.graph_hybrid import merge_results
+
+    def node(doc_id: str, text: str, score: float) -> NodeWithScore:
+        return NodeWithScore(
+            node=TextNode(text=text, metadata={"doc_id": doc_id}, id_=f"{doc_id}-{text}"),
+            score=score,
+        )
+
+    graph = [node("d1", "graph best", 0.9), node("d2", "graph second", 0.2)]
+    dense = [node("d3", "dense best", 0.0), node("d4", "dense second", 0.0)]
+
+    merged = merge_results(graph, dense, graph_weight=0.5, dense_weight=0.5, top_k=4)
+    scores = {(item.node.metadata or {})["doc_id"]: float(item.score) for item in merged}
+
+    # Dense still contributes, at its own ranks, instead of vanishing at 0.0.
+    assert scores["d1"] == 0.5
+    assert scores["d3"] == 0.5
+    assert scores["d2"] == 0.25
+    assert scores["d4"] == 0.25
+    assert len(merged) == 4
