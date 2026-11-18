@@ -173,7 +173,7 @@ the champion on the same paired gate every other candidate faces.
    loads those chunks from the graph store, and scores each chunk by its best
    entity similarity (FR-007).
 4. The dense retriever runs on the same question against LanceDB.
-5. The two lists merge, weighted by `dense_weight` and `graph_weight`, deduped to
+5. The two lists merge by rank, weighted by `dense_weight` and `graph_weight`, deduped to
    one node per chunk, and cut to `top_k` (FR-008).
 6. The existing reranker reorders them and the relevance floor drops anything
    below `rerank.min_relevance_score`.
@@ -246,7 +246,7 @@ The pairs, and why each exists:
 | :--- | :--- | :--- | :--- |
 | FR-013 | `graph_hybrid` runs a `CustomPGRetriever` subclass that (a) asks `LLM_MODEL` for the entity names in the question, (b) runs one `VectorContextRetriever` per detected entity with `path_depth = retrieval.graph_traversal_hops`, and (c) when no entity is detected, runs it once on the raw question. Detected entities are limited to `graph_query_entity_limit`. | Must | Decision 4 and the blog post's custom retriever. |
 | FR-014 | The graph side returns **source chunks**, not triplet text: the retriever maps each reached triplet to its source chunk node (`triplet_source_id`), loads the chunk from the graph store, and scores it with the best entity similarity that reached it. Every returned node carries the metadata of the chunk it came from, including `doc_id`. A triplet whose source chunk cannot be loaded is skipped; it is a dropped candidate, not a retrieval error. | Must | Results must stay citable; a triplet string has no `doc_id`. |
-| FR-015 | The graph list merges with the dense LanceDB list, weighted by `retrieval.dense_weight` and `retrieval.graph_weight` (normalised; identical weights when both are zero), deduplicated to one node per `(doc_id, text)` pair with the higher score kept, and cut to `retrieval.top_k`. | Must | The same chunk reached by both sides must appear once, or Ask shows the passage twice and the vote splits. |
+| FR-015 | The graph list merges with the dense LanceDB list by **rank**, weighted by `retrieval.dense_weight` and `retrieval.graph_weight` (identical weights when both are zero), deduplicated to one node per `(doc_id, text)` pair with the higher score kept, and cut to `retrieval.top_k`. Rank, not raw score, because a side can be degenerate: see R-6. | Must | The same chunk reached by both sides must appear once, or Ask shows the passage twice and the vote splits. |
 | FR-016 | The merged list is what the existing reranker sees; `rerank.enabled: true` and `rerank.min_relevance_score: 0.3` in the shipped graph config. No backend-specific rerank path is added. | Must | Decision 4; one rerank implementation. |
 | FR-017 | The build for `graph_hybrid` writes both the property graph (FalkorDB) and a LanceDB chunk index over the same chunks, so the dense half has something to read. The chunk table stays at `retrieval.lancedb_index_dir`; the merge log and the index manifest live in the same directory, which is what the manifest's index-time signature already assumes. | Must | Today a graph build leaves LanceDB empty, so a naive `graph_hybrid` would retrieve from one side only. |
 

@@ -164,10 +164,12 @@ def _chunk_id_of(node: BaseNode) -> str | None:
 class GraphHybridRetriever(BaseRetriever):
     """Merge the entity-anchored graph results with the dense results.
 
-    Scores from the two sides are on different scales (a graph similarity and a
-    LanceDB distance), so each side is min-max normalised before its weight is
-    applied — the same reason the existing `relative_score` fusion exists. A chunk
-    both sides found is kept once, with the higher merged score.
+    The two sides are not on one scale (a graph similarity against a LanceDB
+    distance), and one of them can be degenerate: this embedding model's L2
+    distances make the store's ``exp(-distance)`` underflow to exactly ``0.0``.
+    So each side is fused by **rank** — see ``_normalised`` — which is meaningful
+    on both sides and cannot underflow. A chunk both sides found is kept once,
+    with the higher merged score.
     """
 
     def __init__(
